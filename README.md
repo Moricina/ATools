@@ -55,8 +55,8 @@
 ## 📥 快速开始与安装指南
 
 ### 方式 A：直接下载使用（面向普通 Mac 用户）
-1. 从 GitHub 的 **Releases** 页面下载最新发布的 `ATools.zip`；
-2. 解压并将 `ATools.app` 拖入 **「访达」->「应用程序」(/Applications)** 目录；
+1. 从 GitHub 的 **Releases** 页面下载最新发布的 **`ATools.dmg`**（或 `ATools.zip`）；
+2. 双击打开 `ATools.dmg`，将 **`ATools`** 直接拖入 **Applications (应用程序)** 文件夹；
 3. **关键：解除 macOS Gatekeeper 隔离（首次打开必须）**：
    开源应用未购买苹果昂贵的商业开发者证书，macOS 默认会拦截并提示“已损坏”或“无法确认开发者”。打开终端运行以下一行命令即可永久解除：
    ```bash

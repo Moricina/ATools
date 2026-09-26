@@ -78,7 +78,20 @@ rm -f "$DIR/ATools.zip"
 ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$DIR/ATools.zip"
 ZIP_SIZE=$(du -h "$DIR/ATools.zip" | cut -f1)
 
+echo "==> Creating ATools.dmg disk image (drag-and-drop installer)..."
+DMG_STAGING="/tmp/atools_dmg_staging"
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+cp -R "$APP_BUNDLE" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+
+rm -f "$DIR/ATools.dmg"
+hdiutil create -volname "ATools" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DIR/ATools.dmg" > /dev/null
+rm -rf "$DMG_STAGING"
+DMG_SIZE=$(du -h "$DIR/ATools.dmg" | cut -f1)
+
 echo "==> Successfully packaged ATools.app!"
 echo "    Binary size:  $BIN_SIZE"
 echo "    App bundle:   $TOTAL_SIZE ($APP_BUNDLE)"
 echo "    Release zip:  $ZIP_SIZE ($DIR/ATools.zip)"
+echo "    Release dmg:  $DMG_SIZE ($DIR/ATools.dmg)"

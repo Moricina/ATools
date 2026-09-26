@@ -19,3 +19,4 @@ DerivedData/
 # Output Bundles & Binaries
 *.app/
 *.zip
+*.dmg
