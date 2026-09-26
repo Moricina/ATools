@@ -123,6 +123,7 @@ public final class SettingsRowView: NSView {
         titleLabel.stringValue = title
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         titleLabel.textColor = .labelColor
+        titleLabel.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         textStack.addArrangedSubview(titleLabel)
 
         if let sub = subtitle, !sub.isEmpty {
@@ -132,6 +133,8 @@ public final class SettingsRowView: NSView {
             subtitleLabel.textColor = .secondaryLabelColor
             subtitleLabel.cell?.wraps = true
             subtitleLabel.maximumNumberOfLines = 2
+            subtitleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            subtitleLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
             textStack.addArrangedSubview(subtitleLabel)
         }
 
@@ -172,7 +175,7 @@ public final class SettingsRowView: NSView {
             textStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             textStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 8),
             textStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
-            textStack.trailingAnchor.constraint(lessThanOrEqualTo: accessoryContainer.leadingAnchor, constant: -12),
+            textStack.trailingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: -12),
 
             accessoryContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             accessoryContainer.centerYAnchor.constraint(equalTo: centerYAnchor)
@@ -258,9 +261,11 @@ public final class WelcomeGuideBannerView: NSView {
     }
 
     public var onDismiss: (() -> Void)?
+    public var onNavigateToSpotlightGuide: (() -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let bodyLabel = NSTextField(wrappingLabelWithString: "")
+    private let guideButton = NSButton()
     private let dismissButton = NSButton()
 
     public init() {
@@ -287,12 +292,22 @@ public final class WelcomeGuideBannerView: NSView {
         bodyLabel.textColor = .secondaryLabelColor
         bodyLabel.maximumNumberOfLines = 0
         bodyLabel.stringValue = """
-        • 🗂️ 分类工作台：按 Option + A (⌥A) 呼出 Maye Nano 风格分类面板，支持拖拽文件与应用加入
+        • 🗂️ 分类工作台：按 Option + A (⌥A) 呼出分类面板，支持拖拽文件与应用加入
         • 🔎 全盘搜索中枢：按 Option + Space (⌥Space) 居中呼出秒搜已安装应用与全盘文件
         • 🔍 状态栏托盘：图标已常驻在屏幕右上角菜单栏，随时点击即可调出菜单与设置
-        • 💡 极速配置：下方可直接一键开启「开机自启」；左侧「快捷键」可平替系统聚焦
+        • 🚀 完美平替聚焦：建议关闭自带 Spotlight 快捷键并隐藏其菜单栏图标
         """
         addSubview(bodyLabel)
+
+        guideButton.translatesAutoresizingMaskIntoConstraints = false
+        guideButton.bezelStyle = .inline
+        guideButton.isBordered = false
+        guideButton.title = "查看聚焦平替指南 →"
+        guideButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        guideButton.contentTintColor = .controlAccentColor
+        guideButton.target = self
+        guideButton.action = #selector(handleGuideClicked)
+        addSubview(guideButton)
 
         dismissButton.translatesAutoresizingMaskIntoConstraints = false
         dismissButton.bezelStyle = .rounded
@@ -310,10 +325,17 @@ public final class WelcomeGuideBannerView: NSView {
             bodyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             bodyLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
 
+            guideButton.centerYAnchor.constraint(equalTo: dismissButton.centerYAnchor),
+            guideButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+
             dismissButton.topAnchor.constraint(equalTo: bodyLabel.bottomAnchor, constant: 10),
             dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             dismissButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
         ])
+    }
+
+    @objc private func handleGuideClicked() {
+        onNavigateToSpotlightGuide?()
     }
 
     @objc private func handleDismiss() {

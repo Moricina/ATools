@@ -28,15 +28,15 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     private init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 740, height: 600),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 620),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         win.title = "ATools 偏好设置"
         win.isReleasedWhenClosed = false
-        win.minSize = NSSize(width: 700, height: 600)
-        win.maxSize = NSSize(width: 960, height: 800)
+        win.minSize = NSSize(width: 780, height: 600)
+        win.maxSize = NSSize(width: 780, height: 800)
         win.level = .floating
         super.init(window: win)
         win.delegate = self
@@ -49,11 +49,15 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public func showSettingsWindow() {
         guard let win = window else { return }
-        win.setContentSize(NSSize(width: 740, height: 600))
+        win.setContentSize(NSSize(width: 780, height: 620))
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         switchToTab(sidebarView.selectedItem)
+    }
+
+    public func selectTab(_ item: SettingsSidebarItem) {
+        sidebarView.selectItem(item)
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -85,7 +89,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             contentContainer.topAnchor.constraint(equalTo: windowContentView.topAnchor),
             contentContainer.bottomAnchor.constraint(equalTo: windowContentView.bottomAnchor),
             contentContainer.leadingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
-            contentContainer.trailingAnchor.constraint(equalTo: windowContentView.trailingAnchor)
+            contentContainer.trailingAnchor.constraint(equalTo: windowContentView.trailingAnchor),
+            contentContainer.widthAnchor.constraint(equalToConstant: 580)
         ])
 
         sidebarView.onItemSelected = { [weak self] item in

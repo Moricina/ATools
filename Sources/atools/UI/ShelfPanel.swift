@@ -358,8 +358,8 @@ public final class ResizeHandleView: NSView {
 }
 
 public final class ShelfViewController: NSViewController, CategoryBarDelegate, ShelfGridDelegate {
-    private let categoryBar = CategoryBarView()
-    private let shelfGrid = ShelfGridView()
+    internal let categoryBar = CategoryBarView()
+    internal let shelfGrid = ShelfGridView()
     private let resizeHandle = ResizeHandleView(frame: .zero)
     private let sidebarSplitter = SidebarSplitterView(frame: .zero)
     private var sidebarWidthConstraint: NSLayoutConstraint?
@@ -367,7 +367,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private var horizontalConstraints: [NSLayoutConstraint] = []
     private var verticalConstraints: [NSLayoutConstraint] = []
 
-    private var selectedCategory: Category?
+    internal var selectedCategory: Category?
 
     override public func loadView() {
         let savedW = CGFloat(ConfigManager.shared.config.shelfWidth)

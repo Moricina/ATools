@@ -340,6 +340,26 @@ if CommandLine.arguments.contains("--test") {
                 print("      ✓ Saved settings preview to /tmp/settings_preview.png")
             }
         }
+
+        // Test switching to each tab with strict width consistency assertion
+        for item in SettingsSidebarItem.allCases {
+            // Find sidebar
+            if let sidebar = contentView.subviews.first(where: { $0 is SettingsSidebarView }) as? SettingsSidebarView {
+                sidebar.selectItem(item)
+                win.displayIfNeeded()
+                contentView.layoutSubtreeIfNeeded()
+                print("      -> Tab [\(item.title)] Window Frame: \(win.frame), ContentView Bounds: \(contentView.bounds)")
+                assert(abs(win.frame.width - 780.0) < 0.5, "Tab \(item.title) caused window width jump: \(win.frame.width)")
+                assert(abs(contentView.bounds.width - 780.0) < 0.5, "Tab \(item.title) caused contentView width jump: \(contentView.bounds.width)")
+                if let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
+                    contentView.cacheDisplay(in: contentView.bounds, to: rep)
+                    if let pngData = rep.representation(using: .png, properties: [:]) {
+                        try? pngData.write(to: URL(fileURLWithPath: "/tmp/settings_tab_\(item.rawValue).png"))
+                    }
+                }
+            }
+        }
+        print("      ✓ Strict Window Width Invariance (780.0pt across all tabs) verified.")
     }
 
     // 9. Test ShelfPanel Badges Removed (Vertical & Horizontal)
@@ -373,6 +393,33 @@ if CommandLine.arguments.contains("--test") {
                 print("      ✓ Saved vertical shelf preview to /tmp/shelf_vertical_preview.png")
             }
         }
+    }
+
+    // 9.1 Test: Category Item Removal & Re-selection does NOT bring back removed item
+    print("[9.1] Testing category item removal persistence on tab re-selection...")
+    let shelfVC = shelfPanel.shelfViewController
+    shelfVC.loadData()
+    if let devCategory = ConfigManager.shared.config.categories.first(where: { $0.name == "开发" }) {
+        let testDevItem = LauncherItem(name: "TestDevApp", itemType: .application, target: "/tmp/TestDevApp.app")
+        ConfigManager.shared.addItems([testDevItem], to: devCategory.id)
+        shelfVC.loadData()
+
+        assert(shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should appear in shelfGrid")
+
+        // Trigger item deletion via delegate (just like right-click '从分类中移除')
+        shelfVC.shelfGrid(shelfVC.shelfGrid, didDeleteItem: testDevItem)
+
+        // Verify item is removed from config and shelfGrid
+        assert(!ConfigManager.shared.config.categories.first(where: { $0.id == devCategory.id })!.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should be removed from ConfigManager")
+        assert(!shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should disappear from shelfGrid immediately")
+
+        // Now simulate user clicking the '开发' category tab again
+        shelfVC.categoryBar(shelfVC.categoryBar, didSelectCategory: devCategory)
+
+        // Verify that re-clicking category does NOT bring back the deleted item
+        assert(!shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem MUST NOT reappear after re-selecting category tab")
+        assert(!(shelfVC.selectedCategory?.items.contains(where: { $0.id == testDevItem.id }) ?? false), "selectedCategory MUST NOT contain deleted item")
+        print("      ✓ Category item deletion persistence on re-selection verified.")
     }
 
     // 10. Test SearchPanel Spotlight Collapsed & Expanded Layout

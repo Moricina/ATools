@@ -170,6 +170,10 @@ public final class GeneralTabView: NSView {
         let sec1Top: NSLayoutConstraint
         if let banner = welcomeBanner {
             sec1Top = sec1Title.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 18)
+            banner.onNavigateToSpotlightGuide = { [weak self] in
+                self?.headerView.segmentedControl.selectedSegment = 2
+                self?.showPage(2)
+            }
             banner.onDismiss = { [weak self, weak banner, weak launchScrollContent] in
                 guard let banner = banner, let content = launchScrollContent else { return }
                 NSAnimationContext.runAnimationGroup({ context in
@@ -261,6 +265,9 @@ public final class GeneralTabView: NSView {
         mutualExclusionHint.translatesAutoresizingMaskIntoConstraints = false
         mutualExclusionHint.font = NSFont.systemFont(ofSize: 11)
         mutualExclusionHint.textColor = .secondaryLabelColor
+        mutualExclusionHint.cell?.wraps = true
+        mutualExclusionHint.maximumNumberOfLines = 2
+        mutualExclusionHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         panelScrollContent.addSubview(mutualExclusionHint)
 
         NSLayoutConstraint.activate([
@@ -280,10 +287,11 @@ public final class GeneralTabView: NSView {
 
             mutualExclusionHint.topAnchor.constraint(equalTo: cardPin.bottomAnchor, constant: 8),
             mutualExclusionHint.leadingAnchor.constraint(equalTo: panelScrollContent.leadingAnchor, constant: 32),
+            mutualExclusionHint.trailingAnchor.constraint(equalTo: panelScrollContent.trailingAnchor, constant: -28),
             mutualExclusionHint.bottomAnchor.constraint(equalTo: panelScrollContent.bottomAnchor, constant: -28)
         ])
 
-        // Page 2: 系统权限
+        // Page 2: 系统权限与环境引导
         let permPage = NSView()
         let permScrollContent = NSView()
         let permScroll = makeTabScrollView(contentView: permScrollContent)
@@ -295,7 +303,7 @@ public final class GeneralTabView: NSView {
             permScroll.bottomAnchor.constraint(equalTo: permPage.bottomAnchor)
         ])
 
-        let sec3Title = makeSectionHeader(title: "系统权限与环境引导")
+        let sec3Title = makeSectionHeader(title: "系统安全与隐私权限")
         permScrollContent.addSubview(sec3Title)
 
         let card3 = SettingsCardView()
@@ -310,17 +318,43 @@ public final class GeneralTabView: NSView {
             subtitle: "若搜不到“下载”或“文稿”等受 TCC 保护的目录文件，请前往系统设置授权",
             accessory: fdaBtn
         )
-        card3.addRow(rowFDA)
+        card3.addRow(rowFDA, isLast: true)
 
-        let kbBtn = NSButton(title: "键盘设置...", target: self, action: #selector(openKeyboardSettings))
+        let secSpotlightTitle = makeSectionHeader(title: "系统聚焦 (Spotlight) 完整平替指南")
+        permScrollContent.addSubview(secSpotlightTitle)
+
+        let cardSpotlight = SettingsCardView()
+        cardSpotlight.translatesAutoresizingMaskIntoConstraints = false
+        permScrollContent.addSubview(cardSpotlight)
+
+        let kbBtn = NSButton(title: "前往键盘设置...", target: self, action: #selector(openKeyboardSettings))
         kbBtn.bezelStyle = .rounded
         let rowKB = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
-            title: "释放系统聚焦快捷键",
-            subtitle: "在 macOS「键盘」->「快捷键」中关闭系统聚焦，即可让 ATools 完美接管",
+            title: "步骤 1：禁用系统 Spotlight 快捷键",
+            subtitle: "在 macOS「键盘」->「快捷键」取消聚焦勾选，释放 ⌘Space 由 ATools 接管",
             accessory: kbBtn
         )
-        card3.addRow(rowKB, isLast: true)
+        cardSpotlight.addRow(rowKB)
+
+        let ccBtn = NSButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
+        ccBtn.bezelStyle = .rounded
+        let rowCC = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "menubar.arrow.up.rectangle"),
+            title: "步骤 2：隐藏系统菜单栏聚焦图标",
+            subtitle: "在 macOS「控制中心」将聚焦设为「不在菜单栏中显示」，只保留 ATools 图标",
+            accessory: ccBtn
+        )
+        cardSpotlight.addRow(rowCC, isLast: true)
+
+        let spotlightTip = NSTextField(labelWithString: "💡 技术保障：ATools 采用无侵入接管模式，直接复用 macOS 原生 CoreServices 索引，实现 0 能耗秒搜，请勿在终端强行停用系统 mds 索引。")
+        spotlightTip.translatesAutoresizingMaskIntoConstraints = false
+        spotlightTip.font = NSFont.systemFont(ofSize: 11)
+        spotlightTip.textColor = .secondaryLabelColor
+        spotlightTip.cell?.wraps = true
+        spotlightTip.maximumNumberOfLines = 3
+        spotlightTip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        permScrollContent.addSubview(spotlightTip)
 
         NSLayoutConstraint.activate([
             sec3Title.topAnchor.constraint(equalTo: permScrollContent.topAnchor, constant: 14),
@@ -329,7 +363,18 @@ public final class GeneralTabView: NSView {
             card3.topAnchor.constraint(equalTo: sec3Title.bottomAnchor, constant: 8),
             card3.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
             card3.trailingAnchor.constraint(equalTo: permScrollContent.trailingAnchor, constant: -28),
-            card3.bottomAnchor.constraint(equalTo: permScrollContent.bottomAnchor, constant: -28)
+
+            secSpotlightTitle.topAnchor.constraint(equalTo: card3.bottomAnchor, constant: 20),
+            secSpotlightTitle.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
+
+            cardSpotlight.topAnchor.constraint(equalTo: secSpotlightTitle.bottomAnchor, constant: 8),
+            cardSpotlight.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
+            cardSpotlight.trailingAnchor.constraint(equalTo: permScrollContent.trailingAnchor, constant: -28),
+
+            spotlightTip.topAnchor.constraint(equalTo: cardSpotlight.bottomAnchor, constant: 10),
+            spotlightTip.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 32),
+            spotlightTip.trailingAnchor.constraint(equalTo: permScrollContent.trailingAnchor, constant: -28),
+            spotlightTip.bottomAnchor.constraint(equalTo: permScrollContent.bottomAnchor, constant: -28)
         ])
 
         pages = [launchPage, panelPage, permPage]
@@ -460,6 +505,17 @@ public final class GeneralTabView: NSView {
 
     @objc private func openKeyboardSettings() {
         HotkeyManager.shared.openSystemKeyboardSettings()
+    }
+
+    @objc private func openControlCenterSettings() {
+        if #available(macOS 13.0, *), let url = URL(string: "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension") {
+            if NSWorkspace.shared.open(url) { return }
+        }
+        let script = "tell application \"System Settings\"\nactivate\nend tell"
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
     }
 }
 
@@ -904,6 +960,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         tipLabel.textColor = .secondaryLabelColor
         tipLabel.cell?.wraps = true
         tipLabel.maximumNumberOfLines = 2
+        tipLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         webScrollContent.addSubview(tipLabel)
 
         NSLayoutConstraint.activate([
@@ -1099,9 +1156,12 @@ public final class HotkeysTabView: NSView {
         conflictHint.translatesAutoresizingMaskIntoConstraints = false
         conflictHint.font = NSFont.systemFont(ofSize: 11)
         conflictHint.textColor = .secondaryLabelColor
+        conflictHint.cell?.wraps = true
+        conflictHint.maximumNumberOfLines = 2
+        conflictHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         scrollContent.addSubview(conflictHint)
 
-        let sec2Title = makeSectionHeader(title: "系统聚焦 (Spotlight) 冲突排查")
+        let sec2Title = makeSectionHeader(title: "系统聚焦 (Spotlight) 冲突排查与平替")
         scrollContent.addSubview(sec2Title)
 
         let card2 = SettingsCardView()
@@ -1111,12 +1171,22 @@ public final class HotkeysTabView: NSView {
         let sysBtn = NSButton(title: "前往系统键盘设置...", target: self, action: #selector(openKeyboardSettings))
         sysBtn.bezelStyle = .rounded
         let rowSys = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "exclamationmark.triangle"),
-            title: "无法注册 ⌘Space？",
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
+            title: "释放 Spotlight 快捷键 (⌘Space)",
             subtitle: "macOS 默认占用了该键。前往「系统设置」->「键盘」->「键盘快捷键」取消聚焦勾选即可释放",
             accessory: sysBtn
         )
-        card2.addRow(rowSys, isLast: true)
+        card2.addRow(rowSys)
+
+        let ccBtn = NSButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
+        ccBtn.bezelStyle = .rounded
+        let rowCC = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "menubar.arrow.up.rectangle"),
+            title: "隐藏系统菜单栏 Spotlight 放大镜",
+            subtitle: "在 macOS「控制中心」将聚焦设为「不在菜单栏中显示」，让菜单栏只保留 ATools 搜索入口",
+            accessory: ccBtn
+        )
+        card2.addRow(rowCC, isLast: true)
 
         NSLayoutConstraint.activate([
             sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
@@ -1128,6 +1198,7 @@ public final class HotkeysTabView: NSView {
 
             conflictHint.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 6),
             conflictHint.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 32),
+            conflictHint.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
             sec2Title.topAnchor.constraint(equalTo: conflictHint.bottomAnchor, constant: 18),
             sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
@@ -1240,6 +1311,17 @@ public final class HotkeysTabView: NSView {
 
     @objc private func openKeyboardSettings() {
         HotkeyManager.shared.openSystemKeyboardSettings()
+    }
+
+    @objc private func openControlCenterSettings() {
+        if #available(macOS 13.0, *), let url = URL(string: "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension") {
+            if NSWorkspace.shared.open(url) { return }
+        }
+        let script = "tell application \"System Settings\"\nactivate\nend tell"
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
     }
 }
 

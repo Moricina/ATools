@@ -258,8 +258,8 @@ public final class ShelfGridView: NSView {
         }
     }
 
-    private var items: [LauncherItem] = []
-    private var itemButtons: [ShelfItemButton] = []
+    internal var items: [LauncherItem] = []
+    internal var itemButtons: [ShelfItemButton] = []
 
     private let scrollView = NSScrollView()
     private let contentView = FlippedContentView()
