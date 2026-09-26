@@ -1,0 +1,369 @@
+import Foundation
+import AppKit
+
+public enum HotkeySpecialTrigger: String, Codable {
+    case none
+    case doubleCommand
+    case doubleOption
+    case doubleControl
+    case doubleShift
+
+    public var displayPrefix: String {
+        switch self {
+        case .none: return ""
+        case .doubleCommand: return "2× ⌘ Command"
+        case .doubleOption: return "2× ⌥ Option"
+        case .doubleControl: return "2× ⌃ Control"
+        case .doubleShift: return "2× ⇧ Shift"
+        }
+    }
+}
+
+public struct HotkeyBinding: Codable, Equatable {
+    public var keyCode: UInt32
+    public var carbonModifiers: UInt32
+    public var displayString: String
+    public var specialTrigger: HotkeySpecialTrigger
+
+    public init(
+        keyCode: UInt32,
+        carbonModifiers: UInt32,
+        displayString: String,
+        specialTrigger: HotkeySpecialTrigger = .none
+    ) {
+        self.keyCode = keyCode
+        self.carbonModifiers = carbonModifiers
+        self.displayString = displayString
+        self.specialTrigger = specialTrigger
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case keyCode, carbonModifiers, displayString, specialTrigger
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.keyCode = (try? container.decode(UInt32.self, forKey: .keyCode)) ?? 0
+        self.carbonModifiers = (try? container.decode(UInt32.self, forKey: .carbonModifiers)) ?? 0
+        self.displayString = (try? container.decode(String.self, forKey: .displayString)) ?? ""
+        self.specialTrigger = (try? container.decode(HotkeySpecialTrigger.self, forKey: .specialTrigger)) ?? .none
+    }
+
+    public static let defaultShelf = HotkeyBinding(
+        keyCode: 0, // Key 'A'
+        carbonModifiers: 2048, // optionKey in Carbon
+        displayString: "⌥A",
+        specialTrigger: .none
+    )
+
+    public static let defaultSearch = HotkeyBinding(
+        keyCode: 49, // Key 'Space'
+        carbonModifiers: 2048, // optionKey in Carbon
+        displayString: "⌥Space",
+        specialTrigger: .none
+    )
+}
+
+public enum AppTheme: String, Codable, CaseIterable {
+    case liquidDark = "liquidDark"     // 液态玻璃 (深色)
+    case liquidLight = "liquidLight"   // 液态玻璃 (浅色)
+    case solidDark = "solidDark"       // 经典纯色 (深色)
+    case solidLight = "solidLight"     // 经典纯色 (浅色)
+
+    public var title: String {
+        switch self {
+        case .liquidDark: return "液态玻璃 (深色)"
+        case .liquidLight: return "液态玻璃 (浅色)"
+        case .solidDark: return "经典纯色 (深色)"
+        case .solidLight: return "经典纯色 (浅色)"
+        }
+    }
+
+    public var isDark: Bool {
+        return self == .liquidDark || self == .solidDark
+    }
+
+    public var isLiquid: Bool {
+        return self == .liquidDark || self == .liquidLight
+    }
+}
+
+public enum CategoryOrientation: String, Codable {
+    case horizontal
+    case vertical
+}
+
+public enum ShelfIconSize: String, Codable {
+    case small
+    case medium
+    case large
+
+    public var itemSize: CGFloat {
+        switch self {
+        case .small: return 68
+        case .medium: return 82
+        case .large: return 96
+        }
+    }
+
+    public var iconSize: CGFloat {
+        switch self {
+        case .small: return 36
+        case .medium: return 48
+        case .large: return 60
+        }
+    }
+
+    public var fontSize: CGFloat {
+        switch self {
+        case .small: return 10
+        case .medium: return 11
+        case .large: return 12
+        }
+    }
+}
+
+public enum WebSearchEngine: String, Codable, CaseIterable {
+    case google = "google"
+    case bing = "bing"
+    case baidu = "baidu"
+    case duckduckgo = "duckduckgo"
+    case custom = "custom"
+
+    public var title: String {
+        switch self {
+        case .google: return "谷歌 (Google)"
+        case .bing: return "微软必应 (Bing)"
+        case .baidu: return "百度 (Baidu)"
+        case .duckduckgo: return "DuckDuckGo"
+        case .custom: return "自定义 (Custom URL)"
+        }
+    }
+
+    public func searchURL(for query: String, customTemplate: String = "") -> URL? {
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        let urlStr: String
+        switch self {
+        case .google: urlStr = "https://www.google.com/search?q=\(encoded)"
+        case .bing: urlStr = "https://www.bing.com/search?q=\(encoded)"
+        case .baidu: urlStr = "https://www.baidu.com/s?wd=\(encoded)"
+        case .duckduckgo: urlStr = "https://duckduckgo.com/?q=\(encoded)"
+        case .custom:
+            var template = customTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if template.isEmpty {
+                template = "https://www.google.com/search?q={query}"
+            }
+            if !template.lowercased().hasPrefix("http://") && !template.lowercased().hasPrefix("https://") {
+                template = "https://" + template
+            }
+            if template.contains("{query}") {
+                urlStr = template.replacingOccurrences(of: "{query}", with: encoded)
+            } else if template.contains("%s") {
+                urlStr = template.replacingOccurrences(of: "%s", with: encoded)
+            } else {
+                if template.contains("?") {
+                    urlStr = (template.hasSuffix("&") || template.hasSuffix("=")) ? "\(template)\(encoded)" : "\(template)&q=\(encoded)"
+                } else {
+                    urlStr = "\(template)?q=\(encoded)"
+                }
+            }
+        }
+        return URL(string: urlStr)
+    }
+}
+
+public struct AtoolsConfig: Codable {
+    public var version: Int
+    public var shelfHotkey: HotkeyBinding
+    public var searchHotkey: HotkeyBinding
+    public var categories: [Category]
+    public var enableCalculator: Bool
+    public var enableDictionary: Bool
+    public var enableFullDiskSearch: Bool
+    public var searchResultLimit: Int
+    public var shelfWidth: Double
+    public var shelfHeight: Double
+    public var categoryOrientation: CategoryOrientation
+    public var shelfIconSize: ShelfIconSize
+    public var sidebarWidth: Double
+    public var theme: AppTheme
+    public var shelfIconScale: Double
+    public var themeOpacity: Double
+
+    // Panel Toggles and Auto-Close Behavior
+    public var enableShelfPanel: Bool
+    public var enableSearchPanel: Bool
+    public var enableFavoritesCategory: Bool
+    public var isShelfPinned: Bool
+    public var autoCloseOnLaunch: Bool
+    public var autoCloseOnMouseExit: Bool
+    public var autoCloseOnDeactivate: Bool
+
+    // Modern Settings & Performance extensions
+    public var webSearchEngine: WebSearchEngine
+    public var enableWebSearch: Bool
+    public var customWebSearchURL: String
+    public var memoryAnnealDelay: Double
+    public var searchDebounceMs: Int
+    public var thumbnailCacheLimitMB: Int
+
+    public init(
+        version: Int = 4,
+        shelfHotkey: HotkeyBinding = .defaultShelf,
+        searchHotkey: HotkeyBinding = .defaultSearch,
+        categories: [Category] = [],
+        enableCalculator: Bool = true,
+        enableDictionary: Bool = true,
+        enableFullDiskSearch: Bool = true,
+        searchResultLimit: Int = 80,
+        shelfWidth: Double = 540,
+        shelfHeight: Double = 360,
+        categoryOrientation: CategoryOrientation = .horizontal,
+        shelfIconSize: ShelfIconSize = .medium,
+        sidebarWidth: Double = 84,
+        theme: AppTheme = .liquidLight,
+        shelfIconScale: Double = 1.0,
+        themeOpacity: Double = 0.90,
+        enableShelfPanel: Bool = true,
+        enableSearchPanel: Bool = true,
+        enableFavoritesCategory: Bool = false,
+        isShelfPinned: Bool = false,
+        autoCloseOnLaunch: Bool = true,
+        autoCloseOnMouseExit: Bool = false,
+        autoCloseOnDeactivate: Bool = true,
+        webSearchEngine: WebSearchEngine = .google,
+        enableWebSearch: Bool = true,
+        customWebSearchURL: String = "https://www.google.com/search?q={query}",
+        memoryAnnealDelay: Double = 3.0,
+        searchDebounceMs: Int = 150,
+        thumbnailCacheLimitMB: Int = 6
+    ) {
+        self.version = version
+        self.shelfHotkey = shelfHotkey
+        self.searchHotkey = searchHotkey
+        self.categories = categories
+        self.enableCalculator = enableCalculator
+        self.enableDictionary = enableDictionary
+        self.enableFullDiskSearch = enableFullDiskSearch
+        self.searchResultLimit = searchResultLimit
+        self.shelfWidth = shelfWidth
+        self.shelfHeight = shelfHeight
+        self.categoryOrientation = categoryOrientation
+        self.shelfIconSize = shelfIconSize
+        self.sidebarWidth = sidebarWidth
+        self.theme = theme
+        self.shelfIconScale = shelfIconScale
+        self.themeOpacity = themeOpacity
+        self.enableShelfPanel = enableShelfPanel
+        self.enableSearchPanel = enableSearchPanel
+        self.enableFavoritesCategory = enableFavoritesCategory
+        self.isShelfPinned = isShelfPinned
+        self.autoCloseOnLaunch = autoCloseOnLaunch
+        self.autoCloseOnMouseExit = autoCloseOnMouseExit
+        self.autoCloseOnDeactivate = autoCloseOnDeactivate
+        self.webSearchEngine = webSearchEngine
+        self.enableWebSearch = enableWebSearch
+        self.customWebSearchURL = customWebSearchURL
+        self.memoryAnnealDelay = memoryAnnealDelay
+        self.searchDebounceMs = searchDebounceMs
+        self.thumbnailCacheLimitMB = thumbnailCacheLimitMB
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case version, shelfHotkey, searchHotkey, categories
+        case enableCalculator, enableDictionary, enableFullDiskSearch, searchResultLimit
+        case shelfWidth, shelfHeight, categoryOrientation, shelfIconSize, sidebarWidth
+        case theme, shelfIconScale, themeOpacity
+        case enableShelfPanel, enableSearchPanel, enableFavoritesCategory
+        case isShelfPinned
+        case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate
+        case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
+        // v1 legacy keys
+        case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.version = (try? container.decode(Int.self, forKey: .version)) ?? 4
+        self.categories = (try? container.decode([Category].self, forKey: .categories)) ?? []
+        self.enableCalculator = (try? container.decode(Bool.self, forKey: .enableCalculator)) ?? true
+        self.enableDictionary = (try? container.decode(Bool.self, forKey: .enableDictionary)) ?? true
+        self.enableFullDiskSearch = (try? container.decode(Bool.self, forKey: .enableFullDiskSearch)) ?? true
+        self.searchResultLimit = (try? container.decode(Int.self, forKey: .searchResultLimit)) ?? 80
+        self.shelfWidth = (try? container.decode(Double.self, forKey: .shelfWidth)) ?? 540
+        self.shelfHeight = (try? container.decode(Double.self, forKey: .shelfHeight)) ?? 360
+        self.categoryOrientation = (try? container.decode(CategoryOrientation.self, forKey: .categoryOrientation)) ?? .horizontal
+        self.shelfIconSize = (try? container.decode(ShelfIconSize.self, forKey: .shelfIconSize)) ?? .medium
+        self.sidebarWidth = (try? container.decode(Double.self, forKey: .sidebarWidth)) ?? 84
+        self.theme = (try? container.decode(AppTheme.self, forKey: .theme)) ?? .liquidLight
+        let rawScale = (try? container.decode(Double.self, forKey: .shelfIconScale)) ?? 1.0
+        self.shelfIconScale = max(0.70, min(1.30, rawScale))
+        let rawOpacity = (try? container.decode(Double.self, forKey: .themeOpacity)) ?? 0.90
+        self.themeOpacity = max(0.30, min(1.00, rawOpacity))
+
+        // New fields with strict non-destructive fallback defaults
+        self.enableShelfPanel = (try? container.decode(Bool.self, forKey: .enableShelfPanel)) ?? true
+        self.enableSearchPanel = (try? container.decode(Bool.self, forKey: .enableSearchPanel)) ?? true
+        self.enableFavoritesCategory = (try? container.decode(Bool.self, forKey: .enableFavoritesCategory)) ?? false
+        self.isShelfPinned = (try? container.decode(Bool.self, forKey: .isShelfPinned)) ?? false
+        self.autoCloseOnLaunch = (try? container.decode(Bool.self, forKey: .autoCloseOnLaunch)) ?? true
+        self.autoCloseOnMouseExit = (try? container.decode(Bool.self, forKey: .autoCloseOnMouseExit)) ?? false
+        self.autoCloseOnDeactivate = (try? container.decode(Bool.self, forKey: .autoCloseOnDeactivate)) ?? true
+
+        self.webSearchEngine = (try? container.decode(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .google
+        self.enableWebSearch = (try? container.decode(Bool.self, forKey: .enableWebSearch)) ?? true
+        self.customWebSearchURL = (try? container.decode(String.self, forKey: .customWebSearchURL)) ?? "https://www.google.com/search?q={query}"
+        self.memoryAnnealDelay = (try? container.decode(Double.self, forKey: .memoryAnnealDelay)) ?? 3.0
+        self.searchDebounceMs = (try? container.decode(Int.self, forKey: .searchDebounceMs)) ?? 150
+        self.thumbnailCacheLimitMB = (try? container.decode(Int.self, forKey: .thumbnailCacheLimitMB)) ?? 6
+
+        if let shelf = try? container.decode(HotkeyBinding.self, forKey: .shelfHotkey) {
+            self.shelfHotkey = shelf
+        } else {
+            self.shelfHotkey = .defaultShelf
+        }
+
+        if let search = try? container.decode(HotkeyBinding.self, forKey: .searchHotkey) {
+            self.searchHotkey = search
+        } else if let oldKey = try? container.decode(UInt32.self, forKey: .globalHotkeyKey),
+                  let oldMods = try? container.decode(UInt32.self, forKey: .globalHotkeyModifiers),
+                  let oldDesc = try? container.decode(String.self, forKey: .hotkeyDescription) {
+            self.searchHotkey = HotkeyBinding(keyCode: oldKey, carbonModifiers: oldMods, displayString: oldDesc)
+        } else {
+            self.searchHotkey = .defaultSearch
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(shelfHotkey, forKey: .shelfHotkey)
+        try container.encode(searchHotkey, forKey: .searchHotkey)
+        try container.encode(categories, forKey: .categories)
+        try container.encode(enableCalculator, forKey: .enableCalculator)
+        try container.encode(enableDictionary, forKey: .enableDictionary)
+        try container.encode(enableFullDiskSearch, forKey: .enableFullDiskSearch)
+        try container.encode(searchResultLimit, forKey: .searchResultLimit)
+        try container.encode(shelfWidth, forKey: .shelfWidth)
+        try container.encode(shelfHeight, forKey: .shelfHeight)
+        try container.encode(categoryOrientation, forKey: .categoryOrientation)
+        try container.encode(shelfIconSize, forKey: .shelfIconSize)
+        try container.encode(sidebarWidth, forKey: .sidebarWidth)
+        try container.encode(theme, forKey: .theme)
+        try container.encode(shelfIconScale, forKey: .shelfIconScale)
+        try container.encode(themeOpacity, forKey: .themeOpacity)
+        try container.encode(enableShelfPanel, forKey: .enableShelfPanel)
+        try container.encode(enableSearchPanel, forKey: .enableSearchPanel)
+        try container.encode(enableFavoritesCategory, forKey: .enableFavoritesCategory)
+        try container.encode(isShelfPinned, forKey: .isShelfPinned)
+        try container.encode(autoCloseOnLaunch, forKey: .autoCloseOnLaunch)
+        try container.encode(autoCloseOnMouseExit, forKey: .autoCloseOnMouseExit)
+        try container.encode(autoCloseOnDeactivate, forKey: .autoCloseOnDeactivate)
+        try container.encode(webSearchEngine, forKey: .webSearchEngine)
+        try container.encode(enableWebSearch, forKey: .enableWebSearch)
+        try container.encode(customWebSearchURL, forKey: .customWebSearchURL)
+        try container.encode(memoryAnnealDelay, forKey: .memoryAnnealDelay)
+        try container.encode(searchDebounceMs, forKey: .searchDebounceMs)
+        try container.encode(thumbnailCacheLimitMB, forKey: .thumbnailCacheLimitMB)
+    }
+}

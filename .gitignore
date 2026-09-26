@@ -1,0 +1,21 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# SwiftPM
+.build/
+Packages/
+Package.pins
+Package.resolved
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Output Bundles & Binaries
+*.app/
+*.zip
