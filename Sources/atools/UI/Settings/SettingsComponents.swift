@@ -249,3 +249,91 @@ public final class SettingsHeaderView: NSView {
         onSegmentChanged?(sender.selectedSegment)
     }
 }
+
+/// 首次启动新手引导与快速概览横幅 (精致轻量，直达配置)
+public final class WelcomeGuideBannerView: NSView {
+    public static let dismissedKey = "atools.hasDismissedWelcomeBanner"
+    public static var hasDismissed: Bool {
+        return UserDefaults.standard.bool(forKey: dismissedKey)
+    }
+
+    public var onDismiss: (() -> Void)?
+
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let bodyLabel = NSTextField(wrappingLabelWithString: "")
+    private let dismissButton = NSButton()
+
+    public init() {
+        super.init(frame: .zero)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    private func setupView() {
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1.0
+        updateColors()
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .bold)
+        titleLabel.textColor = .controlAccentColor
+        titleLabel.stringValue = "🎉 欢迎使用 ATools！双独立面板已就绪"
+        addSubview(titleLabel)
+
+        bodyLabel.translatesAutoresizingMaskIntoConstraints = false
+        bodyLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        bodyLabel.textColor = .secondaryLabelColor
+        bodyLabel.maximumNumberOfLines = 0
+        bodyLabel.stringValue = """
+        • 🗂️ 分类工作台：按 Option + A (⌥A) 呼出 Maye Nano 风格分类面板，支持拖拽文件与应用加入
+        • 🔎 全盘搜索中枢：按 Option + Space (⌥Space) 居中呼出秒搜已安装应用与全盘文件
+        • 🔍 状态栏托盘：图标已常驻在屏幕右上角菜单栏，随时点击即可调出菜单与设置
+        • 💡 极速配置：下方可直接一键开启「开机自启」；左侧「快捷键」可平替系统聚焦
+        """
+        addSubview(bodyLabel)
+
+        dismissButton.translatesAutoresizingMaskIntoConstraints = false
+        dismissButton.bezelStyle = .rounded
+        dismissButton.title = "我知道了，开始体验"
+        dismissButton.target = self
+        dismissButton.action = #selector(handleDismiss)
+        addSubview(dismissButton)
+
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+
+            bodyLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+            bodyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            bodyLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+
+            dismissButton.topAnchor.constraint(equalTo: bodyLabel.bottomAnchor, constant: 10),
+            dismissButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            dismissButton.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
+        ])
+    }
+
+    @objc private func handleDismiss() {
+        UserDefaults.standard.set(true, forKey: WelcomeGuideBannerView.dismissedKey)
+        onDismiss?()
+    }
+
+    public override func updateLayer() {
+        super.updateLayer()
+        updateColors()
+    }
+
+    private func updateColors() {
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if isDark {
+            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
+        } else {
+            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
+            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.28).cgColor
+        }
+    }
+}

@@ -16,6 +16,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         // Preflight user directories to register TCC permissions
         preflightUserDirectoriesAccess()
 
+        // Check for first launch to guide user directly in preferences
+        let hasLaunchedKey = "atools.hasLaunchedBefore"
+        if !UserDefaults.standard.bool(forKey: hasLaunchedKey) {
+            UserDefaults.standard.set(true, forKey: hasLaunchedKey)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                SettingsWindowController.shared.showSettingsWindow()
+            }
+        }
+
         NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification,
             object: nil,

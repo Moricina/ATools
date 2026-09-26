@@ -54,6 +54,7 @@ public final class GeneralTabView: NSView {
     private var pageContainer: NSView!
     private var pages: [NSView] = []
     private var headerView: SettingsHeaderView!
+    private var sec1TitleTopConstraint: NSLayoutConstraint?
 
     public init() {
         super.init(frame: .zero)
@@ -103,6 +104,21 @@ public final class GeneralTabView: NSView {
         card1.translatesAutoresizingMaskIntoConstraints = false
         launchScrollContent.addSubview(card1)
 
+        let welcomeBanner: WelcomeGuideBannerView?
+        if !WelcomeGuideBannerView.hasDismissed {
+            let banner = WelcomeGuideBannerView()
+            banner.translatesAutoresizingMaskIntoConstraints = false
+            launchScrollContent.addSubview(banner)
+            NSLayoutConstraint.activate([
+                banner.topAnchor.constraint(equalTo: launchScrollContent.topAnchor, constant: 14),
+                banner.leadingAnchor.constraint(equalTo: launchScrollContent.leadingAnchor, constant: 28),
+                banner.trailingAnchor.constraint(equalTo: launchScrollContent.trailingAnchor, constant: -28)
+            ])
+            welcomeBanner = banner
+        } else {
+            welcomeBanner = nil
+        }
+
         launchOnLoginSwitch = NSSwitch()
         launchOnLoginSwitch.target = self
         launchOnLoginSwitch.action = #selector(toggleLaunchOnLogin(_:))
@@ -151,8 +167,29 @@ public final class GeneralTabView: NSView {
         )
         card1.addRow(rowCloseDeactivate, isLast: true)
 
+        let sec1Top: NSLayoutConstraint
+        if let banner = welcomeBanner {
+            sec1Top = sec1Title.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 18)
+            banner.onDismiss = { [weak self, weak banner, weak launchScrollContent] in
+                guard let banner = banner, let content = launchScrollContent else { return }
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.2
+                    banner.animator().alphaValue = 0
+                }, completionHandler: {
+                    banner.removeFromSuperview()
+                    self?.sec1TitleTopConstraint?.isActive = false
+                    let newTop = sec1Title.topAnchor.constraint(equalTo: content.topAnchor, constant: 14)
+                    self?.sec1TitleTopConstraint = newTop
+                    newTop.isActive = true
+                })
+            }
+        } else {
+            sec1Top = sec1Title.topAnchor.constraint(equalTo: launchScrollContent.topAnchor, constant: 14)
+        }
+        self.sec1TitleTopConstraint = sec1Top
+
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: launchScrollContent.topAnchor, constant: 14),
+            sec1Top,
             sec1Title.leadingAnchor.constraint(equalTo: launchScrollContent.leadingAnchor, constant: 28),
 
             card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),

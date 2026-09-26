@@ -645,8 +645,13 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     // MARK: - CategoryBarDelegate
     public func categoryBar(_ bar: CategoryBarView, didSelectCategory category: Category) {
-        self.selectedCategory = category
-        shelfGrid.reloadData(items: category.items)
+        if let latestCategory = ConfigManager.shared.config.categories.first(where: { $0.id == category.id }) {
+            self.selectedCategory = latestCategory
+            shelfGrid.reloadData(items: latestCategory.items)
+        } else {
+            self.selectedCategory = category
+            shelfGrid.reloadData(items: category.items)
+        }
         updateStatusBar()
     }
 
@@ -719,11 +724,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     public func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem) {
         guard let cat = selectedCategory else { return }
         ConfigManager.shared.removeItem(id: item.id, from: cat.id)
-        if let updatedCat = ConfigManager.shared.config.categories.first(where: { $0.id == cat.id }) {
-            self.selectedCategory = updatedCat
-            shelfGrid.reloadData(items: updatedCat.items)
-            updateStatusBar()
-        }
+        loadData()
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int) {
