@@ -37,7 +37,7 @@
   * 采用 Carbon 原生多热键注册，**完全不需要辅助功能 (Accessibility) 权限**，零能耗监听。
   * `PanelCoordinator` 集中调度：两面板之间原子切换，**绝不发生窗口重叠与闪烁**，统一外部点击失焦退让。
 * 🍃 **极致轻量**：
-  * 整个安装包仅 **668 KB**；
+  * 原生 Swift 实现，安装包体积轻巧；
   * 面板关闭后 3 秒内自动执行堆内存脏页回收（`malloc_zone_pressure_relief`），常驻内存极低。
 
 ---
@@ -69,11 +69,12 @@
 ### 方式 B：从源码一键构建与打包（面向开发者）
 项目基于纯原生 Swift Package Manager 构建，无需任何外部第三方依赖：
 ```bash
-# 运行自动化打包脚本（生成 Release 版 ATools.app 及 ATools.zip）
+# 运行自动化打包脚本（生成 Release 版 ATools.app、ATools.zip 及 ATools.dmg）
 ./Scripts/package_app.sh
 
-# 运行自动化沙盒诊断自检（安全隔离测试，零污染个人配置）
-./.build/release/ATools --test
+# 运行自动化沙盒诊断自检（Debug 构建才会启用 assert；安全隔离测试，零污染个人配置）
+swift build -c debug --debug-info-format none
+./.build/debug/ATools --test
 
 # 启动应用
 open ./ATools.app

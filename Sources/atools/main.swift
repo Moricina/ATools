@@ -529,12 +529,37 @@ if CommandLine.arguments.contains("--test") {
     assert(UpdateManager.isVersion("2.0.0", greaterThan: "1.9.99") == true, "2.0.0 > 1.9.99")
     print("      ✓ UpdateManager semantic versioning algorithm verified.")
 
+    let releaseAssets: [[String: Any]] = [
+        ["name": "ATools.zip", "browser_download_url": "https://example.com/ATools.zip"],
+        ["name": "ATools.dmg", "browser_download_url": "https://example.com/ATools.dmg"]
+    ]
+    let preferredAsset = UpdateManager.preferredReleaseAsset(from: releaseAssets)
+    assert(preferredAsset?.name == "ATools.dmg", "DMG should be preferred over ZIP")
+    assert(preferredAsset?.url.absoluteString.hasSuffix("/ATools.dmg") == true, "Preferred asset URL should be preserved")
+    let zipOnlyAsset = UpdateManager.preferredReleaseAsset(from: [releaseAssets[0]])
+    assert(zipOnlyAsset?.name == "ATools.zip", "ZIP should be used when DMG is unavailable")
+    assert(UpdateManager.normalizedVersion("v1.1.1") == "1.1.1", "Normalized version should strip the v prefix")
+    assert(UpdateManager.isBlockedUpdateLocation("/private/var/folders/abc/AppTranslocation/123/d/ATools.app"), "AppTranslocation must block in-place update")
+    assert(UpdateManager.isBlockedUpdateLocation("/Volumes/ATools/ATools.app"), "Read-only DMG volume must block in-place update")
+    assert(!UpdateManager.isBlockedUpdateLocation("/Applications/ATools.app"), "Applications folder should allow in-place update")
+    print("      ✓ UpdateManager asset selection and update-location guards verified.")
+
     // Check About Tab Layout Width (ensure strict 780.0pt)
     SettingsWindowController.shared.selectTab(.about)
     if let win = SettingsWindowController.shared.window {
         win.displayIfNeeded()
         win.contentView?.layoutSubtreeIfNeeded()
         assert(abs(win.frame.width - 780.0) < 0.5, "About tab window width MUST be 780.0pt, got \(win.frame.width)")
+        if let aboutContent = win.contentView {
+            aboutContent.layoutSubtreeIfNeeded()
+            if let rep = aboutContent.bitmapImageRepForCachingDisplay(in: aboutContent.bounds) {
+                aboutContent.cacheDisplay(in: aboutContent.bounds, to: rep)
+                if let pngData = rep.representation(using: .png, properties: [:]) {
+                    try? pngData.write(to: URL(fileURLWithPath: "/tmp/about_preview.png"))
+                    print("      ✓ Saved About tab preview to /tmp/about_preview.png")
+                }
+            }
+        }
         print("      ✓ About Tab with update manager maintains strictly 780.0pt width.")
     }
 

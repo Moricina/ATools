@@ -13,6 +13,7 @@ public final class HotkeyManager {
 
     private var eventHandlerRef: EventHandlerRef?
     private var registeredHotkeys: [UInt32: EventHotKeyRef] = [:]
+    private var registeredBindings: [HotKeyID: HotkeyBinding] = [:]
     private var specialBindings: [HotKeyID: HotkeySpecialTrigger] = [:]
     private var globalFlagsMonitor: Any?
     private var localFlagsMonitor: Any?
@@ -86,11 +87,20 @@ public final class HotkeyManager {
 
     @discardableResult
     public func register(id: HotKeyID, binding: HotkeyBinding) -> Bool {
-        // Clear any old Carbon or special binding for this id
-        unregister(id: id)
+        if registeredBindings[id] == binding {
+            return true
+        }
+
+        let oldHotKeyRef = registeredHotkeys[id.rawValue]
+        let oldSpecialBinding = specialBindings[id]
 
         if binding.specialTrigger != .none {
+            if let ref = oldHotKeyRef {
+                UnregisterEventHotKey(ref)
+                registeredHotkeys.removeValue(forKey: id.rawValue)
+            }
             specialBindings[id] = binding.specialTrigger
+            registeredBindings[id] = binding
             setupFlagsMonitorsIfNeeded()
             return true
         }
@@ -111,9 +121,20 @@ public final class HotkeyManager {
 
         if status == noErr, let ref = hotKeyRef {
             registeredHotkeys[id.rawValue] = ref
+            if let oldHotKeyRef = oldHotKeyRef {
+                UnregisterEventHotKey(oldHotKeyRef)
+            }
+            if oldSpecialBinding != nil {
+                specialBindings.removeValue(forKey: id)
+                if specialBindings.isEmpty {
+                    teardownFlagsMonitors()
+                }
+            }
+            registeredBindings[id] = binding
             return true
         } else {
             print("[HotkeyManager] Error registering HotKey \(id): \(status)")
+            // RegisterEventHotKey failed, so the previous binding remains active.
             return false
         }
     }
@@ -123,6 +144,7 @@ public final class HotkeyManager {
             UnregisterEventHotKey(ref)
         }
         specialBindings.removeValue(forKey: id)
+        registeredBindings.removeValue(forKey: id)
         if specialBindings.isEmpty {
             teardownFlagsMonitors()
         }
@@ -134,6 +156,7 @@ public final class HotkeyManager {
         }
         registeredHotkeys.removeAll()
         specialBindings.removeAll()
+        registeredBindings.removeAll()
         teardownFlagsMonitors()
     }
 
@@ -142,11 +165,21 @@ public final class HotkeyManager {
             setupNativeEventTap()
         }
         // If eventTap could not be installed (e.g. accessibility permission not yet granted), fall back to AppKit monitors
-        if eventTap == nil {
-            if globalFlagsMonitor == nil {
-                globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-                    self?.handleGlobalFlagsChanged(event: event)
-                }
+        guard eventTap == nil else {
+            if let m = globalFlagsMonitor {
+                NSEvent.removeMonitor(m)
+                globalFlagsMonitor = nil
+            }
+            if let m = localFlagsMonitor {
+                NSEvent.removeMonitor(m)
+                localFlagsMonitor = nil
+            }
+            return
+        }
+
+        if globalFlagsMonitor == nil {
+            globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                self?.handleGlobalFlagsChanged(event: event)
             }
         }
         if localFlagsMonitor == nil {
@@ -184,10 +217,10 @@ public final class HotkeyManager {
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .defaultTap,
+            options: .listenOnly,
             eventsOfInterest: CGEventMask(eventMask),
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                guard let refcon = refcon else { return Unmanaged.passUnretained(event) }
                 let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
                 return manager.handleCGEvent(proxy: proxy, type: type, event: event)
             },
@@ -226,11 +259,11 @@ public final class HotkeyManager {
                 CGEvent.tapEnable(tap: tap, enable: true)
                 runtimeLog("[HotkeyManager] Re-enabled CGEventTap after timeout/disable")
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         guard !specialBindings.isEmpty else {
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         // 1. Any normal key press invalidates the candidate modifier double-tap sequence (e.g. Cmd+C, Cmd+Tab)
@@ -238,7 +271,7 @@ public final class HotkeyManager {
             isModifierTainted = true
             lastCGModifierPressTime.removeAll()
             lastCGModifierReleaseTime.removeAll()
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         if type == .flagsChanged {
@@ -302,7 +335,7 @@ public final class HotkeyManager {
             lastObservedCGModifiers = relevantFlags
         }
 
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 
     private func handleLocalKeyDown(event: NSEvent) {

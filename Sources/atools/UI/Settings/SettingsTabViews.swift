@@ -1828,12 +1828,11 @@ public final class AboutTabView: NSView {
             subtitle: "直连官方 GitHub Releases，支持一键无感下载与平滑原地热更新",
             accessory: actionContainer
         )
-        card1.addRow(rowUpdate)
+        card1.addRow(rowUpdate, isLast: false)
 
-        // Download Progress & Status Row
-        let progressContainer = NSView()
-        progressContainer.translatesAutoresizingMaskIntoConstraints = false
-        card1.addSubview(progressContainer)
+        // Download Progress & Status Row (Clean arranged subview inside card1)
+        let updateDetailView = NSView()
+        updateDetailView.translatesAutoresizingMaskIntoConstraints = false
 
         progressIndicator.translatesAutoresizingMaskIntoConstraints = false
         progressIndicator.isIndeterminate = false
@@ -1841,10 +1840,10 @@ public final class AboutTabView: NSView {
         progressIndicator.maxValue = 1.0
         progressIndicator.doubleValue = 0.0
         progressIndicator.isHidden = true
-        progressContainer.addSubview(progressIndicator)
+        updateDetailView.addSubview(progressIndicator)
 
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        progressContainer.addSubview(statusLabel)
+        updateDetailView.addSubview(statusLabel)
 
         // Release Notes Box (folded by default)
         releaseNotesBox.translatesAutoresizingMaskIntoConstraints = false
@@ -1855,7 +1854,7 @@ public final class AboutTabView: NSView {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         releaseNotesBox.layer?.backgroundColor = isDark ? NSColor(white: 0.12, alpha: 0.6).cgColor : NSColor(white: 0.96, alpha: 0.9).cgColor
         releaseNotesBox.isHidden = true
-        card1.addSubview(releaseNotesBox)
+        updateDetailView.addSubview(releaseNotesBox)
 
         let scrollNotes = NSScrollView()
         scrollNotes.translatesAutoresizingMaskIntoConstraints = false
@@ -1865,35 +1864,36 @@ public final class AboutTabView: NSView {
         releaseNotesText.isEditable = false
         releaseNotesText.isSelectable = true
         releaseNotesText.font = NSFont.systemFont(ofSize: 11)
-        releaseNotesText.textColor = .secondaryLabelColor
+        releaseNotesText.textColor = .labelColor
         releaseNotesText.backgroundColor = .clear
         releaseNotesText.textContainerInset = NSSize(width: 8, height: 8)
+        releaseNotesText.isVerticallyResizable = true
+        releaseNotesText.isHorizontallyResizable = false
+        releaseNotesText.autoresizingMask = [.width]
+        releaseNotesText.textContainer?.widthTracksTextView = true
         scrollNotes.documentView = releaseNotesText
         releaseNotesBox.addSubview(scrollNotes)
 
         let notesHeight = releaseNotesBox.heightAnchor.constraint(equalToConstant: 0)
         releaseNotesHeightConstraint = notesHeight
 
-        NSLayoutConstraint.activate([
-            progressContainer.topAnchor.constraint(equalTo: rowUpdate.bottomAnchor, constant: 4),
-            progressContainer.leadingAnchor.constraint(equalTo: card1.leadingAnchor, constant: 48),
-            progressContainer.trailingAnchor.constraint(equalTo: card1.trailingAnchor, constant: -16),
+        card1.addRow(updateDetailView, isLast: true)
 
-            statusLabel.topAnchor.constraint(equalTo: progressContainer.topAnchor),
-            statusLabel.leadingAnchor.constraint(equalTo: progressContainer.leadingAnchor),
-            statusLabel.trailingAnchor.constraint(equalTo: progressContainer.trailingAnchor),
+        NSLayoutConstraint.activate([
+            statusLabel.topAnchor.constraint(equalTo: updateDetailView.topAnchor, constant: 4),
+            statusLabel.leadingAnchor.constraint(equalTo: updateDetailView.leadingAnchor, constant: 48),
+            statusLabel.trailingAnchor.constraint(equalTo: updateDetailView.trailingAnchor, constant: -16),
 
             progressIndicator.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 6),
-            progressIndicator.leadingAnchor.constraint(equalTo: progressContainer.leadingAnchor),
-            progressIndicator.trailingAnchor.constraint(equalTo: progressContainer.trailingAnchor),
+            progressIndicator.leadingAnchor.constraint(equalTo: statusLabel.leadingAnchor),
+            progressIndicator.trailingAnchor.constraint(equalTo: statusLabel.trailingAnchor),
             progressIndicator.heightAnchor.constraint(equalToConstant: 6),
-            progressIndicator.bottomAnchor.constraint(equalTo: progressContainer.bottomAnchor, constant: -6),
 
-            releaseNotesBox.topAnchor.constraint(equalTo: progressContainer.bottomAnchor, constant: 6),
-            releaseNotesBox.leadingAnchor.constraint(equalTo: card1.leadingAnchor, constant: 16),
-            releaseNotesBox.trailingAnchor.constraint(equalTo: card1.trailingAnchor, constant: -16),
-            releaseNotesBox.bottomAnchor.constraint(equalTo: card1.bottomAnchor, constant: -12),
+            releaseNotesBox.topAnchor.constraint(equalTo: progressIndicator.bottomAnchor, constant: 6),
+            releaseNotesBox.leadingAnchor.constraint(equalTo: updateDetailView.leadingAnchor, constant: 16),
+            releaseNotesBox.trailingAnchor.constraint(equalTo: updateDetailView.trailingAnchor, constant: -16),
             notesHeight,
+            releaseNotesBox.bottomAnchor.constraint(equalTo: updateDetailView.bottomAnchor, constant: -12),
 
             scrollNotes.topAnchor.constraint(equalTo: releaseNotesBox.topAnchor),
             scrollNotes.leadingAnchor.constraint(equalTo: releaseNotesBox.leadingAnchor),
@@ -1909,13 +1909,13 @@ public final class AboutTabView: NSView {
         card2.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card2)
 
-        let archLabel = NSTextField(labelWithString: "Universal (Apple Silicon + Intel)")
+        let archLabel = NSTextField(labelWithString: AboutTabView.currentArchitectureLabel)
         archLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
         archLabel.textColor = .secondaryLabelColor
         let rowArch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "cpu"),
             title: "原生架构支持",
-            subtitle: "原生适配 M 系列与 Intel 芯片，针对 macOS Sonoma 与 Sequoia 深度调优",
+            subtitle: "基于当前安装包的原生架构构建，针对 macOS Sonoma 与 Sequoia 深度调优",
             accessory: archLabel
         )
         card2.addRow(rowArch)
@@ -1946,14 +1946,44 @@ public final class AboutTabView: NSView {
         ])
     }
 
+    private static var currentArchitectureLabel: String {
+        guard let executableURL = Bundle.main.executableURL else { return "当前 Mac 原生架构" }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/lipo")
+        process.arguments = ["-archs", executableURL.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        guard (try? process.run()) != nil else { return "当前 Mac 原生架构" }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return "当前 Mac 原生架构" }
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let architectures = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if architectures.contains("arm64") && architectures.contains("x86_64") {
+            return "Universal (Apple Silicon + Intel)"
+        }
+        if architectures.contains("arm64") {
+            return "Apple Silicon (arm64)"
+        }
+        if architectures.contains("x86_64") {
+            return "Intel (x86_64)"
+        }
+        return "当前 Mac 原生架构"
+    }
+
     @objc private func handleUpdateStateChanged() {
         updateUIState()
     }
 
     @objc private func actionButtonClicked() {
         switch UpdateManager.shared.currentState {
-        case .idle, .upToDate, .error:
+        case .idle, .upToDate:
             UpdateManager.shared.checkForUpdates(isUserInitiated: true)
+        case .error:
+            UpdateManager.shared.retry()
         case .available:
             UpdateManager.shared.startUpdate()
         case .downloading:

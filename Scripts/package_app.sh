@@ -1,17 +1,28 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-echo "==> Building ATools (Release mode)..."
-swift build -c release
+GIT_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.1.0")"
+GIT_VER="${GIT_TAG#v}"
+VERSION="${ATOOLS_VERSION:-$GIT_VER}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-2}"
+SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
 
-BIN_PATH="$DIR/.build/release/ATools"
+echo "==> Building ATools $VERSION ($BUILD_NUMBER) in Release mode..."
+swift build -c release --disable-sandbox --scratch-path "$SCRATCH_PATH" -debug-info-format none
+
+BIN_PATH="$SCRATCH_PATH/release/ATools"
 APP_BUNDLE="$DIR/ATools.app"
 CONTENTS="$APP_BUNDLE/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
+
+if [ ! -x "$BIN_PATH" ]; then
+    echo "Build output not found at $BIN_PATH" >&2
+    exit 1
+fi
 
 echo "==> Creating ATools.app bundle..."
 rm -rf "$APP_BUNDLE"
@@ -25,7 +36,7 @@ if [ -f "$DIR/Resources/AppIcon.icns" ]; then
     cp "$DIR/Resources/AppIcon.icns" "$RESOURCES/AppIcon.icns"
 fi
 
-cat << 'EOF' > "$CONTENTS/Info.plist"
+cat << EOF > "$CONTENTS/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -43,9 +54,9 @@ cat << 'EOF' > "$CONTENTS/Info.plist"
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>${VERSION}</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>${BUILD_NUMBER}</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>LSUIElement</key>
@@ -72,6 +83,7 @@ codesign --force --deep --sign - "$APP_BUNDLE"
 
 BIN_SIZE=$(du -h "$MACOS/ATools" | cut -f1)
 TOTAL_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)
+ARCHS=$(lipo -archs "$MACOS/ATools")
 
 echo "==> Creating release zip archive for GitHub Releases..."
 rm -f "$DIR/ATools.zip"
@@ -92,6 +104,7 @@ DMG_SIZE=$(du -h "$DIR/ATools.dmg" | cut -f1)
 
 echo "==> Successfully packaged ATools.app!"
 echo "    Binary size:  $BIN_SIZE"
+echo "    Architectures: $ARCHS"
 echo "    App bundle:   $TOTAL_SIZE ($APP_BUNDLE)"
 echo "    Release zip:  $ZIP_SIZE ($DIR/ATools.zip)"
 echo "    Release dmg:  $DMG_SIZE ($DIR/ATools.dmg)"

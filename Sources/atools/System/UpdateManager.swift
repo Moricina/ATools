@@ -54,9 +54,13 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
     private var currentDownloadTask: URLSessionDownloadTask?
     private lazy var downloadSession: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30.0
         config.timeoutIntervalForResource = 300.0
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
         return URLSession(configuration: config, delegate: self, delegateQueue: nil)
     }()
 
@@ -93,6 +97,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     public func checkForUpdates(isUserInitiated: Bool = true) {
         guard currentState != .checking else { return }
         currentState = .checking
+        targetRelease = nil
 
         guard let apiURL = URL(string: "https://api.github.com/repos/Moricina/ATools/releases/latest") else {
             currentState = .error("无效的更新检测地址")
@@ -142,41 +147,12 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 let body = json["body"] as? String ?? "暂无更新说明"
                 let publishedAt = json["published_at"] as? String ?? ""
 
-                // 查找 assets 中的 DMG 或 ZIP
-                var assetDownloadURL: URL?
-                var assetFileName = ""
-
-                if let assets = json["assets"] as? [[String: Any]] {
-                    // 优先选择 ATools.dmg
-                    for asset in assets {
-                        if let name = asset["name"] as? String, name.hasSuffix(".dmg"),
-                           let urlString = asset["browser_download_url"] as? String,
-                           let url = URL(string: urlString) {
-                            assetDownloadURL = url
-                            assetFileName = name
-                            break
-                        }
-                    }
-
-                    // 备选 ATools.zip
-                    if assetDownloadURL == nil {
-                        for asset in assets {
-                            if let name = asset["name"] as? String, name.hasSuffix(".zip"),
-                               let urlString = asset["browser_download_url"] as? String,
-                               let url = URL(string: urlString) {
-                                assetDownloadURL = url
-                                assetFileName = name
-                                break
-                            }
-                        }
-                    }
-                }
-
                 let currentVer = self.currentAppVersion
                 let hasNewVersion = UpdateManager.isVersion(tagName, greaterThan: currentVer)
 
                 if hasNewVersion {
-                    guard let downloadURL = assetDownloadURL else {
+                    let assets = json["assets"] as? [[String: Any]] ?? []
+                    guard let preferredAsset = UpdateManager.preferredReleaseAsset(from: assets) else {
                         self.currentState = .error("最新版本未提供 macOS 安装镜像包")
                         return
                     }
@@ -185,8 +161,8 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                         version: tagName,
                         name: releaseName,
                         body: body,
-                        downloadURL: downloadURL,
-                        assetName: assetFileName,
+                        downloadURL: preferredAsset.url,
+                        assetName: preferredAsset.name,
                         publishedAt: publishedAt
                     )
                     self.targetRelease = release
@@ -207,16 +183,16 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         self.targetRelease = release
         self.currentState = .downloading(progress: 0.0)
 
-        // 验证当前路径是否处于 AppTranslocation 只读隔离区
+        // 验证当前路径是否处于 AppTranslocation 或只读挂载卷
         let bundlePath = Bundle.main.bundlePath
-        if bundlePath.contains("AppTranslocation") {
-            self.currentState = .error("当前应用运行在临时隔离区中，请先将其移动到「应用程序」文件夹后再执行更新")
+        if UpdateManager.isBlockedUpdateLocation(bundlePath) {
+            self.currentState = .error("当前应用运行在临时隔离区或只读磁盘镜像中，请先将其移动到「应用程序」文件夹后再执行更新")
             return
         }
 
-        // 验证目标路径写权限
-        if !FileManager.default.isWritableFile(atPath: (bundlePath as NSString).deletingLastPathComponent) &&
-           !FileManager.default.isWritableFile(atPath: bundlePath) {
+        // 原地替换需要对父目录有写权限；目录本身不可写并不代表替换不可行
+        let parentDirectory = (bundlePath as NSString).deletingLastPathComponent
+        if !FileManager.default.isWritableFile(atPath: parentDirectory) {
             self.currentState = .error("对目标应用程序目录缺少写入权限，无法原地自动更新")
             return
         }
@@ -226,10 +202,45 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         downloadTask.resume()
     }
 
+    /// 重试上次失败的安装包；若失败发生在检查阶段，则重新检查更新。
+    public func retry() {
+        if let release = targetRelease {
+            currentState = .available(release)
+            startUpdate()
+        } else {
+            checkForUpdates(isUserInitiated: true)
+        }
+    }
+
     public func cancelUpdate() {
         currentDownloadTask?.cancel()
         currentDownloadTask = nil
         currentState = .idle
+    }
+
+    static func isBlockedUpdateLocation(_ path: String) -> Bool {
+        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
+        return standardizedPath.contains("/AppTranslocation/")
+            || standardizedPath.hasPrefix("/Volumes/")
+    }
+
+    static func normalizedVersion(_ version: String) -> String {
+        return version.trimmingCharacters(in: CharacterSet(charactersIn: "vV \t\n\r"))
+    }
+
+    static func preferredReleaseAsset(from assets: [[String: Any]]) -> (name: String, url: URL)? {
+        for preferredExtension in [".dmg", ".zip"] {
+            for asset in assets {
+                guard let name = asset["name"] as? String,
+                      name.lowercased().hasSuffix(preferredExtension),
+                      let urlString = asset["browser_download_url"] as? String,
+                      let url = URL(string: urlString) else {
+                    continue
+                }
+                return (name: name, url: url)
+            }
+        }
+        return nil
     }
 
     // MARK: - URLSessionDownloadDelegate
@@ -259,9 +270,30 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             self?.currentState = .preparing
         }
 
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            self.extractAndRelaunch(downloadedLocation: location)
+        guard let httpResponse = downloadTask.response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            DispatchQueue.main.async { [weak self] in
+                self?.currentDownloadTask = nil
+                self?.currentState = .error("下载服务器返回异常，请稍后重试")
+            }
+            return
+        }
+
+        do {
+            // URLSession 会在本代理方法返回后删除 location，必须先同步接管临时文件。
+            let preparedUpdate = try prepareDownloadedAsset(at: location)
+            DispatchQueue.main.async { [weak self] in
+                self?.currentDownloadTask = nil
+            }
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { return }
+                self.extractAndRelaunch(preparedUpdate: preparedUpdate)
+            }
+        } catch {
+            DispatchQueue.main.async { [weak self] in
+                self?.currentDownloadTask = nil
+                self?.currentState = .error("保存安装包失败：\(error.localizedDescription)")
+            }
         }
     }
 
@@ -274,34 +306,50 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     }
 
     // MARK: - Extraction & In-Place Replacement
-    private func extractAndRelaunch(downloadedLocation: URL) {
+    private struct PreparedUpdate {
+        let tempDirectory: URL
+        let assetURL: URL
+        let isDMG: Bool
+    }
+
+    private func prepareDownloadedAsset(at location: URL) throws -> PreparedUpdate {
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("atools_update_\(UUID().uuidString)")
+        let isDMG = targetRelease?.assetName.hasSuffix(".dmg") ?? true
+        let localAssetPath = tempDir.appendingPathComponent(isDMG ? "download.dmg" : "download.zip")
+
+        do {
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: location, to: localAssetPath)
+            return PreparedUpdate(tempDirectory: tempDir, assetURL: localAssetPath, isDMG: isDMG)
+        } catch {
+            try? FileManager.default.removeItem(at: tempDir)
+            throw error
+        }
+    }
+
+    private func extractAndRelaunch(preparedUpdate: PreparedUpdate) {
+        let tempDir = preparedUpdate.tempDirectory
         let stagingDir = tempDir.appendingPathComponent("staging")
         let targetAppBundlePath = Bundle.main.bundlePath
-        let isDMG = targetRelease?.assetName.hasSuffix(".dmg") ?? true
+        var shouldCleanupTempDirectory = true
+        defer {
+            if shouldCleanupTempDirectory {
+                try? FileManager.default.removeItem(at: tempDir)
+            }
+        }
 
         do {
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-
-            let localAssetPath: String
-            if isDMG {
-                localAssetPath = tempDir.appendingPathComponent("download.dmg").path
-            } else {
-                localAssetPath = tempDir.appendingPathComponent("download.zip").path
-            }
-
-            try FileManager.default.copyItem(atPath: downloadedLocation.path, toPath: localAssetPath)
-
             let stagingAppPath = stagingDir.appendingPathComponent("ATools.app").path
 
-            if isDMG {
+            if preparedUpdate.isDMG {
                 // 挂载 DMG 提取 ATools.app
                 let mountPoint = tempDir.appendingPathComponent("mount").path
                 try FileManager.default.createDirectory(atPath: mountPoint, withIntermediateDirectories: true)
 
                 let attachProcess = Process()
                 attachProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-                attachProcess.arguments = ["attach", localAssetPath, "-nobrowse", "-mountpoint", mountPoint]
+                attachProcess.arguments = ["attach", preparedUpdate.assetURL.path, "-nobrowse", "-mountpoint", mountPoint]
                 try attachProcess.run()
                 attachProcess.waitUntilExit()
 
@@ -309,20 +357,21 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                     throw NSError(domain: "UpdateManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "无法挂载更新磁盘镜像"])
                 }
 
+                defer {
+                    _ = try? self.detachDMG(mountPoint: mountPoint)
+                }
+
                 let sourceAppInMount = (mountPoint as NSString).appendingPathComponent("ATools.app")
                 if FileManager.default.fileExists(atPath: sourceAppInMount) {
                     try FileManager.default.copyItem(atPath: sourceAppInMount, toPath: stagingAppPath)
                 } else {
-                    _ = try? self.detachDMG(mountPoint: mountPoint)
                     throw NSError(domain: "UpdateManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "更新镜像中未找到 ATools.app"])
                 }
-
-                _ = try? self.detachDMG(mountPoint: mountPoint)
             } else {
                 // 解压 ZIP 提取 ATools.app
                 let unzipProcess = Process()
                 unzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-                unzipProcess.arguments = ["-xk", localAssetPath, stagingDir.path]
+                unzipProcess.arguments = ["-xk", preparedUpdate.assetURL.path, stagingDir.path]
                 try unzipProcess.run()
                 unzipProcess.waitUntilExit()
 
@@ -331,6 +380,8 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                     throw NSError(domain: "UpdateManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "解压更新压缩包失败"])
                 }
             }
+
+            try validateStagedApp(at: stagingAppPath)
 
             // 清除新版本隔离属性
             let xattrProcess = Process()
@@ -343,52 +394,24 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             let scriptPath = tempDir.appendingPathComponent("relaunch.sh").path
             let currentPID = ProcessInfo.processInfo.processIdentifier
 
-            let scriptContent = """
-            #!/bin/sh
-            OLD_PID="\(currentPID)"
-            TARGET_APP="\(targetAppBundlePath)"
-            STAGING_APP="\(stagingAppPath)"
-            TEMP_DIR="\(tempDir.path)"
-            BACKUP_APP="${TARGET_APP}.backup"
-
-            # 1. 等待老进程退出（最长等待 10 秒）
-            COUNT=0
-            while kill -0 "$OLD_PID" 2>/dev/null; do
-                sleep 0.2
-                COUNT=$((COUNT+1))
-                if [ $COUNT -gt 50 ]; then
-                    kill -9 "$OLD_PID" 2>/dev/null
-                    break
-                fi
-            done
-
-            # 2. 原子化覆盖替换
-            rm -rf "$BACKUP_APP"
-            if mv "$TARGET_APP" "$BACKUP_APP" 2>/dev/null; then
-                if cp -R "$STAGING_APP" "$TARGET_APP"; then
-                    /usr/bin/xattr -cr "$TARGET_APP" 2>/dev/null
-                    rm -rf "$BACKUP_APP"
-                else
-                    # 容灾回滚
-                    mv "$BACKUP_APP" "$TARGET_APP"
-                fi
-            fi
-
-            # 3. 重新拉起应用
-            /usr/bin/open "$TARGET_APP"
-
-            # 4. 清理临时更新目录
-            rm -rf "$TEMP_DIR"
-            """
-
-            try scriptContent.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+            try UpdateManager.relaunchScript.write(toFile: scriptPath, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
 
-            // 启动守护脚本并退出当前老进程
+            // 启动守护脚本并退出当前老进程 (使用 nohup 隔离父进程退出信号)
             let runnerProcess = Process()
-            runnerProcess.executableURL = URL(fileURLWithPath: "/bin/sh")
-            runnerProcess.arguments = [scriptPath]
+            runnerProcess.executableURL = URL(fileURLWithPath: "/usr/bin/nohup")
+            runnerProcess.arguments = [
+                "/bin/sh",
+                scriptPath,
+                String(currentPID),
+                targetAppBundlePath,
+                stagingAppPath,
+                tempDir.path
+            ]
+            runnerProcess.standardOutput = FileHandle.nullDevice
+            runnerProcess.standardError = FileHandle.nullDevice
             try runnerProcess.run()
+            shouldCleanupTempDirectory = false
 
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
@@ -400,6 +423,47 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
     }
 
+    private func validateStagedApp(at stagingAppPath: String) throws {
+        let infoPlistPath = (stagingAppPath as NSString).appendingPathComponent("Contents/Info.plist")
+        let executablePath = (stagingAppPath as NSString).appendingPathComponent("Contents/MacOS/ATools")
+
+        guard let infoData = FileManager.default.contents(atPath: infoPlistPath),
+              let plist = try PropertyListSerialization.propertyList(from: infoData, format: nil) as? [String: Any] else {
+            throw NSError(domain: "UpdateManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "更新包缺少有效的 Info.plist"])
+        }
+
+        guard plist["CFBundleIdentifier"] as? String == "cc.atools.app",
+              plist["CFBundleExecutable"] as? String == "ATools",
+              FileManager.default.isExecutableFile(atPath: executablePath) else {
+            throw NSError(domain: "UpdateManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "更新包中的应用标识或可执行文件无效"])
+        }
+
+        guard let packagedVersion = plist["CFBundleShortVersionString"] as? String else {
+            throw NSError(domain: "UpdateManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "更新包缺少有效的版本号"])
+        }
+
+        let currentVer = currentAppVersion
+        let expectedVersion = targetRelease?.version ?? ""
+
+        // 校验：更新包版本只要高于当前运行版本，或者与目标发布版本一致，即为合法有效更新
+        let isNewerThanCurrent = UpdateManager.isVersion(packagedVersion, greaterThan: currentVer)
+        let matchesExpected = !expectedVersion.isEmpty && UpdateManager.normalizedVersion(packagedVersion) == UpdateManager.normalizedVersion(expectedVersion)
+
+        guard isNewerThanCurrent || matchesExpected else {
+            throw NSError(domain: "UpdateManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "更新包版本 (v\(packagedVersion)) 未高于当前运行版本 (v\(currentVer))"])
+        }
+
+        let verifyProcess = Process()
+        verifyProcess.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        verifyProcess.arguments = ["--verify", "--deep", "--strict", stagingAppPath]
+        try verifyProcess.run()
+        verifyProcess.waitUntilExit()
+
+        guard verifyProcess.terminationStatus == 0 else {
+            throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包代码签名校验失败"])
+        }
+    }
+
     private func detachDMG(mountPoint: String) throws {
         let detach = Process()
         detach.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
@@ -407,4 +471,51 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         try detach.run()
         detach.waitUntilExit()
     }
+
+    private static let relaunchScript = """
+    #!/bin/sh
+    set -u
+
+    OLD_PID="$1"
+    TARGET_APP="$2"
+    STAGING_APP="$3"
+    TEMP_DIR="$4"
+    BACKUP_APP="${TARGET_APP}.atools-update-backup"
+
+    # 1. 等待老进程退出（最长等待 10 秒）
+    COUNT=0
+    while kill -0 "$OLD_PID" 2>/dev/null; do
+        sleep 0.2
+        COUNT=$((COUNT+1))
+        if [ "$COUNT" -gt 50 ]; then
+            kill -9 "$OLD_PID" 2>/dev/null
+            break
+        fi
+    done
+
+    # 2. 替换前清理陈旧备份
+    rm -rf "$BACKUP_APP"
+
+    # 3. 先移动旧包，再使用 ditto 保留资源与权限
+    if mv "$TARGET_APP" "$BACKUP_APP" 2>/dev/null; then
+        if /usr/bin/ditto "$STAGING_APP" "$TARGET_APP"; then
+            /usr/bin/xattr -cr "$TARGET_APP" 2>/dev/null
+            if /usr/bin/codesign --verify --deep --strict "$TARGET_APP" >/dev/null 2>&1; then
+                rm -rf "$BACKUP_APP"
+            else
+                rm -rf "$TARGET_APP"
+                mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
+            fi
+        else
+            rm -rf "$TARGET_APP"
+            mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
+        fi
+    fi
+
+    # 4. 重新拉起应用
+    /usr/bin/open "$TARGET_APP"
+
+    # 5. 清理临时更新目录
+    rm -rf "$TEMP_DIR"
+    """
 }
