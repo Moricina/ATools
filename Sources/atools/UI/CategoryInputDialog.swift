@@ -58,7 +58,7 @@ public final class CategoryInputDialog: NSWindowController {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isReleasedWhenClosed = false
-        win.level = .floating
+        win.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
 
         super.init(window: win)
 

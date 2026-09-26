@@ -67,13 +67,13 @@ public final class PanelCoordinator {
             panelToHide.orderOut(nil)
             activePanel = nil
         }
-
         switch target {
         case .shelf:
             // 鼠标跟随定位 + 多屏可见区域 Clamping
             positionPanelFollowMouse(shelfPanel)
             NSApp.activate(ignoringOtherApps: true)
             shelfPanel.makeKeyAndOrderFront(nil)
+            shelfPanel.orderFrontRegardless()
             shelfPanel.prepareForDisplay()
         case .search:
             // Prepare for display (resets to 72pt height) before calculating screen anchor
@@ -100,7 +100,7 @@ public final class PanelCoordinator {
 
     private func installGlobalOutsideClickMonitor() {
         stopGlobalOutsideClickMonitor()
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .rightMouseDown]) { [weak self] _ in
             guard let self = self, let active = self.activePanel else { return }
             if self.isDraggingActive { return }
             // Do not dismiss panel if a modal alert/window is currently presented or Settings window is clicked

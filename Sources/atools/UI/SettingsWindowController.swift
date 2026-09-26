@@ -37,7 +37,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         win.isReleasedWhenClosed = false
         win.minSize = NSSize(width: 780, height: 600)
         win.maxSize = NSSize(width: 780, height: 800)
-        win.level = .floating
+        win.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
         super.init(window: win)
         win.delegate = self
         setupUI()
@@ -48,6 +48,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func showSettingsWindow() {
+        PanelCoordinator.shared.hideAllPanels()
         guard let win = window else { return }
         win.setContentSize(NSSize(width: 780, height: 620))
         win.center()

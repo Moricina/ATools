@@ -1728,12 +1728,30 @@ public final class PerformanceTabView: NSView {
 
 // MARK: - 7. About Tab View
 public final class AboutTabView: NSView {
+    private let statusLabel = NSTextField(labelWithString: "点击右侧按钮连接 GitHub 检查最新发布版本")
+    private let actionButton = NSButton()
+    private let progressIndicator = NSProgressIndicator()
+    private let releaseNotesBox = NSView()
+    private let releaseNotesText = NSTextView()
+    private var releaseNotesHeightConstraint: NSLayoutConstraint?
+
     public init() {
         super.init(frame: .zero)
         setupUI()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleUpdateStateChanged),
+            name: UpdateManager.stateDidChangeNotification,
+            object: nil
+        )
+        updateUIState()
     }
 
     required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     private func setupUI() {
         translatesAutoresizingMaskIntoConstraints = false
@@ -1758,14 +1776,16 @@ public final class AboutTabView: NSView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        let sec1Title = makeSectionHeader(title: "产品信息")
+        // Section 1: 软件更新与版本
+        let sec1Title = makeSectionHeader(title: "软件版本与更新")
         scrollContent.addSubview(sec1Title)
 
         let card1 = SettingsCardView()
         card1.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card1)
 
-        let verLabel = NSTextField(labelWithString: "v1.0.0 (Build 1)")
+        let currentVer = UpdateManager.shared.currentAppVersion
+        let verLabel = NSTextField(labelWithString: "v\(currentVer)")
         verLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
         verLabel.textColor = .secondaryLabelColor
         let rowVer = SettingsRowView(
@@ -1776,28 +1796,134 @@ public final class AboutTabView: NSView {
         )
         card1.addRow(rowVer)
 
-        let archLabel = NSTextField(labelWithString: "Universal (原生架构)")
-        archLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
-        archLabel.textColor = .secondaryLabelColor
-        let rowArch = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "cpu"),
-            title: "系统架构兼容",
-            subtitle: "针对 Apple Silicon 与 Intel 芯片深度性能调优",
-            accessory: archLabel
-        )
-        card1.addRow(rowArch, isLast: true)
+        // Action Container
+        let actionContainer = NSView()
+        actionContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        let sec2Title = makeSectionHeader(title: "技术栈与核心组件")
+        actionButton.translatesAutoresizingMaskIntoConstraints = false
+        actionButton.bezelStyle = .rounded
+        actionButton.target = self
+        actionButton.action = #selector(actionButtonClicked)
+        actionButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        actionContainer.addSubview(actionButton)
+
+        NSLayoutConstraint.activate([
+            actionButton.trailingAnchor.constraint(equalTo: actionContainer.trailingAnchor),
+            actionButton.centerYAnchor.constraint(equalTo: actionContainer.centerYAnchor),
+            actionButton.leadingAnchor.constraint(greaterThanOrEqualTo: actionContainer.leadingAnchor),
+            actionButton.heightAnchor.constraint(equalToConstant: 28),
+            actionContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
+            actionContainer.heightAnchor.constraint(equalToConstant: 32)
+        ])
+
+        statusLabel.font = NSFont.systemFont(ofSize: 11)
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.cell?.wraps = true
+        statusLabel.cell?.isScrollable = false
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        let rowUpdate = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.triangle.2.circlepath"),
+            title: "检查与安装更新",
+            subtitle: "直连官方 GitHub Releases，支持一键无感下载与平滑原地热更新",
+            accessory: actionContainer
+        )
+        card1.addRow(rowUpdate)
+
+        // Download Progress & Status Row
+        let progressContainer = NSView()
+        progressContainer.translatesAutoresizingMaskIntoConstraints = false
+        card1.addSubview(progressContainer)
+
+        progressIndicator.translatesAutoresizingMaskIntoConstraints = false
+        progressIndicator.isIndeterminate = false
+        progressIndicator.minValue = 0.0
+        progressIndicator.maxValue = 1.0
+        progressIndicator.doubleValue = 0.0
+        progressIndicator.isHidden = true
+        progressContainer.addSubview(progressIndicator)
+
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        progressContainer.addSubview(statusLabel)
+
+        // Release Notes Box (folded by default)
+        releaseNotesBox.translatesAutoresizingMaskIntoConstraints = false
+        releaseNotesBox.wantsLayer = true
+        releaseNotesBox.layer?.cornerRadius = 8
+        releaseNotesBox.layer?.borderWidth = 0.5
+        releaseNotesBox.layer?.borderColor = NSColor.separatorColor.cgColor
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        releaseNotesBox.layer?.backgroundColor = isDark ? NSColor(white: 0.12, alpha: 0.6).cgColor : NSColor(white: 0.96, alpha: 0.9).cgColor
+        releaseNotesBox.isHidden = true
+        card1.addSubview(releaseNotesBox)
+
+        let scrollNotes = NSScrollView()
+        scrollNotes.translatesAutoresizingMaskIntoConstraints = false
+        scrollNotes.hasVerticalScroller = true
+        scrollNotes.drawsBackground = false
+
+        releaseNotesText.isEditable = false
+        releaseNotesText.isSelectable = true
+        releaseNotesText.font = NSFont.systemFont(ofSize: 11)
+        releaseNotesText.textColor = .secondaryLabelColor
+        releaseNotesText.backgroundColor = .clear
+        releaseNotesText.textContainerInset = NSSize(width: 8, height: 8)
+        scrollNotes.documentView = releaseNotesText
+        releaseNotesBox.addSubview(scrollNotes)
+
+        let notesHeight = releaseNotesBox.heightAnchor.constraint(equalToConstant: 0)
+        releaseNotesHeightConstraint = notesHeight
+
+        NSLayoutConstraint.activate([
+            progressContainer.topAnchor.constraint(equalTo: rowUpdate.bottomAnchor, constant: 4),
+            progressContainer.leadingAnchor.constraint(equalTo: card1.leadingAnchor, constant: 48),
+            progressContainer.trailingAnchor.constraint(equalTo: card1.trailingAnchor, constant: -16),
+
+            statusLabel.topAnchor.constraint(equalTo: progressContainer.topAnchor),
+            statusLabel.leadingAnchor.constraint(equalTo: progressContainer.leadingAnchor),
+            statusLabel.trailingAnchor.constraint(equalTo: progressContainer.trailingAnchor),
+
+            progressIndicator.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 6),
+            progressIndicator.leadingAnchor.constraint(equalTo: progressContainer.leadingAnchor),
+            progressIndicator.trailingAnchor.constraint(equalTo: progressContainer.trailingAnchor),
+            progressIndicator.heightAnchor.constraint(equalToConstant: 6),
+            progressIndicator.bottomAnchor.constraint(equalTo: progressContainer.bottomAnchor, constant: -6),
+
+            releaseNotesBox.topAnchor.constraint(equalTo: progressContainer.bottomAnchor, constant: 6),
+            releaseNotesBox.leadingAnchor.constraint(equalTo: card1.leadingAnchor, constant: 16),
+            releaseNotesBox.trailingAnchor.constraint(equalTo: card1.trailingAnchor, constant: -16),
+            releaseNotesBox.bottomAnchor.constraint(equalTo: card1.bottomAnchor, constant: -12),
+            notesHeight,
+
+            scrollNotes.topAnchor.constraint(equalTo: releaseNotesBox.topAnchor),
+            scrollNotes.leadingAnchor.constraint(equalTo: releaseNotesBox.leadingAnchor),
+            scrollNotes.trailingAnchor.constraint(equalTo: releaseNotesBox.trailingAnchor),
+            scrollNotes.bottomAnchor.constraint(equalTo: releaseNotesBox.bottomAnchor)
+        ])
+
+        // Section 2: 系统兼容性与架构
+        let sec2Title = makeSectionHeader(title: "系统兼容与技术规格")
         scrollContent.addSubview(sec2Title)
 
         let card2 = SettingsCardView()
         card2.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card2)
 
+        let archLabel = NSTextField(labelWithString: "Universal (Apple Silicon + Intel)")
+        archLabel.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        archLabel.textColor = .secondaryLabelColor
+        let rowArch = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "cpu"),
+            title: "原生架构支持",
+            subtitle: "原生适配 M 系列与 Intel 芯片，针对 macOS Sonoma 与 Sequoia 深度调优",
+            accessory: archLabel
+        )
+        card2.addRow(rowArch)
+
         let rowStack = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "curlybraces"),
-            title: "纯精纯 Swift 5.9 + 原生 AppKit",
-            subtitle: "完全不需要辅助功能 (Accessibility) 权限，零第三方重型依赖，包体积仅数百 KB",
+            title: "精纯 Swift + 原生 AppKit 架构",
+            subtitle: "零 Electron/Web 视图臃肿，零第三方二进制框架依赖，超低能耗常驻",
             accessory: nil
         )
         card2.addRow(rowStack, isLast: true)
@@ -1818,5 +1944,97 @@ public final class AboutTabView: NSView {
             card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
             card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
         ])
+    }
+
+    @objc private func handleUpdateStateChanged() {
+        updateUIState()
+    }
+
+    @objc private func actionButtonClicked() {
+        switch UpdateManager.shared.currentState {
+        case .idle, .upToDate, .error:
+            UpdateManager.shared.checkForUpdates(isUserInitiated: true)
+        case .available:
+            UpdateManager.shared.startUpdate()
+        case .downloading:
+            UpdateManager.shared.cancelUpdate()
+        case .checking, .preparing:
+            break
+        }
+    }
+
+    private func updateUIState() {
+        let state = UpdateManager.shared.currentState
+        switch state {
+        case .idle:
+            statusLabel.stringValue = "点击「检查更新」连接 GitHub 获取最新版本。"
+            statusLabel.textColor = .secondaryLabelColor
+            actionButton.title = "检查更新"
+            actionButton.isEnabled = true
+            progressIndicator.isHidden = true
+            hideReleaseNotes()
+
+        case .checking:
+            statusLabel.stringValue = "正在连接 GitHub 检查版本发布..."
+            statusLabel.textColor = .controlAccentColor
+            actionButton.title = "检查中..."
+            actionButton.isEnabled = false
+            progressIndicator.isHidden = true
+            hideReleaseNotes()
+
+        case .upToDate(let ver):
+            statusLabel.stringValue = "✓ 当前版本已是最新 (v\(ver))。"
+            statusLabel.textColor = .systemGreen
+            actionButton.title = "重新检查"
+            actionButton.isEnabled = true
+            progressIndicator.isHidden = true
+            hideReleaseNotes()
+
+        case .available(let release):
+            statusLabel.stringValue = "🎉 发现新版本 \(release.version)（\(release.name)）！"
+            statusLabel.textColor = .controlAccentColor
+            actionButton.title = "一键更新"
+            actionButton.isEnabled = true
+            progressIndicator.isHidden = true
+            showReleaseNotes(release.body)
+
+        case .downloading(let progress):
+            let percent = Int(progress * 100)
+            statusLabel.stringValue = "正在下载更新安装包 (\(percent)%)..."
+            statusLabel.textColor = .controlAccentColor
+            actionButton.title = "取消"
+            actionButton.isEnabled = true
+            progressIndicator.isHidden = false
+            progressIndicator.doubleValue = progress
+
+        case .preparing:
+            statusLabel.stringValue = "正在解包校验并准备原地平滑替换与重启..."
+            statusLabel.textColor = .controlAccentColor
+            actionButton.title = "更新中..."
+            actionButton.isEnabled = false
+            progressIndicator.isHidden = false
+            progressIndicator.doubleValue = 1.0
+
+        case .error(let msg):
+            statusLabel.stringValue = "❌ \(msg)"
+            statusLabel.textColor = .systemRed
+            actionButton.title = "重试"
+            actionButton.isEnabled = true
+            progressIndicator.isHidden = true
+            hideReleaseNotes()
+        }
+    }
+
+    private func showReleaseNotes(_ text: String) {
+        releaseNotesText.string = text
+        releaseNotesBox.isHidden = false
+        releaseNotesHeightConstraint?.constant = 110
+        layoutSubtreeIfNeeded()
+    }
+
+    private func hideReleaseNotes() {
+        releaseNotesBox.isHidden = true
+        releaseNotesHeightConstraint?.constant = 0
+        layoutSubtreeIfNeeded()
     }
 }

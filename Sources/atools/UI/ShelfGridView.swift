@@ -460,6 +460,7 @@ public final class ShelfGridView: NSView {
             return .move
         }
         if pboard.types?.contains(.fileURL) == true {
+            window?.orderFrontRegardless()
             wantsLayer = true
             layer?.cornerRadius = 8
             layer?.borderWidth = 2.0

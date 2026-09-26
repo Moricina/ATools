@@ -692,6 +692,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         alert.alertStyle = .warning
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
+        alert.window.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
 
         if alert.runModal() == .alertFirstButtonReturn {
             let success = ConfigManager.shared.deleteCategory(id: category.id)
@@ -796,7 +797,8 @@ public final class ShelfPanel: NSPanel {
         self.minSize = NSSize(width: 240, height: 180)
         self.maxSize = NSSize(width: 1400, height: 900)
         self.isFloatingPanel = true
-        self.level = .floating
+        self.level = .statusBar
+        self.hidesOnDeactivate = false
         self.collectionBehavior = [
             .canJoinAllSpaces,
             .fullScreenAuxiliary,

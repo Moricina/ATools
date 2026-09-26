@@ -475,6 +475,33 @@ if CommandLine.arguments.contains("--test") {
         }
     }
 
+    // 11. Test ShelfPanel Topmost Level & UpdateManager Semantic Versioning
+    print("[11/11] Testing ShelfPanel Topmost Level, Window Hierarchies & UpdateManager...")
+    assert(shelfPanel.level == .statusBar, "ShelfPanel level MUST be .statusBar")
+    assert(shelfPanel.hidesOnDeactivate == false, "ShelfPanel hidesOnDeactivate MUST be false")
+
+    if let settingsWin = SettingsWindowController.shared.window {
+        assert(settingsWin.level.rawValue > shelfPanel.level.rawValue, "Settings window level MUST be higher than ShelfPanel")
+    }
+
+    // Semantic Versioning Tests
+    assert(UpdateManager.isVersion("v1.0.1", greaterThan: "1.0.0") == true, "v1.0.1 > 1.0.0")
+    assert(UpdateManager.isVersion("1.0.10", greaterThan: "1.0.2") == true, "1.0.10 > 1.0.2")
+    assert(UpdateManager.isVersion("1.0", greaterThan: "1.0.0") == false, "1.0 should equal 1.0.0")
+    assert(UpdateManager.isVersion("1.0.0", greaterThan: "1.0") == false, "1.0.0 should equal 1.0")
+    assert(UpdateManager.isVersion("1.0.0", greaterThan: "v1.0.1") == false, "1.0.0 < 1.0.1")
+    assert(UpdateManager.isVersion("2.0.0", greaterThan: "1.9.99") == true, "2.0.0 > 1.9.99")
+    print("      ✓ UpdateManager semantic versioning algorithm verified.")
+
+    // Check About Tab Layout Width (ensure strict 780.0pt)
+    SettingsWindowController.shared.selectTab(.about)
+    if let win = SettingsWindowController.shared.window {
+        win.displayIfNeeded()
+        win.contentView?.layoutSubtreeIfNeeded()
+        assert(abs(win.frame.width - 780.0) < 0.5, "About tab window width MUST be 780.0pt, got \(win.frame.width)")
+        print("      ✓ About Tab with update manager maintains strictly 780.0pt width.")
+    }
+
     print("==================================================")
     print(" [ATools] All diagnostics PASSED successfully!")
     print("==================================================")
