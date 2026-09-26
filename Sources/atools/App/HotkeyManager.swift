@@ -19,6 +19,14 @@ public final class HotkeyManager {
     private var lastModifierReleaseTime: [HotkeySpecialTrigger: TimeInterval] = [:]
     private var lastObservedModifierMask: NSEvent.ModifierFlags = []
 
+    // Native CGEventTap for resilient modifier interception across recording sessions
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var isModifierTainted: Bool = false
+    private var lastCGModifierPressTime: [HotkeySpecialTrigger: TimeInterval] = [:]
+    private var lastCGModifierReleaseTime: [HotkeySpecialTrigger: TimeInterval] = [:]
+    private var lastObservedCGModifiers: CGEventFlags = []
+
     public var onHotKeyTriggered: ((HotKeyID) -> Void)?
 
     private init() {
@@ -130,20 +138,31 @@ public final class HotkeyManager {
     }
 
     private func setupFlagsMonitorsIfNeeded() {
-        if globalFlagsMonitor == nil {
-            globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-                self?.handleGlobalFlagsChanged(event: event)
+        if eventTap == nil && HotkeyManager.isAccessibilityTrusted() {
+            setupNativeEventTap()
+        }
+        // If eventTap could not be installed (e.g. accessibility permission not yet granted), fall back to AppKit monitors
+        if eventTap == nil {
+            if globalFlagsMonitor == nil {
+                globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+                    self?.handleGlobalFlagsChanged(event: event)
+                }
             }
         }
         if localFlagsMonitor == nil {
-            localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-                self?.handleGlobalFlagsChanged(event: event)
+            localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown]) { [weak self] event in
+                if event.type == .keyDown {
+                    self?.handleLocalKeyDown(event: event)
+                } else if event.type == .flagsChanged {
+                    self?.handleGlobalFlagsChanged(event: event)
+                }
                 return event
             }
         }
     }
 
     private func teardownFlagsMonitors() {
+        teardownNativeEventTap()
         if let m = globalFlagsMonitor {
             NSEvent.removeMonitor(m)
             globalFlagsMonitor = nil
@@ -155,6 +174,140 @@ public final class HotkeyManager {
         lastModifierPressTime.removeAll()
         lastModifierReleaseTime.removeAll()
         lastObservedModifierMask = []
+    }
+
+    private func setupNativeEventTap() {
+        guard eventTap == nil else { return }
+        let eventMask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
+        let observer = Unmanaged.passUnretained(self).toOpaque()
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: CGEventMask(eventMask),
+            callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
+                let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
+                return manager.handleCGEvent(proxy: proxy, type: type, event: event)
+            },
+            userInfo: observer
+        ) else {
+            runtimeLog("[HotkeyManager] Failed to create CGEventTap, falling back to NSEvent monitors")
+            return
+        }
+
+        self.eventTap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        self.runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+        runtimeLog("[HotkeyManager] Successfully installed headInsert CGEventTap for special triggers")
+    }
+
+    private func teardownNativeEventTap() {
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            if let src = runLoopSource {
+                CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+                runLoopSource = nil
+            }
+            eventTap = nil
+        }
+        lastCGModifierPressTime.removeAll()
+        lastCGModifierReleaseTime.removeAll()
+        lastObservedCGModifiers = []
+        isModifierTainted = false
+    }
+
+    private func handleCGEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = eventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                runtimeLog("[HotkeyManager] Re-enabled CGEventTap after timeout/disable")
+            }
+            return Unmanaged.passRetained(event)
+        }
+
+        guard !specialBindings.isEmpty else {
+            return Unmanaged.passRetained(event)
+        }
+
+        // 1. Any normal key press invalidates the candidate modifier double-tap sequence (e.g. Cmd+C, Cmd+Tab)
+        if type == .keyDown {
+            isModifierTainted = true
+            lastCGModifierPressTime.removeAll()
+            lastCGModifierReleaseTime.removeAll()
+            return Unmanaged.passRetained(event)
+        }
+
+        if type == .flagsChanged {
+            let flags = event.flags
+            let now = Date().timeIntervalSince1970
+            let relevantFlags = flags.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
+            let prevFlags = lastObservedCGModifiers.intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift])
+
+            if !relevantFlags.isEmpty && prevFlags.isEmpty {
+                // Key down transition for modifier
+                var trigger: HotkeySpecialTrigger = .none
+                if relevantFlags == .maskCommand { trigger = .doubleCommand }
+                else if relevantFlags == .maskAlternate { trigger = .doubleOption }
+                else if relevantFlags == .maskControl { trigger = .doubleControl }
+                else if relevantFlags == .maskShift { trigger = .doubleShift }
+
+                if trigger != .none {
+                    isModifierTainted = false
+                    lastCGModifierPressTime[trigger] = now
+                    if let releaseTime = lastCGModifierReleaseTime[trigger], (now - releaseTime) < 0.38 {
+                        // Double tap matched!
+                        for (id, spec) in specialBindings where spec == trigger {
+                            DispatchQueue.main.async { [weak self] in
+                                self?.onHotKeyTriggered?(id)
+                            }
+                        }
+                        lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                        lastCGModifierPressTime.removeValue(forKey: trigger)
+                    }
+                }
+            } else if relevantFlags.isEmpty && !prevFlags.isEmpty {
+                // Key up transition
+                var trigger: HotkeySpecialTrigger = .none
+                if prevFlags == .maskCommand { trigger = .doubleCommand }
+                else if prevFlags == .maskAlternate { trigger = .doubleOption }
+                else if prevFlags == .maskControl { trigger = .doubleControl }
+                else if prevFlags == .maskShift { trigger = .doubleShift }
+
+                if trigger != .none {
+                    if !isModifierTainted {
+                        let pressTime = lastCGModifierPressTime[trigger] ?? 0
+                        let pressDuration = now - pressTime
+                        if pressDuration < 0.25 {
+                            lastCGModifierReleaseTime[trigger] = now
+                        } else {
+                            lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                        }
+                    } else {
+                        lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                    }
+                }
+                isModifierTainted = false
+            } else if relevantFlags.isEmpty {
+                isModifierTainted = false
+            } else {
+                // Multiple modifiers pressed simultaneously (e.g. Cmd+Shift) - cancel candidate
+                isModifierTainted = true
+                lastCGModifierReleaseTime.removeAll()
+                lastCGModifierPressTime.removeAll()
+            }
+            lastObservedCGModifiers = relevantFlags
+        }
+
+        return Unmanaged.passRetained(event)
+    }
+
+    private func handleLocalKeyDown(event: NSEvent) {
+        lastModifierReleaseTime.removeAll()
+        lastModifierPressTime.removeAll()
     }
 
     private var lastModifierPressTime: [HotkeySpecialTrigger: TimeInterval] = [:]

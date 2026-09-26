@@ -422,6 +422,42 @@ if CommandLine.arguments.contains("--test") {
         print("      ✓ Category item deletion persistence on re-selection verified.")
     }
 
+    // 9.2 Test: Drag-and-drop onto Category Tab & Auto-entering Category
+    print("[9.2] Testing Drag-and-drop to Category Tab & Auto-entering Category...")
+    if ConfigManager.shared.config.categories.count >= 2 {
+        let catA = ConfigManager.shared.config.categories[0]
+        let catB = ConfigManager.shared.config.categories[1]
+        let testDragItem = LauncherItem(name: "TestDragLauncherApp", itemType: .application, target: "/tmp/TestDragLauncherApp.app")
+        ConfigManager.shared.addItems([testDragItem], to: catA.id)
+        shelfVC.loadData()
+        shelfVC.categoryBar(shelfVC.categoryBar, didSelectCategory: catA)
+        assert(shelfVC.selectedCategory?.id == catA.id, "catA should be selected initially")
+
+        // 1. Move internal item to catB by dropping onto catB's tab
+        shelfVC.categoryBar(shelfVC.categoryBar, didMoveLauncherItem: testDragItem, to: catB)
+
+        // Verify that:
+        // a) Item was moved to catB in ConfigManager
+        assert(ConfigManager.shared.config.categories.first(where: { $0.id == catB.id })!.items.contains(where: { $0.id == testDragItem.id }), "testDragItem should now belong to catB")
+        assert(!ConfigManager.shared.config.categories.first(where: { $0.id == catA.id })!.items.contains(where: { $0.id == testDragItem.id }), "testDragItem should no longer belong to catA")
+        // b) ShelfViewController automatically entered catB!
+        assert(shelfVC.selectedCategory?.id == catB.id, "ShelfViewController MUST automatically enter catB after drop!")
+        assert(shelfVC.shelfGrid.items.contains(where: { $0.id == testDragItem.id }), "ShelfGrid MUST display catB items including testDragItem immediately!")
+
+        // 2. Drop external file path directly onto catA's tab
+        shelfVC.categoryBar(shelfVC.categoryBar, didAddPaths: ["/tmp/ExternalDroppedApp.app"], to: catA)
+        assert(shelfVC.selectedCategory?.id == catA.id, "ShelfViewController MUST enter catA after external file drop!")
+        assert(shelfVC.shelfGrid.items.contains(where: { $0.name == "ExternalDroppedApp" }), "ShelfGrid MUST contain newly dropped external app in catA!")
+
+        // Clean up test items
+        ConfigManager.shared.removeItem(id: testDragItem.id, from: catB.id)
+        if let extItem = shelfVC.shelfGrid.items.first(where: { $0.name == "ExternalDroppedApp" }) {
+            ConfigManager.shared.removeItem(id: extItem.id, from: catA.id)
+        }
+        shelfVC.loadData()
+        print("      ✓ Drag-and-drop to category tab with immediate category entrance verified.")
+    }
+
     // 10. Test SearchPanel Spotlight Collapsed & Expanded Layout
     print("[10/10] Testing SearchPanel Spotlight Collapsed & Expanded Animation...")
     let searchPanel = PanelCoordinator.shared.searchPanel

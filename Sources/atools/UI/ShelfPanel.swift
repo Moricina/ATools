@@ -710,8 +710,32 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     public func categoryBar(_ bar: CategoryBarView, didMoveLauncherItem item: LauncherItem, to category: Category) {
         if ConfigManager.shared.moveItem(id: item.id, toCategoryId: category.id) {
+            self.selectedCategory = category
             loadData()
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
         }
+    }
+
+    public func categoryBar(_ bar: CategoryBarView, didAddPaths paths: [String], to category: Category) {
+        var newItems: [LauncherItem] = []
+        for path in paths {
+            var name = FileManager.default.displayName(atPath: path)
+            if name.hasSuffix(".app") {
+                name = (name as NSString).deletingPathExtension
+            }
+            let isApp = path.hasSuffix(".app")
+            let item = LauncherItem(
+                name: name,
+                itemType: isApp ? .application : .fileOrFolder,
+                target: path
+            )
+            newItems.append(item)
+        }
+
+        ConfigManager.shared.addItems(newItems, to: category.id)
+        self.selectedCategory = category
+        loadData()
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
     }
 
     // MARK: - ShelfGridDelegate
@@ -732,6 +756,18 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         guard let cat = selectedCategory else { return }
         ConfigManager.shared.moveItem(from: fromIndex, to: toIndex, in: cat.id)
         loadData()
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int) {
+        guard let cat = selectedCategory else { return }
+        if ConfigManager.shared.moveItem(id: id, toCategoryId: cat.id) {
+            if let newIdx = ConfigManager.shared.config.categories.first(where: { $0.id == cat.id })?.items.firstIndex(where: { $0.id == id }),
+               newIdx != toIndex {
+                ConfigManager.shared.moveItem(from: newIdx, to: toIndex, in: cat.id)
+            }
+            loadData()
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+        }
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String]) {

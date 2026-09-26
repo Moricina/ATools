@@ -81,6 +81,7 @@ public final class PanelCoordinator {
             positionPanelToScreenCenter(searchPanel)
             NSApp.activate(ignoringOtherApps: true)
             searchPanel.makeKeyAndOrderFront(nil)
+            searchPanel.orderFrontRegardless()
         }
 
         activePanel = target
@@ -156,9 +157,14 @@ public final class PanelCoordinator {
         if let screen = activeScreen {
             let visible = screen.visibleFrame
             let x = visible.origin.x + (visible.width - panel.frame.width) / 2
-            // Anchor search bar top to natural eye level (66% from bottom of visible frame)
-            let y = visible.origin.y + (visible.height * 0.66) - panel.frame.height
+            // Anchor search bar top to natural eye level (72% from bottom of visible frame, closer to top)
+            let initialTopY = visible.origin.y + (visible.height * 0.72)
+            let y = initialTopY - panel.frame.height
             panel.setFrameOrigin(NSPoint(x: x, y: y))
+
+            if let searchPanel = panel as? SearchPanel {
+                searchPanel.searchViewController.setInitialScreenAnchor(topY: initialTopY)
+            }
         }
     }
 

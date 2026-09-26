@@ -7,6 +7,7 @@ public protocol CategoryPillDelegate: AnyObject {
     func categoryPillDidRequestDelete(_ pill: CategoryPillView)
     func categoryPillDidRequestAdd()
     func categoryPill(_ pill: CategoryPillView, didMoveLauncherItemID id: UUID)
+    func categoryPill(_ pill: CategoryPillView, didAddPaths paths: [String])
 }
 
 public final class CategoryPillView: NSView {
@@ -14,19 +15,25 @@ public final class CategoryPillView: NSView {
     public let category: Category
     public var isSelected: Bool {
         didSet {
-            updateAppearanceStyles()
+            if oldValue != isSelected {
+                updateAppearanceStyles()
+            }
         }
     }
 
     private var isHovered: Bool = false {
         didSet {
-            updateAppearanceStyles()
+            if oldValue != isHovered {
+                updateAppearanceStyles()
+            }
         }
     }
 
-    private var isDropTarget: Bool = false {
+    internal var isDropTarget: Bool = false {
         didSet {
-            updateAppearanceStyles()
+            if oldValue != isDropTarget {
+                updateAppearanceStyles()
+            }
         }
     }
 
@@ -50,7 +57,10 @@ public final class CategoryPillView: NSView {
         wantsLayer = true
         layer?.cornerRadius = isVertical ? 7 : 14
         layer?.masksToBounds = true
-        registerForDraggedTypes([NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)])
+        registerForDraggedTypes([
+            NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType),
+            .fileURL
+        ])
 
         // Title (Pure text category, zero icon)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -216,21 +226,27 @@ public final class CategoryPillView: NSView {
         return NSImage(data: pdf) ?? NSImage()
     }
 
-    // MARK: - Drag Destination (Launcher Item Move)
+    // MARK: - Drag Destination (Launcher Item Move & External File Drop)
     override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard sender.draggingPasteboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true else {
+        let pboard = sender.draggingPasteboard
+        let isInternalMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
+        let isFile = pboard.types?.contains(.fileURL) == true
+        guard isInternalMove || isFile else {
             return []
         }
         isDropTarget = true
-        return .move
+        return isInternalMove ? .move : .copy
     }
 
     override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard sender.draggingPasteboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true else {
+        let pboard = sender.draggingPasteboard
+        let isInternalMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
+        let isFile = pboard.types?.contains(.fileURL) == true
+        guard isInternalMove || isFile else {
             return []
         }
         isDropTarget = true
-        return .move
+        return isInternalMove ? .move : .copy
     }
 
     override public func draggingExited(_ sender: NSDraggingInfo?) {
@@ -243,12 +259,27 @@ public final class CategoryPillView: NSView {
 
     override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         isDropTarget = false
-        guard let idString = sender.draggingPasteboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)),
-              let id = UUID(uuidString: idString) else {
-            return false
+
+        let pboard = sender.draggingPasteboard
+
+        // 1. Move existing launcher item
+        if let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)),
+           let id = UUID(uuidString: idString) {
+            delegate?.categoryPill(self, didMoveLauncherItemID: id)
+            return true
         }
-        delegate?.categoryPill(self, didMoveLauncherItemID: id)
-        return true
+
+        // 2. Drag-and-drop external file / app into category
+        let readOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: readOptions) as? [URL], !urls.isEmpty {
+            let paths = urls.map { $0.path }
+            delegate?.categoryPill(self, didAddPaths: paths)
+            return true
+        }
+
+        return false
     }
 
     // MARK: - Right Click Context Menu

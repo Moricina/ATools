@@ -8,6 +8,7 @@ public protocol CategoryBarDelegate: AnyObject {
     func categoryBar(_ bar: CategoryBarView, didRequestDeleteCategory category: Category)
     func categoryBar(_ bar: CategoryBarView, didMoveCategoryFrom fromIndex: Int, to toIndex: Int)
     func categoryBar(_ bar: CategoryBarView, didMoveLauncherItem item: LauncherItem, to category: Category)
+    func categoryBar(_ bar: CategoryBarView, didAddPaths paths: [String], to category: Category)
 }
 
 private final class FlippedStackView: NSStackView {
@@ -43,7 +44,11 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     }
 
     private func setupViews() {
-        registerForDraggedTypes([NSPasteboard.PasteboardType(AppConstants.categoryReorderType)])
+        registerForDraggedTypes([
+            NSPasteboard.PasteboardType(AppConstants.categoryReorderType),
+            NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType),
+            .fileURL
+        ])
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasHorizontalScroller = false
@@ -197,49 +202,158 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         delegate?.categoryBar(self, didMoveLauncherItem: item, to: pill.category)
     }
 
-    // MARK: - NSDraggingDestination (Category Reorder)
-    override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard sender.draggingPasteboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.categoryReorderType)) == true else {
-            return []
-        }
-        return .move
+    public func categoryPill(_ pill: CategoryPillView, didAddPaths paths: [String]) {
+        delegate?.categoryBar(self, didAddPaths: paths, to: pill.category)
     }
 
-    override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard sender.draggingPasteboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.categoryReorderType)) == true else {
-            return []
-        }
-        return .move
-    }
-
-    override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let idString = sender.draggingPasteboard.string(forType: NSPasteboard.PasteboardType(AppConstants.categoryReorderType)),
-              let sourceId = UUID(uuidString: idString),
-              let sourceIndex = categories.firstIndex(where: { $0.id == sourceId }) else {
-            return false
-        }
-
-        let loc = convert(sender.draggingLocation, from: nil)
-        var targetIndex = categories.count - 1
-
-        for (idx, subview) in stackView.arrangedSubviews.enumerated() {
+    // MARK: - Dragging Destination Helpers
+    private func pill(at windowPoint: NSPoint) -> CategoryPillView? {
+        for subview in stackView.arrangedSubviews {
             if let pill = subview as? CategoryPillView {
-                let pillFrame = convert(pill.bounds, from: pill)
-                if orientation == .horizontal {
-                    if loc.x < pillFrame.midX {
-                        targetIndex = idx
-                        break
-                    }
-                } else {
-                    if loc.y < pillFrame.midY {
-                        targetIndex = idx
-                        break
-                    }
+                let local = pill.convert(windowPoint, from: nil)
+                if pill.bounds.contains(local) {
+                    return pill
                 }
             }
         }
 
-        delegate?.categoryBar(self, didMoveCategoryFrom: sourceIndex, to: targetIndex)
-        return true
+        // Fallback: If in the category bar margins or spacing, match closest pill
+        var closestPill: CategoryPillView?
+        var minDistance: CGFloat = .greatestFiniteMagnitude
+        for subview in stackView.arrangedSubviews {
+            if let pill = subview as? CategoryPillView {
+                let pillRectInWindow = pill.convert(pill.bounds, to: nil)
+                let dist: CGFloat
+                if orientation == .horizontal {
+                    dist = abs(pillRectInWindow.midX - windowPoint.x)
+                } else {
+                    dist = abs(pillRectInWindow.midY - windowPoint.y)
+                }
+                if dist < minDistance {
+                    minDistance = dist
+                    closestPill = pill
+                }
+            }
+        }
+        return closestPill
+    }
+
+    private func updateDropTargetHighlight(at windowLocation: NSPoint) {
+        let targetPill = pill(at: windowLocation)
+        for subview in stackView.arrangedSubviews {
+            if let pill = subview as? CategoryPillView {
+                pill.isDropTarget = (pill === targetPill)
+            }
+        }
+    }
+
+    private func clearDropTargetHighlight() {
+        for subview in stackView.arrangedSubviews {
+            if let pill = subview as? CategoryPillView {
+                pill.isDropTarget = false
+            }
+        }
+    }
+
+    // MARK: - NSDraggingDestination
+    override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let pboard = sender.draggingPasteboard
+        if pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.categoryReorderType)) == true {
+            return .move
+        }
+
+        let isInternalMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
+        let isFile = pboard.types?.contains(.fileURL) == true
+        if isInternalMove || isFile {
+            updateDropTargetHighlight(at: sender.draggingLocation)
+            return isInternalMove ? .move : .copy
+        }
+
+        return []
+    }
+
+    override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let pboard = sender.draggingPasteboard
+        if pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.categoryReorderType)) == true {
+            return .move
+        }
+
+        let isInternalMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
+        let isFile = pboard.types?.contains(.fileURL) == true
+        if isInternalMove || isFile {
+            updateDropTargetHighlight(at: sender.draggingLocation)
+            return isInternalMove ? .move : .copy
+        }
+
+        return []
+    }
+
+    override public func draggingExited(_ sender: NSDraggingInfo?) {
+        clearDropTargetHighlight()
+    }
+
+    override public func draggingEnded(_ sender: NSDraggingInfo) {
+        clearDropTargetHighlight()
+    }
+
+    override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        clearDropTargetHighlight()
+
+        let pboard = sender.draggingPasteboard
+
+        // 1. Category Reorder
+        if pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.categoryReorderType)) == true {
+            guard let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.categoryReorderType)),
+                  let sourceId = UUID(uuidString: idString),
+                  let sourceIndex = categories.firstIndex(where: { $0.id == sourceId }) else {
+                return false
+            }
+
+            let loc = convert(sender.draggingLocation, from: nil)
+            var targetIndex = categories.count - 1
+
+            for (idx, subview) in stackView.arrangedSubviews.enumerated() {
+                if let pill = subview as? CategoryPillView {
+                    let pillFrame = convert(pill.bounds, from: pill)
+                    if orientation == .horizontal {
+                        if loc.x < pillFrame.midX {
+                            targetIndex = idx
+                            break
+                        }
+                    } else {
+                        if loc.y < pillFrame.midY {
+                            targetIndex = idx
+                            break
+                        }
+                    }
+                }
+            }
+
+            delegate?.categoryBar(self, didMoveCategoryFrom: sourceIndex, to: targetIndex)
+            return true
+        }
+
+        // 2. Launcher Item Move onto Category
+        if let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)),
+           let id = UUID(uuidString: idString),
+           let targetPill = pill(at: sender.draggingLocation),
+           let item = categories.lazy.flatMap(\.items).first(where: { $0.id == id }) {
+            delegate?.categoryBar(self, didMoveLauncherItem: item, to: targetPill.category)
+            return true
+        }
+
+        // 3. External File drop onto Category
+        let readOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+            .urlReadingFileURLsOnly: true
+        ]
+        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: readOptions) as? [URL],
+           !urls.isEmpty,
+           let targetPill = pill(at: sender.draggingLocation) {
+            let paths = urls.map { $0.path }
+            delegate?.categoryBar(self, didAddPaths: paths, to: targetPill.category)
+            return true
+        }
+
+        return false
     }
 }

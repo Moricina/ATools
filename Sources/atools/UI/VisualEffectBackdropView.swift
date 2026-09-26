@@ -2,6 +2,8 @@ import Foundation
 import AppKit
 
 public final class VisualEffectBackdropView: NSView {
+    override public var isFlipped: Bool { true }
+
     private let effectView = NSVisualEffectView()
     private let tintOverlayView = NSView()
 

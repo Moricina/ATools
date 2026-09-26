@@ -6,6 +6,7 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String])
     func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int)
+    func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int)
 }
 
 public final class ShelfItemButton: NSControl {
@@ -268,7 +269,11 @@ public final class ShelfGridView: NSView {
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupViews()
-        registerForDraggedTypes([.fileURL, NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)])
+        registerForDraggedTypes([
+            .fileURL,
+            NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType),
+            NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)
+        ])
     }
 
     required init?(coder: NSCoder) {
@@ -456,7 +461,9 @@ public final class ShelfGridView: NSView {
     // MARK: - Drag and Drop Support
     override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         let pboard = sender.draggingPasteboard
-        if pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true {
+        let isReorder = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true
+        let isMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
+        if isReorder || isMove {
             return .move
         }
         if pboard.types?.contains(.fileURL) == true {
@@ -473,7 +480,9 @@ public final class ShelfGridView: NSView {
 
     override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
         let pboard = sender.draggingPasteboard
-        if pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true {
+        let isReorder = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true
+        let isMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
+        if isReorder || isMove {
             return .move
         }
         if pboard.types?.contains(.fileURL) == true {
@@ -498,11 +507,10 @@ public final class ShelfGridView: NSView {
 
         let pboard = sender.draggingPasteboard
 
-        // 1. Internal item reordering
-        if let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)),
-           let sourceId = UUID(uuidString: idString),
-           let sourceIndex = items.firstIndex(where: { $0.id == sourceId }) {
-
+        // 1. Internal item reordering or cross-category move into grid
+        let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) ??
+                       pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType))
+        if let idString = idString, let sourceId = UUID(uuidString: idString) {
             let loc = contentView.convert(sender.draggingLocation, from: nil)
             var targetIndex = items.count - 1
 
@@ -513,9 +521,16 @@ public final class ShelfGridView: NSView {
                 }
             }
 
-            DispatchQueue.main.async { [weak self] in
-                guard let self = self else { return }
-                self.delegate?.shelfGrid(self, didMoveItemFrom: sourceIndex, to: targetIndex)
+            if let sourceIndex = items.firstIndex(where: { $0.id == sourceId }) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.delegate?.shelfGrid(self, didMoveItemFrom: sourceIndex, to: targetIndex)
+                }
+            } else {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    self.delegate?.shelfGrid(self, didMoveExternalItemWithID: sourceId, toIndex: targetIndex)
+                }
             }
             return true
         }
