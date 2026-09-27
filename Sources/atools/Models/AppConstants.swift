@@ -12,6 +12,10 @@ public enum AppConstants {
     /// Maximum directory depth scanned inside Spotlight hot folders (Downloads/Desktop/Documents).
     public static let spotlightHotFolderDepth = 3
 
+    /// Hard cap on entries kept per hot folder snapshot (bounds worst-case string memory
+    /// on machines with very large Downloads trees; full results still come from Spotlight).
+    public static let hotFolderEntryCap = 25_000
+
     /// Hard cap on the number of auto-detected "常用" applications.
     public static let commonApplicationsLimit = 6
 

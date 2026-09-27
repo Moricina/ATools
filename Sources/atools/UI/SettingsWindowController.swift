@@ -95,6 +95,20 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         hotkeysView?.searchRecorder.stopRecording()
         performanceView?.stopMonitor()
 
+        // Release every cached tab view. They are plain config-driven forms that
+        // are rebuilt lazily by switchToTab on the next open; keeping all seven
+        // alive forever pinned several MB of views, tracking areas and AutoLayout
+        // objects for a window that is opened rarely.
+        currentActiveView?.removeFromSuperview()
+        currentActiveView = nil
+        generalView = nil
+        shelfView = nil
+        searchView = nil
+        hotkeysView = nil
+        themeView = nil
+        performanceView = nil
+        aboutView = nil
+
         // Dismissal Annealing: purge memory and notify guardian
         MemoryGuardian.shared.onPanelsDidHide()
     }

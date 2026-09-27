@@ -26,6 +26,12 @@ public final class SearchCoordinator {
         debounceWorkItem?.cancel()
         currentGenerationId &+= 1
         let generation = currentGenerationId
+        // Results are keyed by generation and older generations can never be read
+        // again (every reader checks currentGenerationId). Without this, each
+        // keystroke added up to `searchResultLimit` retained result closures that
+        // were only dropped when the panel next hid.
+        dictionaryResults.removeAll()
+        fileResults.removeAll()
 
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -105,6 +111,9 @@ public final class SearchCoordinator {
                 merged.append(result)
             }
             if ConfigManager.shared.config.enableWebSearch { merged.append(self.makeWebSearchResult(for: trimmed)) }
+            // Search churn leaves dirty pages in the malloc zones; debounce a quiet
+            // period so the last delivery triggers the same anneal as a panel hide.
+            MemoryGuardian.shared.scheduleAnneal()
             onResults(merged)
         }
         DispatchQueue.main.async(execute: deliver)

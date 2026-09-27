@@ -128,6 +128,12 @@ public final class SpotlightBridge {
 
         var files: [HotFile] = []
         for case let fileURL as URL in enumerator {
+            // Worst-case bound: on machines with very large Downloads trees this
+            // snapshot alone can reach many MB of retained name/path strings.
+            // Full-disk results still come from the Spotlight metadata backend.
+            if files.count >= AppConstants.hotFolderEntryCap {
+                break
+            }
             // Stop descending at the depth limit instead of listing one level too deep.
             if enumerator.level >= AppConstants.spotlightHotFolderDepth {
                 enumerator.skipDescendants()
@@ -162,5 +168,18 @@ public final class SpotlightBridge {
         MetadataFileSearchBackend.shared.cancel()
         currentQueryId = UUID()
         terminateActiveProcess()
+    }
+
+    /// Called from the memory anneal. The snapshot is warmed again on the next
+    /// panel show (maxAge=5s) and the next search (maxAge=30s), so dropping it
+    /// while idle costs only a background re-listing and returns its strings.
+    public func dropHotFolderCache() {
+        hotCacheCondition.lock()
+        hotCache.removeAll()
+        hotFolderUpdated.removeAll()
+        hotCacheDate = Date.distantPast
+        hotCacheBuildStarted = Date.distantPast
+        hotCacheCondition.broadcast()
+        hotCacheCondition.unlock()
     }
 }

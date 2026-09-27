@@ -6,6 +6,9 @@ public final class DictionaryService {
 
     private let queue = DispatchQueue(label: "cc.atools.dictionary", qos: .userInitiated)
     private let cacheLock = NSLock()
+    /// Bounded: every keystroke prefix of every search adds an entry, so without
+    /// a cap this dictionary grows for the whole app lifetime.
+    private let maxCacheEntries = 512
     private var cache: [String: String] = [:]
     /// Generation token incremented on every new lookup request. Late callbacks
     /// from a previous generation are discarded so stale results never overwrite
@@ -24,6 +27,11 @@ public final class DictionaryService {
         cacheLock.unlock()
         let value = lookupNow(word) ?? ""
         cacheLock.lock()
+        if cache.count >= maxCacheEntries {
+            // Definitions are cheap to re-fetch from the local DCS; drop the whole
+            // batch rather than tracking insertion order for an LRU.
+            cache.removeAll(keepingCapacity: true)
+        }
         cache[key] = value
         cacheLock.unlock()
         return value.isEmpty ? nil : value
