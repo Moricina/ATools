@@ -51,23 +51,43 @@ public final class SpotlightBridge {
             return
         }
 
-        let hot = hotFilesSnapshot(waitingUpTo: 0.3).compactMap { file -> SearchResult? in
-            guard file.name.localizedCaseInsensitiveContains(trimmed) else { return nil }
-            let path = file.path
-            return SearchResult(title: file.name, subtitle: path, path: path,
-                                type: file.isDirectory ? .folder : .file,
-                                score: file.name.lowercased().hasPrefix(trimmed.lowercased()) ? 125 : 115,
-                                action: { LauncherExecutor.open(path: path) })
-        }
-        MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit) { metadataResults in
-            var merged = Array(hot.prefix(limit))
-            for result in metadataResults where !merged.contains(where: { $0.path == result.path }) {
-                merged.append(result)
+        // The hot-folder snapshot can block on an in-progress rebuild (up to
+        // 0.3s) and MDQuery scoring is CPU/XPC heavy: both belong off the main
+        // thread. Typing a query like "how" used to freeze the UI because all
+        // of this ran on the main run loop.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let hot = self.hotFilesSnapshot(waitingUpTo: 0.3).compactMap { file -> SearchResult? in
+                guard file.name.localizedCaseInsensitiveContains(trimmed) else { return nil }
+                let path = file.path
+                return SearchResult(title: file.name, subtitle: path, path: path,
+                                    type: file.isDirectory ? .folder : .file,
+                                    score: file.name.lowercased().hasPrefix(trimmed.lowercased()) ? 125 : 115,
+                                    action: { LauncherExecutor.open(path: path) })
             }
-            completion(Array(merged.prefix(limit)))
-        }
-        return
 
+            // One character matches an enormous fraction of the disk; the hot
+            // folders + app index cover those keystrokes, full metadata starts
+            // at two characters.
+            guard trimmed.count >= 2 else {
+                DispatchQueue.main.async {
+                    completion(Array(hot.prefix(limit)))
+                }
+                return
+            }
+
+            MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit) { metadataResults in
+                var merged = Array(hot.prefix(limit))
+                for result in metadataResults where !merged.contains(where: { $0.path == result.path }) {
+                    merged.append(result)
+                }
+                let final = Array(merged.prefix(limit))
+                // Deliver on main: the coordinator's generation checks and
+                // result storage are main-thread state.
+                DispatchQueue.main.async {
+                    completion(final)
+                }
+            }
+        }
     }
 
     // MARK: - Hot folder snapshot
