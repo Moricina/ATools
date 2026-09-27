@@ -1512,7 +1512,7 @@ public final class ThemeTabView: NSView {
 
 // MARK: - 6. Performance Tab View
 public final class PerformanceTabView: NSView {
-    private var rssLabel = NSTextField(labelWithString: "正在测量...")
+    private var memLabel = NSTextField(labelWithString: "正在测量...")
     private var purgeStatusLabel = NSTextField(labelWithString: "")
     private var timer: Timer?
     private var annealControl: NSSegmentedControl!
@@ -1570,17 +1570,17 @@ public final class PerformanceTabView: NSView {
         card1.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card1)
 
-        rssLabel.translatesAutoresizingMaskIntoConstraints = false
-        rssLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        rssLabel.textColor = .labelColor
+        memLabel.translatesAutoresizingMaskIntoConstraints = false
+        memLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
+        memLabel.textColor = .labelColor
 
         let purgeBtn = SettingsPillButton(title: "一键深度释放", target: self, action: #selector(handlePurge))
 
         let memRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "memorychip"),
-            title: "当前常驻物理内存 (RSS)",
-            subtitle: "基于 XNU 内核实时测量常驻集大小；面板收起后自动释放脏页",
-            accessory: rssLabel
+            title: "当前物理内存占用 (Footprint)",
+            subtitle: "与「活动监视器」内存列一致的真实物理足迹；RSS 口径会把共享的系统框架页计入，虚高 2–3 倍",
+            accessory: memLabel
         )
         card1.addRow(memRow)
 
@@ -1600,7 +1600,7 @@ public final class PerformanceTabView: NSView {
         let statusRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.triangle.2.circlepath"),
             title: "释放结果",
-            subtitle: "显示本次释放前后常驻内存的差值",
+            subtitle: "显示本次释放前后物理内存占用的差值",
             accessory: purgeStatusLabel
         )
         card1.addRow(statusRow, isLast: true)
@@ -1681,29 +1681,33 @@ public final class PerformanceTabView: NSView {
     }
 
     private func updateMemoryMetrics() {
-        rssLabel.stringValue = String(format: "%.1f MB (健康常驻)", currentRSSMB())
+        memLabel.stringValue = String(format: "%.1f MB (真实物理占用)", currentFootprintMB())
     }
 
-    private func currentRSSMB() -> Double {
-        var info = mach_task_basic_info()
-        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    /// Apple 官方的物理内存口径（task_vm_info.phys_footprint），与「活动监视器」
+    /// 的内存列一致。此前使用 MACH_TASK_BASIC_INFO.resident_size（RSS），它把与
+    /// 其他进程共享的 dyld 共享缓存和框架文本页也计入本进程，读数可达真实物理
+    /// 占用的 2–3 倍（实测 RSS ≈128MB vs 真实足迹 ≈47MB）。
+    private func currentFootprintMB() -> Double {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
         let kerr = withUnsafeMutablePointer(to: &info) {
-            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
             }
         }
         if kerr == KERN_SUCCESS {
-            return Double(info.resident_size) / (1024.0 * 1024.0)
+            return Double(info.phys_footprint) / (1024.0 * 1024.0)
         }
         return 0
     }
 
     @objc private func handlePurge() {
-        let before = currentRSSMB()
+        let before = currentFootprintMB()
         MemoryGuardian.shared.performImmediatePurge()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             guard let self = self else { return }
-            let after = self.currentRSSMB()
+            let after = currentFootprintMB()
             self.updateMemoryMetrics()
             let delta = before - after
             if delta > 0.05 {
@@ -1711,7 +1715,7 @@ public final class PerformanceTabView: NSView {
                 self.purgeStatusLabel.stringValue = String(format: "已释放 %.1f MB", delta)
             } else {
                 self.purgeStatusLabel.textColor = .secondaryLabelColor
-                self.purgeStatusLabel.stringValue = "缓存已清空，常驻内存无显著变化"
+                self.purgeStatusLabel.stringValue = "缓存已清空，物理内存无显著变化"
             }
         }
     }

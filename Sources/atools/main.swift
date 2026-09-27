@@ -323,17 +323,19 @@ if CommandLine.arguments.contains("--test") {
     print("      ✓ SearchCoordinator found \(safariResults.count) results for keyword 'Safari'.")
 
     // 7. Test Memory Usage
-    print("[7/7] Testing Baseline Memory (RSS)...")
-    var info = mach_task_basic_info()
-    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+    print("[7/7] Testing Baseline Memory (Footprint)...")
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
     let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
-        $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
-            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
         }
     }
     if kerr == KERN_SUCCESS {
-        let rssMB = Double(info.resident_size) / (1024.0 * 1024.0)
-        print(String(format: "      ✓ Current Resident Memory (RSS): %.2f MB", rssMB))
+        // phys_footprint matches Activity Monitor; RSS also counts pages shared
+        // with every other process and reads 2-3x higher.
+        let footprintMB = Double(info.phys_footprint) / (1024.0 * 1024.0)
+        print(String(format: "      ✓ Physical Footprint: %.2f MB", footprintMB))
     }
 
     // Thumbnail cache cost limit applies to both image and generic caches without throwing.
