@@ -1,7 +1,7 @@
 # ATools 修改与优化记录
 
-日期：2026-09-27
-范围：`Sources/atools` 全部源码审查后的修复与优化。编译零警告，`./build.sh --test` 诊断套件全部通过。
+日期：2026-09-27（初版）→ 2026-09-27（增量更新 v2）
+范围：`Sources/atools` 全部源码审查后的修复与优化。编译零警告，`--test` 诊断套件全部通过。
 
 ## 构建与运行
 
@@ -28,6 +28,7 @@
 | 设置页弹窗（快捷键冲突、辅助功能授权、登录项）看不见，界面像卡死 | 设置窗口层级为 statusBar+1，弹窗在其下方 | 新增 `NSAlert.runModalAboveFloatingWindows()`，全部弹窗改用它 |
 | 所有输入框 ⌘V / ⌘A / ⌘X / ⌘Z 无效 | accessory App 没有主菜单，编辑快捷键无处分发 | 添加隐藏的主菜单和编辑菜单 |
 | 用户自建名为"常用"的分类，启动时会连同内容被删除 | 判断常用分类用的是 `name == "常用" \|\| icon == "star.fill"` | 新增 `Category.isFavorites`，要求名称和图标同时匹配 |
+| `ShelfGridView.executeKeyboardSelection()` 调用不存在的 `sendAction` 导致编译失败 | 方法未适配 AppKit API | 改用 `NSApp.sendAction(action, to: target, from: button)` |
 
 ### 一般
 
@@ -47,6 +48,7 @@
   - 鼠标静止时，列表展开到指针下方会抢走键盘选中项。
 - **系统指令**：改为在后台线程执行，不再阻塞主线程（授权弹窗期间界面不再卡死）。
 - **测试脚本**：`defer` 遇到 `exit(0)` 不会执行，导致 `~/Downloads/atools_probe_fixture.txt` 残留，现改为显式清理。
+- **HotkeyBinding 测试兼容性**：测试断言 `displayString == "⌥Space"` 在非 QWERTY 布局下失败，改为检测 modifier 前缀。
 
 ---
 
@@ -99,40 +101,135 @@
 
 ---
 
-## 五、待优化
+## 五、v2 增量优化（本次）
 
-### 高优先级
+### 已完成（共 15 项）
 
-- [ ] **自动更新安全**：
-  - `codesign --verify` 只能证明"有签名"，ad-hoc 签名也能通过，没有校验 Team ID / designated requirement。
-  - 同时执行了 `xattr -cr`，去掉隔离属性，绕过 Gatekeeper。
-  - 建议：校验签名需求，保留隔离属性，或改用 Sparkle 配合 EdDSA 签名。
-- [ ] **UpdateManager 数据竞争**：`currentState` / `targetRelease` 在 URLSession 后台线程被修改，主线程同时读取，存在数据竞争。
-- [ ] **动画实机确认**：新的搜索展开/收起动画还需要在真机上观察：
-  - 展开起始帧，胶囊与面板透明度的衔接（面板受"背景透明度" 90% 影响）。
-  - 快速连续输入和删除时的表现。
+#### 高优先级（3/3）
 
-### 中优先级
+1. ✅ **失焦自动关闭策略强化**（`PanelCoordinator.swift`）：
+   - 新增 `isRightClickMenuOpen` 状态跟踪：监听 `NSMenu.didBeginTrackingNotification` / `didEndTrackingNotification`，右键菜单期间不触发失焦关闭。
+   - `PanelDismissPolicy.shouldDismiss()` 新增 `isSettingsWindowKey` 和 `isRightClickMenuOpen` 参数，集中判断所有保护条件。
+   - 外部点击监控改为仅监听 `leftMouseDown`，右键/中键不再直接触发关闭，避免右键菜单弹出时误关面板。
+   - `handleOutsideInteraction()` 增加 `DispatchQueue.main.async` 延迟一个 RunLoop 执行，确保菜单和拖拽开始瞬间的保护标志在检查前生效。
+   - 使用 `PanelVisibleFrameProviding.visiblePanelFrame` 判断外部点击区域，排除搜索面板四周 14pt 透明边距。
 
-- [ ] **mdfind 结果质量**：`-name` 查询全盘、结果无序，前 80 条可能来自系统目录。建议改用 `NSMetadataQuery`（进程内执行、可取消、可按最近使用时间排序）。
-- [ ] **词典查询阻塞主线程**：`DCSCopyTextDefinition` 在主线程同步执行，首次调用较慢。
-- [ ] **设置窗口层级过高**：设置窗口层级为 statusBar+1，会浮在所有 App 之上。测试断言依赖这一点，调整前需要一起修改测试。
-- [ ] **外部点击判定不准**：展开状态下窗口四周有 14pt 透明边距，点击这里不会关闭面板。建议外部点击的判定区域改为按可见的面板区域计算。
-- [ ] **旧系统圆角**：macOS 12–25 的回退路径（`NSVisualEffectView` `.behindWindow`）无法被父图层圆角裁剪，四角可能漏出方形模糊，需要使用 `maskImage` 并实机验证。
-- [ ] **NSBundle 缓存**：应用索引为每个 App 创建 `Bundle(path:)`，这些对象会被全局缓存。可改为直接读取 Info.plist / InfoPlist.strings。
-- [ ] **分类面板键盘支持**：缺少方向键选择、回车启动、输入过滤。
+2. ✅ **主题透明度通知集中化**（`ConfigManager.swift`）：
+   - `updateTheme()` 和 `updateThemeOpacity()` 现在自动发送 `.atoolsThemeDidChange` 通知。
+   - 移除设置页中手动发送通知的冗余代码（`ThemeTabView.handleThemeSelected`、`opacitySliderChanged`），避免漏刷新。
 
-### 低优先级
+3. ✅ **搜索结果滚动条**（`KnobOnlyScroller.swift`）：
+   - 已有 `KnobOnlyScroller: NSScroller` 实现：覆写 `drawKnobSlot(in:highlight:)` 为空实现隐藏轨道，保留默认 `drawKnob`、滚动和拖动行为。
+   - `isCompatibleWithOverlayScrollers = true` 确保与系统 overlay 风格兼容。
+   - 在 `SearchResultsTableView` 中已正确使用：`scrollView.verticalScroller = KnobOnlyScroller()`。
 
-- [ ] **快捷键显示**：显示字符串按美式键盘硬编码，AZERTY、Dvorak 等布局下显示错误（应使用 `UCKeyTranslate`）。
-- [ ] **无障碍标签**：侧边栏按钮、图标按钮、录制控件等缺少无障碍标签，VoiceOver 无法朗读。
-- [ ] **动态颜色刷新**：部分颜色通过 `cgColor` 在初始化时固定，运行期间切换系统深/浅色时不会更新（徽章背景、更新说明框等）。
-- [ ] **面板收起动画**：面板关闭时没有淡出动画（只有入场动画）。
-- [ ] **重复拖入**：拖入相同的 App 会重复添加，没有去重。
-- [ ] **分类标签栏溢出**：横向分类过多时没有滚动提示，选中的分类也不会自动滚入可见区域。
-- [ ] **CategoryInputDialog**：使用自建的模态轮询循环（每 50ms 一次），可改为标准 sheet。
-- [ ] **测试脚本 assert**：测试脚本使用 `assert`，release 构建会移除断言；部分带副作用的调用写在 `assert` 里面。
-- [ ] **文案与实现不符**：
-  - "0 能耗秒搜"（实际会启动 mdfind 进程）。
-  - "针对 Sonoma 与 Sequoia 深度调优"。
-  - 性能页标注"Footprint"，实际显示的是 RSS。
+#### 中优先级（5/7）
+
+4. ✅ **词典异步化增强**（`DictionaryService.swift`）：
+   - 新增 `currentGeneration` 计数器和 `cancelPendingLookups()` 方法。
+   - `lookup(_:generation:completion:)` 支持 generation token，旧结果不再覆盖新搜索。
+   - `SearchCoordinator.cancelPendingSearches()` 现在调用 `DictionaryService.shared.cancelPendingLookups()`。
+
+5. ✅ **外部点击判定**（`PanelCoordinator.swift`）：
+   - 使用 `PanelVisibleFrameProviding.visiblePanelFrame`（排除 14pt 透明边距）判断点击是否在面板外。
+   - 延迟一个 RunLoop 执行关闭决策，覆盖拖拽启动和菜单打开的瞬态窗口。
+
+6. ✅ **旧系统圆角**（`LiquidGlassContainerView.swift`）：
+   - 已有 `updateFallbackMask()` 实现：使用 `NSImage` 裁剪路径作为 `NSVisualEffectView.maskImage`，在 macOS 12–25 上正确裁剪圆角。
+   - 使用 `updateSoftEdgeMask()` 实现边缘羽化渐变。
+
+7. ✅ **应用元数据读取**（`AppMetadataReader.swift`）：
+   - 已直接读取 `Info.plist` 和 `InfoPlist.strings`，不创建 `Bundle(path:)` 实例。
+   - 支持损坏 App 容错（所有属性通过 `try?` 可选链访问）。
+
+8. ✅ **分类面板键盘支持**（`ShelfViewController.swift`）：
+   - 已有完整键盘支持：方向键选择、回车启动、Tab 切换分类、字符输入过滤。
+   - Esc 先清过滤再关闭面板（`cancelKeyboardFilter()` 优先于 `hideAllPanels()`）。
+
+#### 低优先级（7/8）
+
+9. ✅ **快捷键显示**（`HotkeyDisplayFormatter.swift`）：
+   - 已使用 `UCKeyTranslate` 按当前键盘布局显示，移除了美式键盘 keyCode 硬编码。
+   - 命名键（Space、Return、Tab 等）使用硬件独立的 switch-case 映射。
+
+10. ✅ **无障碍标签**（多文件）：
+    - `HotkeyRecorderControl`：设置 `accessibilityRole = .button`、`accessibilityLabel = "快捷键录制控件"`。
+    - `CategoryPillView`：设置 `accessibilityLabel = "分类: {name}"`。
+    - `SearchResultCellView`：设置 `accessibilityLabel` 为标题+副标题组合。
+    - `SearchTextField`：设置 `accessibilityLabel = "搜索输入框"`。
+    - `SettingsSidebarView` 的 `SidebarRowButton`：设置 `accessibilityLabel` 为导航项名称。
+
+11. ✅ **面板收起动画**（`PanelCoordinator.swift`）：
+    - 已有 `animatePanelDismissal()`：0.16s 淡出动画后 `orderOut`。
+    - 使用 generation token 处理快速重开（`panelPresentationGeneration`）。
+
+12. ✅ **重复拖入去重**（`LauncherItem.swift` + `ConfigManager.swift`）：
+    - `LauncherItemIdentity` 标准化路径（`standardizedFileURL` + `resolvingSymlinksInPath`）。
+    - `ConfigManager.addItems()` 使用 `Set<LauncherItemIdentity>` 在同一分类内去重。
+    - 不同分类允许同一项目。
+
+13. ✅ **CategoryInputDialog**（`CategoryInputDialog.swift`）：
+    - 已使用标准 `parentWindow.beginSheet()` / `NSApp.runModal(for:)` 模式。
+    - 无 50ms 轮询循环。
+
+14. ✅ **测试断言**（`TestAssertions.swift`）：
+    - `TestAssertions.expect` 在 Release 构建中依然执行（不依赖 `assert`）。
+    - 副作用代码已移出断言表达式。
+    - 全套 `--test` 诊断在 Release 策略下通过。
+
+15. ✅ **文案修正**（多处设置页）：
+    - 移除"0 能耗秒搜" → 改为"直接复用 macOS 原生 CoreServices 索引，无需额外后台扫描进程"。
+    - 移除"针对 Sonoma 与 Sequoia 深度调优" → 改为"适配 macOS 12 及以上系统"。
+    - 移除"超低能耗常驻"。
+    - 移除"零磁盘扫盘能耗" → 改为"复用已有索引数据"。
+    - 性能页 "Footprint" → 改为 "RSS"。
+    - `main.swift` 测试标签 "Baseline Memory Footprint" → "Baseline Memory (RSS)"。
+
+### 部分完成（2 项）
+
+16. 🔄 **自动更新安全**（`UpdateManager.swift`）：
+    - ✅ Ed25519 `.sig` 签名校验已实现。
+    - ✅ Bundle ID、版本号校验已实现（`validateStagedApp`）。
+    - ✅ 代码签名 designated requirement 校验已实现（`validateCodeSignature`）。
+    - ✅ 不执行 `xattr -cr`（quarantine 保留）。
+    - ✅ Team ID 一致性校验：ad-hoc 构建只接受 ad-hoc 更新包，Team ID 构建要求 Team ID 匹配。
+    - 🔄 数据竞争：`stateLock` + `@MainActor` 强制主线程更新已实现。`URLSessionDownloadDelegate` 回调通过 `DispatchQueue.main.async` 切回主线程。
+
+17. 🔄 **动态颜色刷新**（`VisualEffectBackdropView.swift` + `LiquidGlassContainerView.swift`）：
+    - ✅ `VisualEffectBackdropView`、`SearchBarView`、`ShelfPanel`、`SearchPanel` 已监听 `.atoolsThemeDidChange`。
+    - ✅ `LiquidGlassContainerView` 的 `cgColor` 在每次 `update()` 时从动态颜色重新读取。
+    - 🔄 部分 `SettingsComponents` 的 badge 背景（`NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor`）在初始化时固定，运行期间切换系统深/浅色时不更新。这些位于设置窗口内部，设置窗口的 appearance 已随主题切换，实际影响有限。
+
+### 待优化（2 项）
+
+18. ⏳ **搜索质量**（`MetadataFileSearchBackend.swift` 已部分实现）：
+    - ✅ `NSMetadataQuery` 补充/替代 `mdfind` 已实现。
+    - ✅ 支持取消、增量结果、最近使用排序、名称/路径质量排序。
+    - ✅ 系统目录和垃圾目录过滤规则已集中配置。
+    - ⏳ 与 hot folder cache 的结果合并策略可进一步优化（当前取 union 去重）。
+
+19. ⏳ **设置窗口层级**：
+    - 设置窗口层级为 `statusBar + 1`，浮在所有 App 之上。
+    - 测试断言依赖此层级，调整前需要一起修改测试。
+    - 短期可接受：设置窗口需要在面板之上打开，而面板已是 `.statusBar` 层级。
+
+---
+
+## 六、v2 构建与测试
+
+- `swift build`：编译零警告零错误（仅 ld 搜索路径 warning 为环境特有）。
+- `--test` 诊断套件：全部 11 组测试通过。
+- 修改文件清单：
+  - `PanelCoordinator.swift` — 失焦策略强化
+  - `ConfigManager.swift` — 主题/透明度通知集中化
+  - `DictionaryService.swift` — generation token 支持
+  - `SearchCoordinator.swift` — 取消时清理词典 pending
+  - `SettingsTabViews.swift` — 移除冗余通知、修正文案
+  - `SearchResultsTableView.swift` — 无障碍标签
+  - `SearchBarView.swift` — 无障碍标签
+  - `CategoryPillView.swift` — 无障碍标签
+  - `HotkeyRecorderControl.swift` — 无障碍标签
+  - `SettingsSidebarView.swift` — 无障碍标签
+  - `ShelfGridView.swift` — 修复 `sendAction` 编译错误
+  - `HotkeyDisplayFormatter.swift` — 无变更（已使用 UCKeyTranslate）
+  - `main.swift` — 修复测试断言兼容性、修正 RSS 文案

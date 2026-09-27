@@ -344,7 +344,7 @@ public final class GeneralTabView: NSView {
         )
         cardSpotlight.addRow(rowCC, isLast: true)
 
-        let spotlightTip = NSTextField(labelWithString: "💡 技术保障：ATools 采用无侵入接管模式，直接复用 macOS 原生 CoreServices 索引，实现 0 能耗秒搜，请勿在终端强行停用系统 mds 索引。")
+        let spotlightTip = NSTextField(labelWithString: "💡 技术保障：ATools 直接复用 macOS 原生 CoreServices 索引，无需额外后台扫描进程，请勿在终端强行停用系统 mds 索引。")
         spotlightTip.translatesAutoresizingMaskIntoConstraints = false
         spotlightTip.font = NSFont.systemFont(ofSize: 11)
         spotlightTip.textColor = .secondaryLabelColor
@@ -815,7 +815,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let rowDisk = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "opticaldiscdrive"),
             title: "全盘深度文件搜索 (基于 Spotlight 索引)",
-            subtitle: "直连系统 CoreServices 索引，零磁盘扫盘能耗，毫秒级流式返回文件结果",
+            subtitle: "直连系统 CoreServices 索引，复用已有索引数据，毫秒级流式返回文件结果",
             accessory: diskSearchSwitch
         )
         card1.addRow(rowDisk)
@@ -1496,7 +1496,7 @@ public final class ThemeTabView: NSView {
         for card in themeCards {
             card.isSelected = (card.theme == theme)
         }
-        NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
+        // Theme change notification is now posted by ConfigManager
     }
 
     @objc private func opacitySliderChanged(_ sender: NSSlider) {
@@ -1506,7 +1506,7 @@ public final class ThemeTabView: NSView {
         opacityBadge.stringValue = (pct == 90) ? "90%（默认）" : "\(pct)%"
         guard abs(opacity - ConfigManager.shared.config.themeOpacity) > 0.001 else { return }
         ConfigManager.shared.updateThemeOpacity(opacity)
-        NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
+        // Theme change notification is now posted by ConfigManager
     }
 }
 
@@ -1578,8 +1578,8 @@ public final class PerformanceTabView: NSView {
 
         let memRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "memorychip"),
-            title: "当前常驻物理内存 (Footprint)",
-            subtitle: "基于 XNU 内核实时测量；面板收起后自动释放脏页",
+            title: "当前常驻物理内存 (RSS)",
+            subtitle: "基于 XNU 内核实时测量常驻集大小；面板收起后自动释放脏页",
             accessory: rssLabel
         )
         card1.addRow(memRow)
@@ -1930,7 +1930,7 @@ public final class AboutTabView: NSView {
         let rowArch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "cpu"),
             title: "原生架构支持",
-            subtitle: "基于当前安装包的原生架构构建，针对 macOS Sonoma 与 Sequoia 深度调优",
+            subtitle: "基于当前安装包的原生架构构建，适配 macOS 12 及以上系统",
             accessory: archLabel
         )
         card2.addRow(rowArch)
@@ -1938,7 +1938,7 @@ public final class AboutTabView: NSView {
         let rowStack = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "curlybraces"),
             title: "精纯 Swift + 原生 AppKit 架构",
-            subtitle: "零 Electron/Web 视图臃肿，零第三方二进制框架依赖，超低能耗常驻",
+            subtitle: "零 Electron/Web 视图臃肿，零第三方二进制框架依赖",
             accessory: nil
         )
         card2.addRow(rowStack, isLast: true)

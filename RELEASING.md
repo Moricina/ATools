@@ -46,6 +46,7 @@ ATOOLS_UPDATE_SIGNING_KEY=/secure/path/update-signing.key ./Scripts/package_app.
 ## 签名策略
 
 - 更新器会拒绝没有 `.sig` 的安装包，并校验包版本、Bundle ID、可执行文件和代码签名。
+- 更新器在结构校验之外校验 `codesign` designated requirement；使用 Developer ID 时还要求新旧包的 Team ID 一致。ad-hoc 构建只能更新同为 ad-hoc 的包。
 - 自动更新不再清除 `com.apple.quarantine`，不会绕过 Gatekeeper。
 - 当前打包默认仍使用 ad-hoc App 签名。配置 `ATOOLS_SIGNING_IDENTITY` 为 Apple Developer ID 后可生成正式签名应用：
 

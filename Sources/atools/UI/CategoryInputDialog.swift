@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-public final class CategoryInputDialog: NSWindowController {
+public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
     private let titleLabel = NSTextField(labelWithString: "")
     private let promptLabel = NSTextField(labelWithString: "")
     private let textField = NSTextField()
@@ -9,6 +9,7 @@ public final class CategoryInputDialog: NSWindowController {
     private let confirmButton = NSButton()
 
     private var onCompletion: ((String?) -> Void)?
+    private static var activeDialogs: [CategoryInputDialog] = []
 
     public static func prompt(
         title: String,
@@ -33,12 +34,16 @@ public final class CategoryInputDialog: NSWindowController {
             return
         }
 
-        win.center()
-        let session = NSApp.beginModalSession(for: win)
-        while NSApp.runModalSession(session) == .continue {
-            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+        activeDialogs.append(dialog)
+        if let parentWindow = parentWindow {
+            parentWindow.beginSheet(win) { _ in
+                dialog.finish(with: nil)
+            }
+        } else {
+            win.center()
+            NSApp.runModal(for: win)
+            dialog.finish(with: nil)
         }
-        NSApp.endModalSession(session)
     }
 
     private init(
@@ -58,9 +63,9 @@ public final class CategoryInputDialog: NSWindowController {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isReleasedWhenClosed = false
-        win.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
 
         super.init(window: win)
+        window?.delegate = self
 
         setupUI(
             titleText: titleText,
@@ -164,15 +169,33 @@ public final class CategoryInputDialog: NSWindowController {
     }
 
     @objc private func cancelClicked() {
-        window?.orderOut(nil)
-        NSApp.stopModal(withCode: .cancel)
-        onCompletion?(nil)
+        finish(with: nil)
     }
 
     @objc private func confirmClicked() {
         let text = textField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        window?.orderOut(nil)
-        NSApp.stopModal(withCode: .OK)
-        onCompletion?(text)
+        finish(with: text)
+    }
+
+    public func windowShouldClose(_ sender: NSWindow) -> Bool {
+        finish(with: nil)
+        return true
+    }
+
+    private func finish(with value: String?) {
+        guard let completion = onCompletion else { return }
+        onCompletion = nil
+
+        if let window = window {
+            if let parent = window.sheetParent {
+                parent.endSheet(window, returnCode: value == nil ? .cancel : .OK)
+            } else if NSApp.modalWindow === window {
+                NSApp.stopModal(withCode: value == nil ? .cancel : .OK)
+            }
+            window.orderOut(nil)
+        }
+
+        Self.activeDialogs.removeAll { $0 === self }
+        completion(value)
     }
 }

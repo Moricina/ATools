@@ -25,9 +25,12 @@ public final class ShelfItemButton: NSControl {
 
     private var trackingArea: NSTrackingArea?
     private var mouseDownLocation: NSPoint?
+    /// Called when hover state changes so the parent grid can update keyboard selection.
+    public var onHoverChanged: ((Bool) -> Void)?
     private var isHovered: Bool = false {
         didSet {
             if oldValue != isHovered {
+                onHoverChanged?(isHovered)
                 updateAppearanceStyles()
             }
         }
@@ -35,6 +38,14 @@ public final class ShelfItemButton: NSControl {
     private var isPressed: Bool = false {
         didSet {
             if oldValue != isPressed {
+                updateAppearanceStyles()
+            }
+        }
+    }
+    public var isSelected: Bool = false {
+        didSet {
+            if oldValue != isSelected {
+                setAccessibilitySelected(isSelected)
                 updateAppearanceStyles()
             }
         }
@@ -146,10 +157,23 @@ public final class ShelfItemButton: NSControl {
 
         let scale: CGFloat = isPressed ? 0.98 : (isHovered ? 1.02 : 1.0)
 
-        if isPressed {
+        // baseLayer is a standalone CALayer; without an explicit transaction every
+        // style change picks up the default 0.25s implicit animation, so hover
+        // shadows visibly linger on unselected icons after the mouse moves on.
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(window == nil ? 0 : 0.10)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        if isSelected {
+            baseLayer.backgroundColor = GlassPalette.selectedFill(isDark: isDark).cgColor
+            baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+            baseLayer.borderWidth = 0.75
+            baseLayer.shadowOpacity = 0
+            baseLayer.opacity = 1.0
+        } else if isPressed {
             baseLayer.backgroundColor = GlassPalette.pressedFill(isDark: isDark).cgColor
             baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
             baseLayer.borderWidth = 0.75
+            baseLayer.shadowOpacity = 0
             baseLayer.opacity = 1.0
         } else if isHovered {
             baseLayer.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
@@ -161,8 +185,10 @@ public final class ShelfItemButton: NSControl {
             baseLayer.shadowOffset = CGSize(width: 0, height: 3)
             baseLayer.opacity = 1.0
         } else {
+            baseLayer.shadowOpacity = 0
             baseLayer.opacity = 0.0
         }
+        CATransaction.commit()
 
         // Icon lift with a soft, non-bouncy ease. The view-backed layer's anchor is its corner,
         // so scale around the icon's centre explicitly; and view-backed layers only animate
@@ -205,6 +231,15 @@ public final class ShelfItemButton: NSControl {
     override public func mouseExited(with event: NSEvent) {
         isHovered = false
         isPressed = false
+    }
+
+    /// Clear hover/press residue. mouseExited is not delivered when the panel is
+    /// ordered out with the cursor still over it, so a hidden-then-shown panel
+    /// could keep a stale shadow on whichever icon the mouse happened to be on.
+    public func resetInteractionState() {
+        isPressed = false
+        isHovered = false
+        mouseDownLocation = nil
     }
 
     override public func cursorUpdate(with event: NSEvent) {
@@ -302,6 +337,12 @@ public final class ShelfGridView: NSView {
 
     internal var items: [LauncherItem] = []
     internal var itemButtons: [ShelfItemButton] = []
+    private var keyboardSelectedID: UUID?
+    /// Selection pinned by explicit input (keyboard arrows / click / type-ahead).
+    /// A hover-derived highlight is temporary: it falls back to this when the
+    /// mouse leaves the icon, so no shadow lingers after the cursor moves away.
+    private var pinnedSelectionID: UUID?
+    private var activeFilter = ""
 
     private let scrollView = NSScrollView()
     private let contentView = FlippedContentView()
@@ -390,6 +431,13 @@ public final class ShelfGridView: NSView {
         }
         reusable.values.forEach { $0.removeFromSuperview() }
         itemButtons = newButtons
+        if let selectedID = keyboardSelectedID, !items.contains(where: { $0.id == selectedID }) {
+            keyboardSelectedID = nil
+        }
+        if let pinnedID = pinnedSelectionID, !items.contains(where: { $0.id == pinnedID }) {
+            pinnedSelectionID = nil
+        }
+        applyFilter(activeFilter)
 
         guard !items.isEmpty else {
             contentView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
@@ -400,10 +448,122 @@ public final class ShelfGridView: NSView {
         relayoutButtons(animated: hadItems && reusedAny && window?.isVisible == true)
     }
 
+    public func applyFilter(_ query: String) {
+        activeFilter = query.lowercased()
+        for button in itemButtons {
+            let haystack = [button.item.name, button.item.target, button.item.tags.joined(separator: " ")]
+                .joined(separator: " ")
+                .lowercased()
+            button.isHidden = !activeFilter.isEmpty && !haystack.contains(activeFilter)
+            button.isSelected = false
+        }
+        // Keep the current selection only if it is still visible; never fall back
+        // to the first item, otherwise every panel show paints a stale selection
+        // shadow on icon #1 before the user has interacted.
+        if let id = keyboardSelectedID, !visibleButtons.contains(where: { $0.item.id == id }) {
+            keyboardSelectedID = nil
+        }
+        updateKeyboardSelectionVisual()
+        emptyLabel.stringValue = activeFilter.isEmpty ? "拖拽软件、文件或脚本至此处快速添加" : "无匹配项目"
+        emptyLabel.isHidden = !visibleButtons.isEmpty
+        relayoutButtons(animated: false)
+    }
+
+    private var visibleButtons: [ShelfItemButton] {
+        itemButtons.filter { !$0.isHidden }
+    }
+
+    public var keyboardSelectedItem: LauncherItem? {
+        guard let id = keyboardSelectedID else { return nil }
+        return items.first(where: { $0.id == id })
+    }
+
+    @discardableResult
+    public func moveKeyboardSelection(horizontal: Int, vertical: Int) -> Bool {
+        let buttons = visibleButtons
+        guard !buttons.isEmpty else { return false }
+        let columns = max(1, currentColumnCount())
+        let currentIndex = buttons.firstIndex(where: { $0.item.id == keyboardSelectedID }) ?? -1
+        let nextIndex: Int
+        if currentIndex < 0 {
+            nextIndex = 0
+        } else {
+            nextIndex = max(0, min(buttons.count - 1, currentIndex + horizontal + vertical * columns))
+        }
+        guard nextIndex != currentIndex else { return false }
+        keyboardSelectedID = buttons[nextIndex].item.id
+        pinnedSelectionID = keyboardSelectedID
+        updateKeyboardSelectionVisual()
+        scrollToKeyboardSelection()
+        return true
+    }
+
+    public func selectFirstVisibleItem() {
+        keyboardSelectedID = visibleButtons.first?.item.id
+        pinnedSelectionID = keyboardSelectedID
+        updateKeyboardSelectionVisual()
+        scrollToKeyboardSelection()
+    }
+
+    public func executeKeyboardSelection() {
+        guard let id = keyboardSelectedID, let button = itemButtons.first(where: { $0.item.id == id }) else { return }
+        if let action = button.action, let target = button.target {
+            NSApp.sendAction(action, to: target, from: button)
+        }
+    }
+
+    /// Reset hover/press visuals on every button (called before the panel is re-shown).
+    public func resetInteractionStates() {
+        for button in itemButtons {
+            button.resetInteractionState()
+        }
+    }
+
+    /// Drop any selection so the panel re-opens with no default highlight.
+    public func clearKeyboardSelection() {
+        keyboardSelectedID = nil
+        pinnedSelectionID = nil
+        updateKeyboardSelectionVisual()
+    }
+
+    private func updateKeyboardSelectionVisual() {
+        for button in itemButtons {
+            button.isSelected = button.item.id == keyboardSelectedID && !button.isHidden
+        }
+    }
+
+    private func currentColumnCount() -> Int {
+        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let availableWidth = max(bounds.width, 100)
+        return max(1, Int((availableWidth - metrics.sideMargin * 2 + ShelfGridMetrics.spacing) / (metrics.itemWidth + ShelfGridMetrics.spacing)))
+    }
+
+    private func scrollToKeyboardSelection() {
+        guard let id = keyboardSelectedID,
+              let button = itemButtons.first(where: { $0.item.id == id }) else { return }
+        contentView.layoutSubtreeIfNeeded()
+        _ = scrollView.contentView.scrollToVisible(button.frame)
+    }
+
     private func makeButton(for item: LauncherItem, scale: Double) -> ShelfItemButton {
         let btn = ShelfItemButton(item: item, scale: scale, frame: .zero)
         btn.target = self
         btn.action = #selector(itemClicked(_:))
+        btn.onHoverChanged = { [weak self, weak btn] isHovered in
+            guard let self = self, let btn = btn else { return }
+            // Move keyboard selection to the hovered item so the highlight follows the mouse.
+            if isHovered {
+                if self.keyboardSelectedID != btn.item.id {
+                    self.keyboardSelectedID = btn.item.id
+                    self.updateKeyboardSelectionVisual()
+                }
+            } else if self.keyboardSelectedID == btn.item.id {
+                // Mouse left the icon (or the panel): restore the pinned selection
+                // — nil for hover-only sessions, so the shadow disappears.
+                self.keyboardSelectedID = self.pinnedSelectionID
+                self.updateKeyboardSelectionVisual()
+            }
+        }
 
         // Standard Cocoa context menu using representedObject
         let menu = NSMenu(title: "ShelfItemMenu")
@@ -437,7 +597,11 @@ public final class ShelfGridView: NSView {
     }
 
     private func relayoutButtons(animated: Bool) {
-        guard !itemButtons.isEmpty else { return }
+        let buttons = visibleButtons
+        guard !buttons.isEmpty else {
+            contentView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
+            return
+        }
 
         let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
         let itemWidth = metrics.itemWidth
@@ -450,7 +614,7 @@ public final class ShelfGridView: NSView {
 
         let availableWidth = max(bounds.width, 100)
         let cols = max(1, Int((availableWidth - sideMargin * 2 + spacingX) / (itemWidth + spacingX)))
-        let rows = Int(ceil(Double(itemButtons.count) / Double(cols)))
+        let rows = Int(ceil(Double(buttons.count) / Double(cols)))
 
         let totalContentHeight = max(bounds.height, CGFloat(rows) * (itemHeight + spacingY) + topMargin + bottomSafePadding)
         contentView.frame = NSRect(x: 0, y: 0, width: availableWidth, height: totalContentHeight)
@@ -459,7 +623,7 @@ public final class ShelfGridView: NSView {
             ctx.duration = animated ? 0.22 : 0
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
             ctx.allowsImplicitAnimation = animated
-            for (index, btn) in itemButtons.enumerated() {
+            for (index, btn) in buttons.enumerated() {
                 let col = index % cols
                 let row = index / cols
                 let x = sideMargin + CGFloat(col) * (itemWidth + spacingX)
@@ -516,6 +680,9 @@ public final class ShelfGridView: NSView {
     }
 
     @objc private func itemClicked(_ sender: ShelfItemButton) {
+        keyboardSelectedID = sender.item.id
+        pinnedSelectionID = sender.item.id
+        updateKeyboardSelectionVisual()
         delegate?.shelfGrid(self, didLaunchItem: sender.item)
     }
 

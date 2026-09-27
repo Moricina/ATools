@@ -150,7 +150,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     private let revealMaskKey = "atools.reveal"
     private let revealRimKey = "atools.reveal.rim"
     /// Geometry shared by the collapsed capsule and the expanded sheet.
-    private static let sheetInset: CGFloat = 14
+    static let sheetInset: CGFloat = 14
     private static let capsuleHeight: CGFloat = 44
     private static let sheetCornerRadius: CGFloat = 20
     private static let expandTiming = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1.0)
@@ -472,8 +472,13 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     }
 }
 
-public final class SearchPanel: NSPanel {
+public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
     public let searchViewController = SearchViewController()
+
+    public var visiblePanelFrame: NSRect {
+        let inset = SearchViewController.sheetInset
+        return frame.insetBy(dx: inset, dy: inset)
+    }
 
     public init() {
         let contentRect = NSRect(x: 0, y: 0, width: 680, height: 72)

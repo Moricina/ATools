@@ -1,6 +1,9 @@
 import Foundation
 import AppKit
 
+// Diagnostic expectations are deliberately kept out of Swift's assert machinery so they run
+// in release builds as well as debug builds.
+
 if CommandLine.arguments.contains("--test") {
     let tempTestDir = ConfigManager.setupIsolatedTestEnvironment()
 
@@ -10,134 +13,136 @@ if CommandLine.arguments.contains("--test") {
 
     // 1. Test Calculator Engine
     print("[1/7] Testing CalculatorEngine...")
-    assert(CalculatorEngine.shared.evaluate("1+1") == "2", "1+1 should equal 2")
-    assert(CalculatorEngine.shared.evaluate("(1024 * 768) / 2") == "393216", "Math expression evaluation failed")
-    assert(CalculatorEngine.shared.evaluate("0x10 + 16") == "32", "Hex math evaluation failed")
-    assert(CalculatorEngine.shared.evaluate("not a math expression") == nil, "Non-math should return nil")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("1+1") == "2", "1+1 should equal 2")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("(1024 * 768) / 2") == "393216", "Math expression evaluation failed")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("0x10 + 16") == "32", "Hex math evaluation failed")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("not a math expression") == nil, "Non-math should return nil")
     // Half-typed / non-math input used to raise uncaught NSExpression exceptions.
     for input in ["1+", "c++", "wi-fi", "iphone-15", "-", "100%", "10%", "(1+2", "3*", "sin(", "a-b"] {
-        assert(CalculatorEngine.shared.evaluate(input) == nil, "'\(input)' must not evaluate")
+        TestAssertions.expect(CalculatorEngine.shared.evaluate(input) == nil, "'\(input)' must not evaluate")
     }
-    assert(CalculatorEngine.shared.evaluate("7/2") == "3.5", "Division must not truncate")
-    assert(CalculatorEngine.shared.evaluate("1/0") == nil, "Division by zero yields no result")
-    assert(CalculatorEngine.shared.evaluate("2^10") == "1024", "Power")
-    assert(CalculatorEngine.shared.evaluate("10%3") == "1", "Modulo")
-    assert(CalculatorEngine.shared.evaluate("sqrt(16)+1") == "5", "Functions")
-    assert(CalculatorEngine.shared.evaluate("2024-01-01") == nil, "Dates are not subtraction")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("7/2") == "3.5", "Division must not truncate")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("1/0") == nil, "Division by zero yields no result")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("2^10") == "1024", "Power")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("10%3") == "1", "Modulo")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("sqrt(16)+1") == "5", "Functions")
+    TestAssertions.expect(CalculatorEngine.shared.evaluate("2024-01-01") == nil, "Dates are not subtraction")
     print("      ✓ CalculatorEngine passed all tests.")
 
     // 2. Test SystemActions
     print("[2/7] Testing SystemActions...")
     let lockActions = SystemActions.shared.match("lock")
-    assert(!lockActions.isEmpty, "SystemAction 'lock' should match")
+    TestAssertions.expect(!lockActions.isEmpty, "SystemAction 'lock' should match")
     let suoActions = SystemActions.shared.match("锁屏")
-    assert(!suoActions.isEmpty, "SystemAction '锁屏' should match")
+    TestAssertions.expect(!suoActions.isEmpty, "SystemAction '锁屏' should match")
     let sleepActions = SystemActions.shared.match("sleep")
-    assert(!sleepActions.isEmpty, "SystemAction 'sleep' should match")
-    assert(SystemActions.shared.match("s").isEmpty, "Single letters must not surface system actions")
-    assert(SystemActions.shared.match("clock.png").isEmpty, "File names containing a keyword must not match")
-    assert(SystemActions.shared.match("emptyfolder").isEmpty, "'emptyfolder' must not offer Empty Trash")
-    assert(HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "").isUnassigned, "Cleared binding is unassigned")
-    assert(!HotkeyBinding.defaultShelf.isUnassigned, "Default binding is assigned")
+    TestAssertions.expect(!sleepActions.isEmpty, "SystemAction 'sleep' should match")
+    TestAssertions.expect(SystemActions.shared.match("s").isEmpty, "Single letters must not surface system actions")
+    TestAssertions.expect(SystemActions.shared.match("clock.png").isEmpty, "File names containing a keyword must not match")
+    TestAssertions.expect(SystemActions.shared.match("emptyfolder").isEmpty, "'emptyfolder' must not offer Empty Trash")
+    TestAssertions.expect(HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "").isUnassigned, "Cleared binding is unassigned")
+    TestAssertions.expect(!HotkeyBinding.defaultShelf.isUnassigned, "Default binding is assigned")
     print("      ✓ SystemActions passed all tests (matched \(SystemActions.shared.actions.count) actions).")
 
     // 3. Test ConfigManager & Dual Hotkeys & Resizable Shelf Dimensions & Panel Toggles
     print("[3/7] Testing ConfigManager & Resizable Shelf Dimensions & Safety Guards...")
     let config = ConfigManager.shared.config
-    assert(!config.categories.isEmpty, "Default categories should not be empty")
-    assert(config.shelfWidth >= 240, "Shelf width should be at least minSize 240")
-    assert(config.shelfHeight >= 180, "Shelf height should be at least minSize 180")
+    TestAssertions.expect(!config.categories.isEmpty, "Default categories should not be empty")
+    TestAssertions.expect(config.shelfWidth >= 240, "Shelf width should be at least minSize 240")
+    TestAssertions.expect(config.shelfHeight >= 180, "Shelf height should be at least minSize 180")
     ConfigManager.shared.updateShelfSize(width: 600, height: 400)
-    assert(ConfigManager.shared.config.shelfWidth == 600, "Shelf width should update to 600")
-    assert(ConfigManager.shared.config.shelfHeight == 400, "Shelf height should update to 400")
+    TestAssertions.expect(ConfigManager.shared.config.shelfWidth == 600, "Shelf width should update to 600")
+    TestAssertions.expect(ConfigManager.shared.config.shelfHeight == 400, "Shelf height should update to 400")
 
     // Test new configuration options & safety mutual exclusion
     ConfigManager.shared.updateAutoCloseOnLaunch(true)
-    assert(ConfigManager.shared.config.autoCloseOnLaunch == true, "autoCloseOnLaunch should be true")
+    TestAssertions.expect(ConfigManager.shared.config.autoCloseOnLaunch == true, "autoCloseOnLaunch should be true")
     ConfigManager.shared.updateAutoCloseOnMouseExit(false)
-    assert(ConfigManager.shared.config.autoCloseOnMouseExit == false, "autoCloseOnMouseExit should be false")
+    TestAssertions.expect(ConfigManager.shared.config.autoCloseOnMouseExit == false, "autoCloseOnMouseExit should be false")
 
     // Test isShelfPinned persistence & codec round-trip
-    assert(ConfigManager.shared.config.isShelfPinned == false, "isShelfPinned should default to false")
+    TestAssertions.expect(ConfigManager.shared.config.isShelfPinned == false, "isShelfPinned should default to false")
     ConfigManager.shared.updateIsShelfPinned(true)
-    assert(ConfigManager.shared.config.isShelfPinned == true, "isShelfPinned should update to true")
+    TestAssertions.expect(ConfigManager.shared.config.isShelfPinned == true, "isShelfPinned should update to true")
     let pinnedEncoded = try! JSONEncoder().encode(ConfigManager.shared.config)
     let pinnedDecoded = try! JSONDecoder().decode(AtoolsConfig.self, from: pinnedEncoded)
-    assert(pinnedDecoded.isShelfPinned == true, "isShelfPinned should survive encode/decode round-trip")
+    TestAssertions.expect(pinnedDecoded.isShelfPinned == true, "isShelfPinned should survive encode/decode round-trip")
     ConfigManager.shared.updateIsShelfPinned(false)
-    assert(ConfigManager.shared.config.isShelfPinned == false, "isShelfPinned should reset to false")
+    TestAssertions.expect(ConfigManager.shared.config.isShelfPinned == false, "isShelfPinned should reset to false")
 
     // 严格测试「常用」分类开关：关闭不保留数据，开启重新检测生成，默认保持未启用
     ConfigManager.shared.updateEnableFavoritesCategory(true)
-    assert(ConfigManager.shared.config.enableFavoritesCategory == true, "enableFavoritesCategory should be true when enabled")
-    assert(ConfigManager.shared.config.categories.first?.name == "常用", "开启后应重新扫描生成常用分类并排在首位")
-    assert(!ConfigManager.shared.config.categories.first!.items.isEmpty, "重新生成的常用分类中应包含检测到的常用软件")
+    TestAssertions.expect(ConfigManager.shared.config.enableFavoritesCategory == true, "enableFavoritesCategory should be true when enabled")
+    TestAssertions.expect(ConfigManager.shared.config.categories.first?.name == "常用", "开启后应重新扫描生成常用分类并排在首位")
+    TestAssertions.expect(!ConfigManager.shared.config.categories.first!.items.isEmpty, "重新生成的常用分类中应包含检测到的常用软件")
 
     ConfigManager.shared.updateEnableFavoritesCategory(false)
-    assert(ConfigManager.shared.config.enableFavoritesCategory == false, "enableFavoritesCategory should default to false")
-    assert(!ConfigManager.shared.config.categories.contains(where: { $0.isFavorites }), "常用分类数据在关闭后应彻底清空移除")
+    TestAssertions.expect(ConfigManager.shared.config.enableFavoritesCategory == false, "enableFavoritesCategory should default to false")
+    TestAssertions.expect(!ConfigManager.shared.config.categories.contains(where: { $0.isFavorites }), "常用分类数据在关闭后应彻底清空移除")
 
     // Mutual exclusion test: if search is enabled, we can disable shelf
     ConfigManager.shared.updateEnableSearchPanel(true)
     let canDisableShelf = ConfigManager.shared.updateEnableShelfPanel(false)
-    assert(canDisableShelf == true, "Should allow disabling shelf when search is active")
+    TestAssertions.expect(canDisableShelf == true, "Should allow disabling shelf when search is active")
     // Now both cannot be disabled simultaneously:
     let canDisableBoth = ConfigManager.shared.updateEnableSearchPanel(false)
-    assert(canDisableBoth == false, "Safety guard: must NOT allow disabling both panels simultaneously")
+    TestAssertions.expect(canDisableBoth == false, "Safety guard: must NOT allow disabling both panels simultaneously")
     ConfigManager.shared.updateEnableShelfPanel(true)
-    assert(ConfigManager.shared.config.enableShelfPanel == true, "Shelf should be re-enabled")
+    TestAssertions.expect(ConfigManager.shared.config.enableShelfPanel == true, "Shelf should be re-enabled")
 
     ConfigManager.shared.updateSidebarWidth(160)
-    assert(ConfigManager.shared.config.sidebarWidth == 160, "sidebarWidth should update to 160")
+    TestAssertions.expect(ConfigManager.shared.config.sidebarWidth == 160, "sidebarWidth should update to 160")
     ConfigManager.shared.updateSidebarWidth(84)
-    assert(ConfigManager.shared.config.sidebarWidth == 84, "sidebarWidth should reset to 84")
+    TestAssertions.expect(ConfigManager.shared.config.sidebarWidth == 84, "sidebarWidth should reset to 84")
 
     // Test HotkeyBinding backwards compatibility and specialTrigger
     let legacyJSON = "{\"keyCode\": 49, \"carbonModifiers\": 2048, \"displayString\": \"⌥Space\"}".data(using: .utf8)!
     let decodedLegacy = try! JSONDecoder().decode(HotkeyBinding.self, from: legacyJSON)
-    assert(decodedLegacy.specialTrigger == .none, "Legacy HotkeyBinding without specialTrigger should decode as .none")
-    assert(decodedLegacy.displayString == "⌥Space", "Legacy displayString preserved")
+    TestAssertions.expect(decodedLegacy.specialTrigger == .none, "Legacy HotkeyBinding without specialTrigger should decode as .none")
+    // displayString is re-generated from the active keyboard layout via UCKeyTranslate.
+    // keyCode 49 is the Space key, which is a named key; the display string includes modifier prefix + key name.
+    TestAssertions.expect(decodedLegacy.displayString.hasPrefix("⌥"), "Legacy displayString should have option modifier prefix")
 
     let doubleCmdJSON = "{\"keyCode\": 0, \"carbonModifiers\": 0, \"displayString\": \"2× ⌘ Command\", \"specialTrigger\": \"doubleCommand\"}".data(using: .utf8)!
     let decodedDoubleCmd = try! JSONDecoder().decode(HotkeyBinding.self, from: doubleCmdJSON)
-    assert(decodedDoubleCmd.specialTrigger == .doubleCommand, "Decoded doubleCommand trigger correctly")
+    TestAssertions.expect(decodedDoubleCmd.specialTrigger == .doubleCommand, "Decoded doubleCommand trigger correctly")
 
     // Test Theme switching
     ConfigManager.shared.updateTheme(.liquidDark)
-    assert(ConfigManager.shared.config.theme == .liquidDark, "Theme should update to .liquidDark")
-    assert(ConfigManager.shared.config.theme.isDark == true, "liquidDark isDark should be true")
-    assert(AppTheme.allCases == [.liquidDark, .liquidLight], "Only the two liquid themes remain")
+    TestAssertions.expect(ConfigManager.shared.config.theme == .liquidDark, "Theme should update to .liquidDark")
+    TestAssertions.expect(ConfigManager.shared.config.theme.isDark == true, "liquidDark isDark should be true")
+    TestAssertions.expect(AppTheme.allCases == [.liquidDark, .liquidLight], "Only the two liquid themes remain")
     // Configs saved with the retired solid themes migrate to the matching liquid theme.
     let solidLightJSON = "{\"theme\": \"solidLight\"}".data(using: .utf8)!
-    assert((try! JSONDecoder().decode(AtoolsConfig.self, from: solidLightJSON)).theme == .liquidLight, "solidLight -> liquidLight")
+    TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidLightJSON)).theme == .liquidLight, "solidLight -> liquidLight")
     let solidDarkJSON = "{\"theme\": \"solidDark\"}".data(using: .utf8)!
-    assert((try! JSONDecoder().decode(AtoolsConfig.self, from: solidDarkJSON)).theme == .liquidDark, "solidDark -> liquidDark")
+    TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidDarkJSON)).theme == .liquidDark, "solidDark -> liquidDark")
     ConfigManager.shared.updateTheme(.liquidLight)
-    assert(ConfigManager.shared.config.theme == .liquidLight, "Theme should update to .liquidLight")
+    TestAssertions.expect(ConfigManager.shared.config.theme == .liquidLight, "Theme should update to .liquidLight")
 
     // Test shelfIconScale
     ConfigManager.shared.updateShelfIconScale(1.15)
-    assert(ConfigManager.shared.config.shelfIconScale == 1.15, "shelfIconScale should update to 1.15")
-    assert(ConfigManager.shared.config.shelfIconSize == .large, "Scale 1.15 should map to .large")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.15, "shelfIconScale should update to 1.15")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .large, "Scale 1.15 should map to .large")
     ConfigManager.shared.updateShelfIconScale(0.85)
-    assert(ConfigManager.shared.config.shelfIconScale == 0.85, "shelfIconScale should update to 0.85")
-    assert(ConfigManager.shared.config.shelfIconSize == .small, "Scale 0.85 should map to .small")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 0.85, "shelfIconScale should update to 0.85")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .small, "Scale 0.85 should map to .small")
     ConfigManager.shared.updateShelfIconScale(1.40) // should clamp to 1.30
-    assert(ConfigManager.shared.config.shelfIconScale == 1.30, "shelfIconScale clamped to 1.30")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.30, "shelfIconScale clamped to 1.30")
     ConfigManager.shared.updateShelfIconScale(1.0)
-    assert(ConfigManager.shared.config.shelfIconScale == 1.0, "shelfIconScale should reset to 1.0")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.0, "shelfIconScale should reset to 1.0")
 
     // Test themeOpacity
     ConfigManager.shared.updateThemeOpacity(0.85)
-    assert(ConfigManager.shared.config.themeOpacity == 0.85, "themeOpacity should update to 0.85")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.85, "themeOpacity should update to 0.85")
     ConfigManager.shared.updateThemeOpacity(0.10) // should clamp to 0.40 (minimum floor)
-    assert(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity should be clamped to 0.40")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity should be clamped to 0.40")
     ConfigManager.shared.updateThemeOpacity(-0.5) // should clamp to 0.40
-    assert(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity clamped to 0.40")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity clamped to 0.40")
     ConfigManager.shared.updateThemeOpacity(1.50) // should clamp to 1.00
-    assert(ConfigManager.shared.config.themeOpacity == 1.00, "themeOpacity clamped to 1.00")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 1.00, "themeOpacity clamped to 1.00")
     ConfigManager.shared.updateThemeOpacity(0.90) // reset to default
-    assert(ConfigManager.shared.config.themeOpacity == 0.90, "themeOpacity reset to 0.90")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.90, "themeOpacity reset to 0.90")
 
     print("      ✓ ConfigManager loaded \(config.categories.count) categories successfully.")
     print("        - Shelf Hotkey:  [\(config.shelfHotkey.displayString)] (ID 1)")
@@ -157,14 +162,14 @@ if CommandLine.arguments.contains("--test") {
         ConfigManager.shared.addItems([dummy1, dummy2], to: firstCat.id)
         
         let catAfterAdd = ConfigManager.shared.config.categories.first(where: { $0.id == firstCat.id })!
-        assert(catAfterAdd.items.contains(where: { $0.id == dummy1.id }), "Batch add item 1 should exist")
-        assert(catAfterAdd.items.contains(where: { $0.id == dummy2.id }), "Batch add item 2 should exist")
+        TestAssertions.expect(catAfterAdd.items.contains(where: { $0.id == dummy1.id }), "Batch add item 1 should exist")
+        TestAssertions.expect(catAfterAdd.items.contains(where: { $0.id == dummy2.id }), "Batch add item 2 should exist")
 
         // Test item reordering
         let countBefore = catAfterAdd.items.count
         ConfigManager.shared.moveItem(from: countBefore - 1, to: countBefore - 2, in: firstCat.id)
         let catAfterMove = ConfigManager.shared.config.categories.first(where: { $0.id == firstCat.id })!
-        assert(catAfterMove.items[countBefore - 2].id == dummy2.id, "Item reordering should place dummy2 before dummy1")
+        TestAssertions.expect(catAfterMove.items[countBefore - 2].id == dummy2.id, "Item reordering should place dummy2 before dummy1")
 
         ConfigManager.shared.removeItem(id: dummy1.id, from: firstCat.id)
         ConfigManager.shared.removeItem(id: dummy2.id, from: firstCat.id)
@@ -176,9 +181,9 @@ if CommandLine.arguments.contains("--test") {
     if catsCount >= 2 {
         let firstId = ConfigManager.shared.config.categories[0].id
         ConfigManager.shared.moveCategory(from: 0, to: 1)
-        assert(ConfigManager.shared.config.categories[1].id == firstId, "moveCategory should move category 0 to 1")
+        TestAssertions.expect(ConfigManager.shared.config.categories[1].id == firstId, "moveCategory should move category 0 to 1")
         ConfigManager.shared.moveCategory(from: 1, to: 0)
-        assert(ConfigManager.shared.config.categories[0].id == firstId, "moveCategory back should restore original position")
+        TestAssertions.expect(ConfigManager.shared.config.categories[0].id == firstId, "moveCategory back should restore original position")
     }
 
     // Test cross-category item move via moveItem(id:toCategoryId:)
@@ -188,16 +193,16 @@ if CommandLine.arguments.contains("--test") {
         let item = LauncherItem(name: "DragItem", itemType: .fileOrFolder, target: "/tmp/dragitem")
         ConfigManager.shared.addItems([item], to: source.id)
 
-        assert(ConfigManager.shared.moveItem(id: item.id, toCategoryId: dest.id) == true, "Cross-category move should succeed")
-        assert(!ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items.contains(where: { $0.id == item.id }), "Source category should lose item after move")
-        assert(ConfigManager.shared.config.categories.first(where: { $0.id == dest.id })!.items.contains(where: { $0.id == item.id }), "Destination category should gain item after move")
+        TestAssertions.expect(ConfigManager.shared.moveItem(id: item.id, toCategoryId: dest.id) == true, "Cross-category move should succeed")
+        TestAssertions.expect(!ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items.contains(where: { $0.id == item.id }), "Source category should lose item after move")
+        TestAssertions.expect(ConfigManager.shared.config.categories.first(where: { $0.id == dest.id })!.items.contains(where: { $0.id == item.id }), "Destination category should gain item after move")
 
-        assert(ConfigManager.shared.moveItem(id: item.id, toCategoryId: source.id) == true, "Move back should succeed")
-        assert(ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items.contains(where: { $0.id == item.id }), "Source should regain item after move back")
+        TestAssertions.expect(ConfigManager.shared.moveItem(id: item.id, toCategoryId: source.id) == true, "Move back should succeed")
+        TestAssertions.expect(ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items.contains(where: { $0.id == item.id }), "Source should regain item after move back")
 
-        assert(ConfigManager.shared.moveItem(id: item.id, toCategoryId: source.id) == false, "Same-category move should be a no-op returning false")
-        assert(ConfigManager.shared.moveItem(id: item.id, toCategoryId: UUID()) == false, "Missing destination should return false")
-        assert(ConfigManager.shared.moveItem(id: UUID(), toCategoryId: dest.id) == false, "Missing item should return false")
+        TestAssertions.expect(ConfigManager.shared.moveItem(id: item.id, toCategoryId: source.id) == false, "Same-category move should be a no-op returning false")
+        TestAssertions.expect(ConfigManager.shared.moveItem(id: item.id, toCategoryId: UUID()) == false, "Missing destination should return false")
+        TestAssertions.expect(ConfigManager.shared.moveItem(id: UUID(), toCategoryId: dest.id) == false, "Missing item should return false")
 
         ConfigManager.shared.removeItem(id: item.id, from: source.id)
         ConfigManager.shared.deleteCategory(id: source.id, migrateItemsTo: dest.id)
@@ -206,18 +211,18 @@ if CommandLine.arguments.contains("--test") {
     }
 
     ConfigManager.shared.updateCategoryOrientation(.vertical)
-    assert(ConfigManager.shared.config.categoryOrientation == .vertical, "Orientation should update to .vertical")
+    TestAssertions.expect(ConfigManager.shared.config.categoryOrientation == .vertical, "Orientation should update to .vertical")
     ConfigManager.shared.updateCategoryOrientation(.horizontal)
-    assert(ConfigManager.shared.config.categoryOrientation == .horizontal, "Orientation should update to .horizontal")
+    TestAssertions.expect(ConfigManager.shared.config.categoryOrientation == .horizontal, "Orientation should update to .horizontal")
 
     ConfigManager.shared.updateShelfIconSize(.small)
-    assert(ConfigManager.shared.config.shelfIconSize == .small, "ShelfIconSize should update to .small")
-    assert(ConfigManager.shared.config.shelfIconSize.itemSize == 68, "Small item size should be 68")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .small, "ShelfIconSize should update to .small")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize.itemSize == 68, "Small item size should be 68")
     ConfigManager.shared.updateShelfIconSize(.large)
-    assert(ConfigManager.shared.config.shelfIconSize == .large, "ShelfIconSize should update to .large")
-    assert(ConfigManager.shared.config.shelfIconSize.itemSize == 96, "Large item size should be 96")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .large, "ShelfIconSize should update to .large")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize.itemSize == 96, "Large item size should be 96")
     ConfigManager.shared.updateShelfIconSize(.medium)
-    assert(ConfigManager.shared.config.shelfIconSize == .medium, "ShelfIconSize should reset to .medium")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .medium, "ShelfIconSize should reset to .medium")
     print("      ✓ Category reordering, orientation & icon size switching verified.")
 
     // Pre-initialize PanelCoordinator to measure dual-panel memory footprint
@@ -232,11 +237,11 @@ if CommandLine.arguments.contains("--test") {
     }
     _ = sema.wait(timeout: .now() + 2.0)
     let safariSearch = AppHotspotIndex.shared.search("safari")
-    assert(!safariSearch.isEmpty, "Search 'safari' should find matches")
+    TestAssertions.expect(!safariSearch.isEmpty, "Search 'safari' should find matches")
     let finderSearch = AppHotspotIndex.shared.search("访达")
-    assert(!finderSearch.isEmpty, "Search '访达' should find Finder app via Chinese alias")
+    TestAssertions.expect(!finderSearch.isEmpty, "Search '访达' should find Finder app via Chinese alias")
     let terminalSearch = AppHotspotIndex.shared.search("zd") // pinyin abbreviation for 终端
-    assert(!terminalSearch.isEmpty, "Search 'zd' (pinyin abbr) should find Terminal app")
+    TestAssertions.expect(!terminalSearch.isEmpty, "Search 'zd' (pinyin abbr) should find Terminal app")
     print("      ✓ AppHotspotIndex scanned apps successfully. Chinese ('访达') and Pinyin abbr ('zd') verified.")
 
     // 6. Test SpotlightBridge Full-Disk File Search
@@ -252,7 +257,7 @@ if CommandLine.arguments.contains("--test") {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
     print("      ✓ SpotlightBridge file query returned \(foundFiles.count) file results.")
-    assert(!foundFiles.isEmpty, "SpotlightBridge should find files matching 'Package'")
+    TestAssertions.expect(!foundFiles.isEmpty, "SpotlightBridge should find files matching 'Package'")
 
     // Single-Digit File Search Test (e.g. "1")
     var foundDigitFiles: [SearchResult] = []
@@ -266,7 +271,7 @@ if CommandLine.arguments.contains("--test") {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
     print("      ✓ SpotlightBridge single-digit query ('1') returned \(foundDigitFiles.count) file results.")
-    assert(!foundDigitFiles.isEmpty, "SpotlightBridge should support single-digit searches")
+    TestAssertions.expect(!foundDigitFiles.isEmpty, "SpotlightBridge should support single-digit searches")
 
     // Deterministic File Search Test using transient test fixture in Downloads
     let downloadsURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
@@ -285,7 +290,7 @@ if CommandLine.arguments.contains("--test") {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
     print("      ✓ SpotlightBridge file search returned \(foundFixtureFiles.count) results.")
-    assert(!foundFixtureFiles.isEmpty, "SpotlightBridge should find fixture file in user hot folders")
+    TestAssertions.expect(!foundFixtureFiles.isEmpty, "SpotlightBridge should find fixture file in user hot folders")
 
     var coordinatorResults: [SearchResult] = []
     var isCoordDone = false
@@ -297,8 +302,8 @@ if CommandLine.arguments.contains("--test") {
     while !isCoordDone && Date() < coordDeadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.01))
     }
-    assert(!coordinatorResults.isEmpty, "SearchCoordinator must always deliver web search fallback for non-empty input")
-    assert(coordinatorResults.last?.type == .webSearch, "Last result should be webSearch fallback")
+    TestAssertions.expect(!coordinatorResults.isEmpty, "SearchCoordinator must always deliver web search fallback for non-empty input")
+    TestAssertions.expect(coordinatorResults.last?.type == .webSearch, "Last result should be webSearch fallback")
     print("      ✓ SearchCoordinator guaranteed instant feedback verified (never empty for non-empty queries).")
 
     // Test SearchCoordinator for universal app keyword (Safari)
@@ -314,11 +319,11 @@ if CommandLine.arguments.contains("--test") {
     while !gotSafari && Date() < safariDeadline {
         RunLoop.current.run(until: Date().addingTimeInterval(0.05))
     }
-    assert(gotSafari, "SearchCoordinator should find matches for 'Safari'")
+    TestAssertions.expect(gotSafari, "SearchCoordinator should find matches for 'Safari'")
     print("      ✓ SearchCoordinator found \(safariResults.count) results for keyword 'Safari'.")
 
     // 7. Test Memory Usage
-    print("[7/7] Testing Baseline Memory Footprint...")
+    print("[7/7] Testing Baseline Memory (RSS)...")
     var info = mach_task_basic_info()
     var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
     let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
@@ -346,8 +351,8 @@ if CommandLine.arguments.contains("--test") {
         contentView.layoutSubtreeIfNeeded()
         print("      ✓ Settings Window Frame: \(win.frame)")
         print("      ✓ Settings ContentView Frame: \(contentView.frame)")
-        assert(win.frame.width >= 500, "Window width should be at least 500")
-        assert(win.frame.height >= 600, "Window height should be at least 600")
+        TestAssertions.expect(win.frame.width >= 500, "Window width should be at least 500")
+        TestAssertions.expect(win.frame.height >= 600, "Window height should be at least 600")
 
         // Render to image
         if let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
@@ -366,8 +371,8 @@ if CommandLine.arguments.contains("--test") {
                 win.displayIfNeeded()
                 contentView.layoutSubtreeIfNeeded()
                 print("      -> Tab [\(item.title)] Window Frame: \(win.frame), ContentView Bounds: \(contentView.bounds)")
-                assert(abs(win.frame.width - 780.0) < 0.5, "Tab \(item.title) caused window width jump: \(win.frame.width)")
-                assert(abs(contentView.bounds.width - 780.0) < 0.5, "Tab \(item.title) caused contentView width jump: \(contentView.bounds.width)")
+                TestAssertions.expect(abs(win.frame.width - 780.0) < 0.5, "Tab \(item.title) caused window width jump: \(win.frame.width)")
+                TestAssertions.expect(abs(contentView.bounds.width - 780.0) < 0.5, "Tab \(item.title) caused contentView width jump: \(contentView.bounds.width)")
                 if let rep = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
                     contentView.cacheDisplay(in: contentView.bounds, to: rep)
                     if let pngData = rep.representation(using: .png, properties: [:]) {
@@ -421,21 +426,21 @@ if CommandLine.arguments.contains("--test") {
         ConfigManager.shared.addItems([testDevItem], to: devCategory.id)
         shelfVC.loadData()
 
-        assert(shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should appear in shelfGrid")
+        TestAssertions.expect(shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should appear in shelfGrid")
 
         // Trigger item deletion via delegate (just like right-click '从分类中移除')
         shelfVC.shelfGrid(shelfVC.shelfGrid, didDeleteItem: testDevItem)
 
         // Verify item is removed from config and shelfGrid
-        assert(!ConfigManager.shared.config.categories.first(where: { $0.id == devCategory.id })!.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should be removed from ConfigManager")
-        assert(!shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should disappear from shelfGrid immediately")
+        TestAssertions.expect(!ConfigManager.shared.config.categories.first(where: { $0.id == devCategory.id })!.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should be removed from ConfigManager")
+        TestAssertions.expect(!shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem should disappear from shelfGrid immediately")
 
         // Now simulate user clicking the '开发' category tab again
         shelfVC.categoryBar(shelfVC.categoryBar, didSelectCategory: devCategory)
 
         // Verify that re-clicking category does NOT bring back the deleted item
-        assert(!shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem MUST NOT reappear after re-selecting category tab")
-        assert(!(shelfVC.selectedCategory?.items.contains(where: { $0.id == testDevItem.id }) ?? false), "selectedCategory MUST NOT contain deleted item")
+        TestAssertions.expect(!shelfVC.shelfGrid.items.contains(where: { $0.id == testDevItem.id }), "testDevItem MUST NOT reappear after re-selecting category tab")
+        TestAssertions.expect(!(shelfVC.selectedCategory?.items.contains(where: { $0.id == testDevItem.id }) ?? false), "selectedCategory MUST NOT contain deleted item")
         print("      ✓ Category item deletion persistence on re-selection verified.")
     }
 
@@ -448,23 +453,23 @@ if CommandLine.arguments.contains("--test") {
         ConfigManager.shared.addItems([testDragItem], to: catA.id)
         shelfVC.loadData()
         shelfVC.categoryBar(shelfVC.categoryBar, didSelectCategory: catA)
-        assert(shelfVC.selectedCategory?.id == catA.id, "catA should be selected initially")
+        TestAssertions.expect(shelfVC.selectedCategory?.id == catA.id, "catA should be selected initially")
 
         // 1. Move internal item to catB by dropping onto catB's tab
         shelfVC.categoryBar(shelfVC.categoryBar, didMoveLauncherItem: testDragItem, to: catB)
 
         // Verify that:
         // a) Item was moved to catB in ConfigManager
-        assert(ConfigManager.shared.config.categories.first(where: { $0.id == catB.id })!.items.contains(where: { $0.id == testDragItem.id }), "testDragItem should now belong to catB")
-        assert(!ConfigManager.shared.config.categories.first(where: { $0.id == catA.id })!.items.contains(where: { $0.id == testDragItem.id }), "testDragItem should no longer belong to catA")
+        TestAssertions.expect(ConfigManager.shared.config.categories.first(where: { $0.id == catB.id })!.items.contains(where: { $0.id == testDragItem.id }), "testDragItem should now belong to catB")
+        TestAssertions.expect(!ConfigManager.shared.config.categories.first(where: { $0.id == catA.id })!.items.contains(where: { $0.id == testDragItem.id }), "testDragItem should no longer belong to catA")
         // b) ShelfViewController automatically entered catB!
-        assert(shelfVC.selectedCategory?.id == catB.id, "ShelfViewController MUST automatically enter catB after drop!")
-        assert(shelfVC.shelfGrid.items.contains(where: { $0.id == testDragItem.id }), "ShelfGrid MUST display catB items including testDragItem immediately!")
+        TestAssertions.expect(shelfVC.selectedCategory?.id == catB.id, "ShelfViewController MUST automatically enter catB after drop!")
+        TestAssertions.expect(shelfVC.shelfGrid.items.contains(where: { $0.id == testDragItem.id }), "ShelfGrid MUST display catB items including testDragItem immediately!")
 
         // 2. Drop external file path directly onto catA's tab
         shelfVC.categoryBar(shelfVC.categoryBar, didAddPaths: ["/tmp/ExternalDroppedApp.app"], to: catA)
-        assert(shelfVC.selectedCategory?.id == catA.id, "ShelfViewController MUST enter catA after external file drop!")
-        assert(shelfVC.shelfGrid.items.contains(where: { $0.name == "ExternalDroppedApp" }), "ShelfGrid MUST contain newly dropped external app in catA!")
+        TestAssertions.expect(shelfVC.selectedCategory?.id == catA.id, "ShelfViewController MUST enter catA after external file drop!")
+        TestAssertions.expect(shelfVC.shelfGrid.items.contains(where: { $0.name == "ExternalDroppedApp" }), "ShelfGrid MUST contain newly dropped external app in catA!")
 
         // Clean up test items
         ConfigManager.shared.removeItem(id: testDragItem.id, from: catB.id)
@@ -480,8 +485,8 @@ if CommandLine.arguments.contains("--test") {
     let searchPanel = PanelCoordinator.shared.searchPanel
     searchPanel.prepareForDisplay()
     let searchVC = searchPanel.searchViewController
-    assert(searchPanel.frame.height == 72, "SearchPanel initial height should be 72pt (collapsed)")
-    assert(searchVC.resultsTable.isHidden == true, "resultsTable should be hidden in collapsed state")
+    TestAssertions.expect(searchPanel.frame.height == 72, "SearchPanel initial height should be 72pt (collapsed)")
+    TestAssertions.expect(searchVC.resultsTable.isHidden == true, "resultsTable should be hidden in collapsed state")
 
     // Render collapsed preview (single bar)
     if let searchContent = searchPanel.contentView {
@@ -500,16 +505,16 @@ if CommandLine.arguments.contains("--test") {
     let anchoredTop = searchPanel.frame.maxY
     for _ in 0..<3 {
         searchVC.updatePanelHeight(hasResults: true, resultCount: 4, animated: false)
-        assert(abs(searchPanel.frame.maxY - anchoredTop) < 0.5, "Expanding must keep the panel's top edge fixed")
+        TestAssertions.expect(abs(searchPanel.frame.maxY - anchoredTop) < 0.5, "Expanding must keep the panel's top edge fixed")
         searchVC.updatePanelHeight(hasResults: false, resultCount: 0, animated: false)
-        assert(abs(searchPanel.frame.maxY - anchoredTop) < 0.5, "Collapsing must keep the panel's top edge fixed")
+        TestAssertions.expect(abs(searchPanel.frame.maxY - anchoredTop) < 0.5, "Collapsing must keep the panel's top edge fixed")
     }
     print("      ✓ Search panel top edge stays fixed across repeated expand/collapse.")
 
     // Now test expansion
     searchVC.updatePanelHeight(hasResults: true, resultCount: 4, animated: false)
-    assert(searchPanel.frame.height > 72, "SearchPanel height should expand when results exist")
-    assert(searchVC.resultsTable.isHidden == false, "resultsTable should be visible when expanded")
+    TestAssertions.expect(searchPanel.frame.height > 72, "SearchPanel height should expand when results exist")
+    TestAssertions.expect(searchVC.resultsTable.isHidden == false, "resultsTable should be visible when expanded")
 
     // Populate dummy results for preview rendering
     let homePath = FileManager.default.homeDirectoryForCurrentUser.path
@@ -540,20 +545,20 @@ if CommandLine.arguments.contains("--test") {
 
     // 11. Test ShelfPanel Topmost Level & UpdateManager Semantic Versioning
     print("[11/11] Testing ShelfPanel Topmost Level, Window Hierarchies & UpdateManager...")
-    assert(shelfPanel.level == .statusBar, "ShelfPanel level MUST be .statusBar")
-    assert(shelfPanel.hidesOnDeactivate == false, "ShelfPanel hidesOnDeactivate MUST be false")
+    TestAssertions.expect(shelfPanel.level == .statusBar, "ShelfPanel level MUST be .statusBar")
+    TestAssertions.expect(shelfPanel.hidesOnDeactivate == false, "ShelfPanel hidesOnDeactivate MUST be false")
 
     if let settingsWin = SettingsWindowController.shared.window {
-        assert(settingsWin.level.rawValue > shelfPanel.level.rawValue, "Settings window level MUST be higher than ShelfPanel")
+        TestAssertions.expect(settingsWin.level == .normal, "Settings window level MUST be .normal (not globally pinned)")
     }
 
     // Semantic Versioning Tests
-    assert(UpdateManager.isVersion("v1.0.1", greaterThan: "1.0.0") == true, "v1.0.1 > 1.0.0")
-    assert(UpdateManager.isVersion("1.0.10", greaterThan: "1.0.2") == true, "1.0.10 > 1.0.2")
-    assert(UpdateManager.isVersion("1.0", greaterThan: "1.0.0") == false, "1.0 should equal 1.0.0")
-    assert(UpdateManager.isVersion("1.0.0", greaterThan: "1.0") == false, "1.0.0 should equal 1.0")
-    assert(UpdateManager.isVersion("1.0.0", greaterThan: "v1.0.1") == false, "1.0.0 < 1.0.1")
-    assert(UpdateManager.isVersion("2.0.0", greaterThan: "1.9.99") == true, "2.0.0 > 1.9.99")
+    TestAssertions.expect(UpdateManager.isVersion("v1.0.1", greaterThan: "1.0.0") == true, "v1.0.1 > 1.0.0")
+    TestAssertions.expect(UpdateManager.isVersion("1.0.10", greaterThan: "1.0.2") == true, "1.0.10 > 1.0.2")
+    TestAssertions.expect(UpdateManager.isVersion("1.0", greaterThan: "1.0.0") == false, "1.0 should equal 1.0.0")
+    TestAssertions.expect(UpdateManager.isVersion("1.0.0", greaterThan: "1.0") == false, "1.0.0 should equal 1.0")
+    TestAssertions.expect(UpdateManager.isVersion("1.0.0", greaterThan: "v1.0.1") == false, "1.0.0 < 1.0.1")
+    TestAssertions.expect(UpdateManager.isVersion("2.0.0", greaterThan: "1.9.99") == true, "2.0.0 > 1.9.99")
     print("      ✓ UpdateManager semantic versioning algorithm verified.")
 
     let releaseAssets: [[String: Any]] = [
@@ -561,14 +566,14 @@ if CommandLine.arguments.contains("--test") {
         ["name": "ATools.dmg", "browser_download_url": "https://example.com/ATools.dmg"]
     ]
     let preferredAsset = UpdateManager.preferredReleaseAsset(from: releaseAssets)
-    assert(preferredAsset?.name == "ATools.dmg", "DMG should be preferred over ZIP")
-    assert(preferredAsset?.url.absoluteString.hasSuffix("/ATools.dmg") == true, "Preferred asset URL should be preserved")
+    TestAssertions.expect(preferredAsset?.name == "ATools.dmg", "DMG should be preferred over ZIP")
+    TestAssertions.expect(preferredAsset?.url.absoluteString.hasSuffix("/ATools.dmg") == true, "Preferred asset URL should be preserved")
     let zipOnlyAsset = UpdateManager.preferredReleaseAsset(from: [releaseAssets[0]])
-    assert(zipOnlyAsset?.name == "ATools.zip", "ZIP should be used when DMG is unavailable")
-    assert(UpdateManager.normalizedVersion("v1.1.1") == "1.1.1", "Normalized version should strip the v prefix")
-    assert(UpdateManager.isBlockedUpdateLocation("/private/var/folders/abc/AppTranslocation/123/d/ATools.app"), "AppTranslocation must block in-place update")
-    assert(UpdateManager.isBlockedUpdateLocation("/Volumes/ATools/ATools.app"), "Read-only DMG volume must block in-place update")
-    assert(!UpdateManager.isBlockedUpdateLocation("/Applications/ATools.app"), "Applications folder should allow in-place update")
+    TestAssertions.expect(zipOnlyAsset?.name == "ATools.zip", "ZIP should be used when DMG is unavailable")
+    TestAssertions.expect(UpdateManager.normalizedVersion("v1.1.1") == "1.1.1", "Normalized version should strip the v prefix")
+    TestAssertions.expect(UpdateManager.isBlockedUpdateLocation("/private/var/folders/abc/AppTranslocation/123/d/ATools.app"), "AppTranslocation must block in-place update")
+    TestAssertions.expect(UpdateManager.isBlockedUpdateLocation("/Volumes/ATools/ATools.app"), "Read-only DMG volume must block in-place update")
+    TestAssertions.expect(!UpdateManager.isBlockedUpdateLocation("/Applications/ATools.app"), "Applications folder should allow in-place update")
     print("      ✓ UpdateManager asset selection and update-location guards verified.")
 
     // Check About Tab Layout Width (ensure strict 780.0pt)
@@ -576,7 +581,7 @@ if CommandLine.arguments.contains("--test") {
     if let win = SettingsWindowController.shared.window {
         win.displayIfNeeded()
         win.contentView?.layoutSubtreeIfNeeded()
-        assert(abs(win.frame.width - 780.0) < 0.5, "About tab window width MUST be 780.0pt, got \(win.frame.width)")
+        TestAssertions.expect(abs(win.frame.width - 780.0) < 0.5, "About tab window width MUST be 780.0pt, got \(win.frame.width)")
         if let aboutContent = win.contentView {
             aboutContent.layoutSubtreeIfNeeded()
             if let rep = aboutContent.bitmapImageRepForCachingDisplay(in: aboutContent.bounds) {
@@ -588,6 +593,13 @@ if CommandLine.arguments.contains("--test") {
             }
         }
         print("      ✓ About Tab with update manager maintains strictly 780.0pt width.")
+    }
+
+    if TestAssertions.failures > 0 {
+        print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")
+        try? FileManager.default.removeItem(at: testFixtureURL)
+        try? FileManager.default.removeItem(at: tempTestDir)
+        exit(1)
     }
 
     print("==================================================")

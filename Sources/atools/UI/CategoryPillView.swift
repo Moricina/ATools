@@ -79,6 +79,8 @@ public final class CategoryPillView: NSView {
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
 
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("分类: \(category.name)")
         updateAppearanceStyles()
     }
 

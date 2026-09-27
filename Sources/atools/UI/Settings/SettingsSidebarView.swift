@@ -57,6 +57,8 @@ private final class SidebarRowButton: NSButton {
         self.wantsLayer = true
         self.layer?.cornerRadius = 8
         setupContent()
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(item.title)
     }
 
     required init?(coder: NSCoder) {

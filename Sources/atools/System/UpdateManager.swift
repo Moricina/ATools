@@ -44,15 +44,32 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     public static let shared = UpdateManager()
 
     public static let stateDidChangeNotification = Notification.Name("UpdateManagerStateDidChangeNotification")
+    private static let expectedBundleIdentifier = "cc.atools.app"
 
-    public private(set) var currentState: UpdateState = .idle {
-        didSet {
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(
-                    name: UpdateManager.stateDidChangeNotification,
-                    object: self
-                )
+    private let stateLock = NSLock()
+    private var _currentState: UpdateState = .idle
+    private var _targetRelease: ReleaseInfo?
+
+    /// All update state is read and written through one lock. Public mutations are forced onto
+    /// the main thread so Settings observes a stable state model even from URLSession callbacks.
+    public private(set) var currentState: UpdateState {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _currentState
+        }
+        set {
+            guard Thread.isMainThread else {
+                DispatchQueue.main.async { [weak self] in self?.currentState = newValue }
+                return
             }
+            stateLock.lock()
+            _currentState = newValue
+            stateLock.unlock()
+            NotificationCenter.default.post(
+                name: UpdateManager.stateDidChangeNotification,
+                object: self
+            )
         }
     }
 
@@ -68,7 +85,18 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
 
-    private var targetRelease: ReleaseInfo?
+    private var targetRelease: ReleaseInfo? {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _targetRelease
+        }
+        set {
+            stateLock.lock()
+            _targetRelease = newValue
+            stateLock.unlock()
+        }
+    }
 
     public var currentAppVersion: String {
         return Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
@@ -537,7 +565,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             throw NSError(domain: "UpdateManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "更新包缺少有效的 Info.plist"])
         }
 
-        guard plist["CFBundleIdentifier"] as? String == "cc.atools.app",
+        guard plist["CFBundleIdentifier"] as? String == UpdateManager.expectedBundleIdentifier,
               plist["CFBundleExecutable"] as? String == "ATools",
               FileManager.default.isExecutableFile(atPath: executablePath) else {
             throw NSError(domain: "UpdateManager", code: 5, userInfo: [NSLocalizedDescriptionKey: "更新包中的应用标识或可执行文件无效"])
@@ -566,6 +594,60 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         guard verifyProcess.terminationStatus == 0 else {
             throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包代码签名校验失败"])
         }
+
+        try validateCodeSignature(at: stagingAppPath)
+    }
+
+    /// Validates the Apple designated requirement and signer identity in addition to structural
+    /// codesign verification. Ad-hoc builds remain supported, but may only replace ad-hoc builds;
+    /// Developer ID builds must retain the same Team ID.
+    private func validateCodeSignature(at stagingAppPath: String) throws {
+        let stagedDescription = UpdateManager.codesign(arguments: ["-dv", "--verbose=4", stagingAppPath])
+        let stagedRequirement = UpdateManager.codesign(arguments: ["-dr", "-", stagingAppPath])
+        guard stagedDescription.status == 0,
+              stagedRequirement.status == 0,
+              stagedRequirement.output.contains("identifier \"\(UpdateManager.expectedBundleIdentifier)\"") else {
+            throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包 designated requirement 无效"])
+        }
+
+        let currentDescription = UpdateManager.codesign(arguments: ["-dv", "--verbose=4", Bundle.main.bundlePath])
+        let currentTeam = UpdateManager.teamIdentifier(in: currentDescription.output)
+        let stagedTeam = UpdateManager.teamIdentifier(in: stagedDescription.output)
+
+        if let currentTeam {
+            guard stagedTeam == currentTeam else {
+                throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包签名 Team ID 与当前应用不一致"])
+            }
+        } else {
+            guard stagedTeam == nil, stagedDescription.output.contains("Signature=adhoc") else {
+                throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "当前 ad-hoc 构建仅接受 ad-hoc 更新包"])
+            }
+        }
+    }
+
+    private static func teamIdentifier(in output: String) -> String? {
+        for line in output.split(separator: "\n") where line.hasPrefix("TeamIdentifier=") {
+            let value = line.dropFirst("TeamIdentifier=".count)
+            return value == "not set" ? nil : String(value)
+        }
+        return nil
+    }
+
+    private static func codesign(arguments: [String]) -> (status: Int32, output: String) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+        } catch {
+            return (-1, error.localizedDescription)
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
     private func detachDMG(mountPoint: String) throws {

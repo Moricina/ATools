@@ -333,6 +333,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private var verticalConstraints: [NSLayoutConstraint] = []
 
     internal var selectedCategory: Category?
+    private var typeAheadQuery = ""
+    private var typeAheadResetWorkItem: DispatchWorkItem?
 
     override public func loadView() {
         let savedW = CGFloat(ConfigManager.shared.config.shelfWidth)
@@ -552,6 +554,96 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         // 兼容保留接口，按钮 UI 已按需求精简移除
     }
 
+    public func handleKeyDown(_ event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command) {
+            if event.charactersIgnoringModifiers == "," {
+                SettingsWindowController.shared.showSettingsWindow()
+                return true
+            }
+            if let chars = event.charactersIgnoringModifiers {
+                switch chars {
+                case "\u{f702}": // left arrow
+                    return categoryBar.moveSelection(by: -1)
+                case "\u{f703}": // right arrow
+                    return categoryBar.moveSelection(by: 1)
+                case "\u{f700}", "\u{f701}": // up/down arrows
+                    return categoryBar.moveSelection(by: chars == "\u{f700}" ? -1 : 1)
+                default:
+                    break
+                }
+            }
+        }
+
+        switch event.keyCode {
+        case 123: // left
+            return shelfGrid.moveKeyboardSelection(horizontal: -1, vertical: 0)
+        case 124: // right
+            return shelfGrid.moveKeyboardSelection(horizontal: 1, vertical: 0)
+        case 125: // down
+            return shelfGrid.moveKeyboardSelection(horizontal: 0, vertical: 1)
+        case 126: // up
+            return shelfGrid.moveKeyboardSelection(horizontal: 0, vertical: -1)
+        case 36, 76: // return / keypad enter
+            if shelfGrid.keyboardSelectedItem != nil {
+                shelfGrid.executeKeyboardSelection()
+                return true
+            }
+            return false
+        case 48: // tab
+            return categoryBar.moveSelection(by: event.modifierFlags.contains(.shift) ? -1 : 1)
+        case 51, 117: // delete / forward delete
+            if !typeAheadQuery.isEmpty {
+                if event.keyCode == 51 { typeAheadQuery.removeLast() }
+                else { typeAheadQuery.removeAll() }
+                applyTypeAhead()
+                return true
+            }
+            return false
+        default:
+            break
+        }
+
+        guard !event.modifierFlags.contains([.command, .control, .option]),
+              let chars = event.characters,
+              let scalar = chars.unicodeScalars.first,
+              CharacterSet.alphanumerics.contains(scalar) || chars == " " else {
+            return false
+        }
+        typeAheadQuery.append(chars)
+        applyTypeAhead()
+        return true
+    }
+
+    public func cancelKeyboardFilter() -> Bool {
+        guard !typeAheadQuery.isEmpty else { return false }
+        typeAheadQuery.removeAll()
+        applyTypeAhead()
+        return true
+    }
+
+    public func resetKeyboardState() {
+        typeAheadResetWorkItem?.cancel()
+        typeAheadResetWorkItem = nil
+        typeAheadQuery.removeAll()
+        shelfGrid.clearKeyboardSelection()
+        shelfGrid.applyFilter("")
+    }
+
+    private func applyTypeAhead() {
+        shelfGrid.applyFilter(typeAheadQuery)
+        if !typeAheadQuery.isEmpty {
+            shelfGrid.selectFirstVisibleItem()
+        }
+        typeAheadResetWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.typeAheadQuery.isEmpty else { return }
+            self.typeAheadQuery.removeAll()
+            self.applyTypeAhead()
+        }
+        typeAheadResetWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
     override public func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "," {
             SettingsWindowController.shared.showSettingsWindow()
@@ -561,7 +653,9 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     override public func cancelOperation(_ sender: Any?) {
-        PanelCoordinator.shared.hideAllPanels()
+        if !cancelKeyboardFilter() {
+            PanelCoordinator.shared.hideAllPanels()
+        }
     }
 
     public func loadData() {
@@ -592,6 +686,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     // MARK: - CategoryBarDelegate
     public func categoryBar(_ bar: CategoryBarView, didSelectCategory category: Category) {
+        typeAheadQuery.removeAll()
+        shelfGrid.applyFilter("")
         if let latestCategory = ConfigManager.shared.config.categories.first(where: { $0.id == category.id }) {
             self.selectedCategory = latestCategory
             shelfGrid.reloadData(items: latestCategory.items)
@@ -840,8 +936,13 @@ public final class ShelfPanel: NSPanel {
     }
 
     override public func keyDown(with event: NSEvent) {
+        if shelfViewController.handleKeyDown(event) {
+            return
+        }
         if event.keyCode == 53 { // Esc
-            PanelCoordinator.shared.hideAllPanels()
+            if !shelfViewController.cancelKeyboardFilter() {
+                PanelCoordinator.shared.hideAllPanels()
+            }
             return
         }
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "," {
@@ -852,6 +953,10 @@ public final class ShelfPanel: NSPanel {
     }
 
     public func prepareForDisplay() {
+        shelfViewController.resetKeyboardState()
         shelfViewController.loadData()
+        // mouseExited is not guaranteed when the panel hides under the cursor;
+        // clear stale hover so no leftover shadow shows on re-show.
+        shelfViewController.shelfGrid.resetInteractionStates()
     }
 }

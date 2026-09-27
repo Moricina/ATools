@@ -2,6 +2,37 @@ import Foundation
 import AppKit
 import SwiftUI
 
+/// Shared visual profile for the search capsule and its expanded result sheet.
+/// Keeping the recipe here prevents the collapsed and expanded surfaces from
+/// drifting apart while still allowing the configured panel opacity to fade
+/// only the glass, never the text or controls above it.
+struct SearchGlassSurfaceProfile {
+    let tintColor: NSColor
+    let tintOpacity: CGFloat
+    let surfaceAlpha: CGFloat
+
+    private static let darkBaseTintOpacity: CGFloat = 0.76
+    private static let darkEmphasizedTintOpacity: CGFloat = 0.82
+    private static let lightBaseTintOpacity: CGFloat = 0.58
+    private static let lightEmphasizedTintOpacity: CGFloat = 0.66
+
+    static func resolved(isDark: Bool, isEmphasized: Bool, themeOpacity: Double) -> SearchGlassSurfaceProfile {
+        let clampedOpacity = CGFloat(max(0.40, min(1.00, themeOpacity)))
+        if isDark {
+            return SearchGlassSurfaceProfile(
+                tintColor: GlassPalette.darkBaseTop,
+                tintOpacity: isEmphasized ? darkEmphasizedTintOpacity : darkBaseTintOpacity,
+                surfaceAlpha: clampedOpacity
+            )
+        }
+        return SearchGlassSurfaceProfile(
+            tintColor: GlassPalette.lightGlassTint,
+            tintOpacity: isEmphasized ? lightEmphasizedTintOpacity : lightBaseTintOpacity,
+            surfaceAlpha: clampedOpacity
+        )
+    }
+}
+
 /// A true macOS 26+ liquid-glass surface.
 ///
 /// Unlike `NSVisualEffectView` (a plain frosted blur), the SwiftUI
@@ -11,6 +42,8 @@ import SwiftUI
 class LiquidGlassContainerView: NSView {
     private var hostingView: NSView?
     private let fallbackEffect = NSVisualEffectView()
+    private var lastFallbackMaskSize: CGSize = .zero
+    private var lastFallbackMaskRadius: CGFloat = -1
 
     // Each setter guards against no-op writes: rebuilding the SwiftUI root view is not free,
     // and callers (e.g. VisualEffectBackdropView.layout) assign these on every layout pass.
@@ -100,10 +133,36 @@ class LiquidGlassContainerView: NSView {
     private func update() {
         layer?.cornerRadius = cornerRadius
         updateSoftEdgeMask()
+        updateFallbackMask()
         if #available(macOS 26.0, *) {
             if let hosting = hostingView as? NSHostingView<LiquidGlassRoot> {
                 hosting.rootView = makeRootView()
             }
+        }
+    }
+
+    /// `NSVisualEffectView` with `.behindWindow` is not reliably clipped by its
+    /// parent layer on macOS 12-25. A generated rounded-rect mask keeps the
+    /// fallback material inside the same silhouette as the liquid-glass path.
+    private func updateFallbackMask() {
+        guard !fallbackEffect.isHidden else { return }
+        guard bounds.width > 1, bounds.height > 1 else {
+            fallbackEffect.maskImage = nil
+            lastFallbackMaskSize = .zero
+            lastFallbackMaskRadius = -1
+            return
+        }
+        guard bounds.size != lastFallbackMaskSize || cornerRadius != lastFallbackMaskRadius else { return }
+
+        lastFallbackMaskSize = bounds.size
+        lastFallbackMaskRadius = cornerRadius
+        let size = bounds.size
+        let radius = cornerRadius
+        fallbackEffect.maskImage = NSImage(size: size, flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+            NSColor.white.setFill()
+            path.fill()
+            return true
         }
     }
 
@@ -178,6 +237,7 @@ class LiquidGlassContainerView: NSView {
     override func layout() {
         super.layout()
         layer?.cornerRadius = cornerRadius
+        updateFallbackMask()
         // Rebuilding the mask layers is only needed when the size actually changes.
         if softEdgeEnabled, bounds.size != lastMaskedSize {
             lastMaskedSize = bounds.size

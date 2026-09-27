@@ -45,8 +45,17 @@ public struct HotkeyBinding: Codable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.keyCode = (try? container.decode(UInt32.self, forKey: .keyCode)) ?? 0
         self.carbonModifiers = (try? container.decode(UInt32.self, forKey: .carbonModifiers)) ?? 0
-        self.displayString = (try? container.decode(String.self, forKey: .displayString)) ?? ""
         self.specialTrigger = (try? container.decode(HotkeySpecialTrigger.self, forKey: .specialTrigger)) ?? .none
+        let storedDisplay = (try? container.decode(String.self, forKey: .displayString)) ?? ""
+        if storedDisplay.isEmpty && carbonModifiers == 0 && specialTrigger == .none {
+            self.displayString = ""
+        } else {
+            self.displayString = HotkeyDisplayFormatter.displayString(
+                keyCode: keyCode,
+                carbonModifiers: carbonModifiers,
+                specialTrigger: specialTrigger
+            )
+        }
     }
 
     /// A cleared binding (keyCode 0 == 'A', no modifiers) must never be registered,

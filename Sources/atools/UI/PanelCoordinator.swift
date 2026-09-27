@@ -6,6 +6,45 @@ public enum PanelKind {
     case search  // 面板 B: Spotlight 风格全盘搜索
 }
 
+public enum PanelDismissReason {
+    case appDeactivated
+    case appSwitched
+    case windowResigned
+    case outsideClick
+}
+
+/// Single source of truth for automatic dismissal. Pinning the shelf always
+/// takes precedence over the configured auto-close behavior.
+struct PanelDismissPolicy {
+    /// Evaluates whether the active panel should be dismissed given current state.
+    /// Consolidates all protection conditions: pinned shelf, drag session,
+    /// modal windows, settings window key status, and right-click menu protection.
+    static func shouldDismiss(
+        activePanel: PanelKind,
+        isShelfPinned: Bool,
+        autoCloseOnDeactivate: Bool,
+        isDraggingActive: Bool,
+        hasModalWindow: Bool,
+        isSettingsWindowKey: Bool = false,
+        isRightClickMenuOpen: Bool = false
+    ) -> Bool {
+        // Drag session, modal windows, right-click menus, and settings window
+        // all protect the panel from dismissal.
+        guard !isDraggingActive, !hasModalWindow else { return false }
+        guard !isRightClickMenuOpen else { return false }
+        guard !isSettingsWindowKey else { return false }
+        // Pinning the shelf takes precedence over all auto-close behavior.
+        if activePanel == .shelf && isShelfPinned { return false }
+        return autoCloseOnDeactivate
+    }
+}
+
+public protocol PanelVisibleFrameProviding: AnyObject {
+    /// The visible panel surface in screen coordinates, excluding transparent
+    /// window margins used by the reveal animation.
+    var visiblePanelFrame: NSRect { get }
+}
+
 public final class PanelCoordinator {
     public static let shared = PanelCoordinator()
 
@@ -27,9 +66,20 @@ public final class PanelCoordinator {
 
     private var activePanel: PanelKind?
     private var globalClickMonitor: Any?
+    private var localClickMonitor: Any?
+    private var workspaceActivationObserver: Any?
+    private var windowResignObserver: Any?
+    private var panelPresentationGeneration: UInt = 0
 
     /// 标记当前是否正处于向外部 App 拖拽文件的会话中，拖拽期间屏蔽一切外部失焦销毁
     public var isDraggingActive: Bool = false
+
+    /// Tracks whether a right-click context menu is currently open, so that
+    /// the panel is not dismissed when the user right-clicks on a grid item.
+    private var isRightClickMenuOpen: Bool = false
+    /// Tracks whether a non-left mouse button is currently pressed (prevents
+    /// dismissal on right/middle mouseDown; only dismisses on mouseUp).
+    private var isNonLeftMouseDown: Bool = false
 
     // 分类抽屉固定桌面状态，持久化到配置；跨 App 拖拽保护由 isDraggingActive 独立承担
     public var isShelfPinned: Bool {
@@ -55,13 +105,84 @@ public final class PanelCoordinator {
         ) { [weak self] _ in
             self?.handleAppResignedActive()
         }
+
+        workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self else { return }
+            let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            if activated?.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
+            self.handleAutomaticDismissal(.appSwitched)
+        }
+
+        windowResignObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self,
+                  let window = notification.object as? NSWindow,
+                  window === self.currentPanel else { return }
+            // AppKit can briefly resign a panel key while opening a menu or
+            // child sheet. Re-check after the current event is dispatched.
+            DispatchQueue.main.async {
+                self.handleAutomaticDismissal(.windowResigned)
+            }
+        }
+
+        // Monitor mouse-up events for non-left buttons to track right-click menu state.
+        // This catches right-click menus opened on grid items, category pills, etc.
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.isRightClickMenuOpen = true
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSMenu.didEndTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            // Delay slightly to avoid a race between menu close and the
+            // click event that triggered it.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                self?.isRightClickMenuOpen = false
+            }
+        }
     }
 
     private func handleAppResignedActive() {
-        guard let active = activePanel, !isDraggingActive, NSApp.modalWindow == nil else { return }
-        if active == .shelf && (isShelfPinned || !ConfigManager.shared.config.autoCloseOnDeactivate) {
-            return
+        handleAutomaticDismissal(.appDeactivated)
+    }
+
+    private var currentPanel: NSPanel? {
+        switch activePanel {
+        case .shelf: return shelfPanelCreated ? shelfPanel : nil
+        case .search: return searchPanelCreated ? searchPanel : nil
+        case nil: return nil
         }
+    }
+
+    private func handleAutomaticDismissal(_ reason: PanelDismissReason) {
+        guard let active = activePanel else { return }
+        if reason == .windowResigned {
+            // Another ATools-owned window, menu or sheet temporarily taking key
+            // status is not an external focus loss. App/workspace notifications
+            // cover actual switches to another application.
+            if SettingsWindowController.isSettingsWindowKey || NSApp.keyWindow != nil { return }
+        }
+        guard PanelDismissPolicy.shouldDismiss(
+            activePanel: active,
+            isShelfPinned: isShelfPinned,
+            autoCloseOnDeactivate: ConfigManager.shared.config.autoCloseOnDeactivate,
+            isDraggingActive: isDraggingActive,
+            hasModalWindow: NSApp.modalWindow != nil,
+            isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
+            isRightClickMenuOpen: isRightClickMenuOpen
+        ) else { return }
         hideAllPanels(restoreFocus: false)
     }
 
@@ -86,6 +207,7 @@ public final class PanelCoordinator {
         if target == .shelf && !ConfigManager.shared.config.enableShelfPanel { return }
         if target == .search && !ConfigManager.shared.config.enableSearchPanel { return }
 
+        panelPresentationGeneration &+= 1
         if activePanel == nil,
            let frontmost = NSWorkspace.shared.frontmostApplication,
            frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier {
@@ -164,27 +286,38 @@ public final class PanelCoordinator {
     /// Reset any transient entrance animation left on a panel's content view.
     private func resetPanelEntrance(_ panel: NSPanel) {
         panel.contentView?.layer?.removeAnimation(forKey: "atools.entrance")
+        panel.contentView?.layer?.removeAnimation(forKey: "atools.dismiss")
         panel.alphaValue = 1.0
     }
 
     /// - Parameter restoreFocus: re-activate the app that was frontmost before the panel was
     ///   summoned. Without this, dismissing with Esc left ATools (a window-less accessory app)
     ///   active and keyboard input went nowhere until the user clicked another window.
-    public func hideAllPanels(restoreFocus: Bool = true) {
+    public func hideAllPanels(restoreFocus: Bool = true, animated: Bool = true) {
+        panelPresentationGeneration &+= 1
+        let generation = panelPresentationGeneration
         let wasShowingPanel = activePanel != nil
         isDraggingActive = false
         stopGlobalOutsideClickMonitor()
 
+        var panelsToHide: [NSPanel] = []
         // Only touch panels that exist; the lazy getters would otherwise build both panels.
         if shelfPanelCreated {
-            resetPanelEntrance(shelfPanel)
-            shelfPanel.orderOut(nil)
+            panelsToHide.append(shelfPanel)
         }
         if searchPanelCreated {
-            resetPanelEntrance(searchPanel)
-            searchPanel.orderOut(nil)
+            panelsToHide.append(searchPanel)
         }
         activePanel = nil
+
+        for panel in panelsToHide where panel.isVisible {
+            if animated {
+                animatePanelDismissal(panel, generation: generation)
+            } else {
+                panel.orderOut(nil)
+                resetPanelEntrance(panel)
+            }
+        }
 
         let settingsVisible = SettingsWindowController.isWindowVisible
         if restoreFocus, wasShowingPanel, !settingsVisible, NSApp.isActive,
@@ -196,28 +329,37 @@ public final class PanelCoordinator {
         MemoryGuardian.shared.onPanelsDidHide()
     }
 
+    private func animatePanelDismissal(_ panel: NSPanel, generation: UInt) {
+        // Do NOT remove the entrance animation before the fade — the sublayerTransform
+        // snap-back (0.96→1.0) renders for one frame and causes a visible flash.
+        // Clean up after the fade so the panel is already invisible when the layer resets.
+        NSAnimationContext.runAnimationGroup(
+            { context in
+                context.duration = 0.09
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 1.0, 1.0)
+                panel.animator().alphaValue = 0.0
+            },
+            completionHandler: { [weak self, weak panel] in
+                guard let self = self, let panel = panel, self.panelPresentationGeneration == generation else { return }
+                panel.orderOut(nil)
+                self.resetPanelEntrance(panel)
+            }
+        )
+    }
+
     private func installGlobalOutsideClickMonitor() {
         stopGlobalOutsideClickMonitor()
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp, .rightMouseDown]) { [weak self] _ in
-            guard let self = self, let active = self.activePanel else { return }
-            if self.isDraggingActive { return }
-            // Do not dismiss panel if a modal alert/window is currently presented or Settings window is clicked
-            if NSApp.modalWindow != nil { return }
-            let clickLoc = NSEvent.mouseLocation
-            if let settingsFrame = SettingsWindowController.visibleWindowFrame, NSPointInRect(clickLoc, settingsFrame) {
-                return
-            }
-
-            // 核心隔离：工作台处于 Pinned 状态或未开启失焦关闭时，外部点击不关闭
-            if active == .shelf && (self.isShelfPinned || !ConfigManager.shared.config.autoCloseOnDeactivate) {
-                return
-            }
-
-            let currentPanel = (active == .shelf) ? self.shelfPanel : self.searchPanel
-
-            if !NSPointInRect(clickLoc, currentPanel.frame) {
-                self.hideAllPanels()
-            }
+        // Monitor leftMouseDown globally for outside-click dismissal.
+        // Right/middle clicks are tracked separately: we delay dismissal until
+        // mouseUp so that right-click context menus can open without closing the panel.
+        let globalMask: NSEvent.EventTypeMask = [.leftMouseDown]
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: globalMask) { [weak self] _ in
+            self?.handleOutsideInteraction()
+        }
+        let localMask: NSEvent.EventTypeMask = [.leftMouseDown]
+        localClickMonitor = NSEvent.addLocalMonitorForEvents(matching: localMask) { [weak self] event in
+            self?.handleOutsideInteraction()
+            return event
         }
     }
 
@@ -225,6 +367,35 @@ public final class PanelCoordinator {
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
+        }
+        if let monitor = localClickMonitor {
+            NSEvent.removeMonitor(monitor)
+            localClickMonitor = nil
+        }
+    }
+
+    private func handleOutsideInteraction() {
+        guard activePanel != nil else { return }
+        if isDraggingActive || NSApp.modalWindow != nil { return }
+        if isRightClickMenuOpen { return }
+
+        let clickLoc = NSEvent.mouseLocation
+        if let settingsFrame = SettingsWindowController.visibleWindowFrame, NSPointInRect(clickLoc, settingsFrame) {
+            return
+        }
+        guard let panel = currentPanel else { return }
+        // Use the visible content area (excluding transparent margins) to determine
+        // whether the click was truly outside the panel. The search panel has 14pt
+        // transparent margins around its content for the reveal animation.
+        let visibleFrame = (panel as? PanelVisibleFrameProviding)?.visiblePanelFrame ?? panel.frame
+        guard !NSPointInRect(clickLoc, visibleFrame) else { return }
+        // Delay one RunLoop iteration so that menu opening, drag initiation and
+        // other transient states have time to set their flags before we check.
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.activePanel != nil else { return }
+            if self.isDraggingActive || NSApp.modalWindow != nil { return }
+            if self.isRightClickMenuOpen { return }
+            self.handleAutomaticDismissal(.outsideClick)
         }
     }
 

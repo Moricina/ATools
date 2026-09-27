@@ -27,7 +27,7 @@
   * **彻底消除闪退与停留**：UI 跨线程刷新保护，主线程重定向与监听器生命周期严密闭环，彻底根除 Option+Space 退出 Bug。
   * **原生中文拼音输入法 (IME) 深度兼容**：打拼音组字阶段（Marked Text）不截断回车与上下选词。
   * **0 毫秒** 匹配全盘核心应用（支持中文拼音简拼/全拼）。
-  * 基于 CoreServices `MDQuery` 实现全盘文件检索，直连 macOS 系统索引，**无须自建数据库，零磁盘写入消耗**。
+  * 基于系统 `NSMetadataQuery` 实现全盘文件检索，直连 macOS Spotlight 索引，**无须自建数据库，减少额外磁盘扫描**。
   * **彻底替代聚焦 (Spotlight)**：
     * 🧮 **实时计算器**：输入 `(1024 * 768) / 2`、`0x10 + 32` 回车即刻复制计算结果。
     * 📖 **离线系统词典**：调用 `DCSCopyTextDefinition`，输入单词秒出释义。
@@ -57,12 +57,8 @@
 ### 方式 A：直接下载使用（面向普通 Mac 用户）
 1. 从 GitHub 的 **Releases** 页面下载最新发布的 **`ATools.dmg`**（或 `ATools.zip`）；
 2. 双击打开 `ATools.dmg`，将 **`ATools`** 直接拖入 **Applications (应用程序)** 文件夹；
-3. **关键：解除 macOS Gatekeeper 隔离（首次打开必须）**：
-   开源应用未购买苹果昂贵的商业开发者证书，macOS 默认会拦截并提示“已损坏”或“无法确认开发者”。打开终端运行以下一行命令即可永久解除：
-   ```bash
-   xattr -cr /Applications/ATools.app
-   ```
-4. 双击启动 `ATools` 即可顺畅使用！启动后右上角状态栏将出现 🔍 放大镜图标，常驻闲置内存仅 ~20MB。
+3. 首次打开时按 macOS Gatekeeper 提示确认来源；不要使用 `xattr -cr` 清除隔离属性。正式发布应使用 Apple Developer ID 签名并完成公证。
+4. 双击启动 `ATools` 即可顺畅使用！启动后右上角状态栏将出现 🔍 放大镜图标，常驻闲置内存约 20MB（RSS，非 Footprint）。
 
 ---
 
@@ -110,7 +106,25 @@ open ./ATools.app
 > **重要技术提醒：为什么不建议使用终端命令 `sudo mdutil -a -i off` 强行杀死后台索引？**
 > * 很多网上教程会建议执行 `sudo mdutil -a -i off`。这会彻底关闭 macOS 内核的 `mds` 元数据守护进程。
 > * **千万不要这样做！** 因为 `mds` 索引不仅供原生聚焦使用，macOS 系统的访达搜索、邮件检索、Xcode 索引以及第三方高效搜索工具（包括 atools 的 `MDQuery` 接口、Raycast、Alfred）都依赖该底层索引。
-> * atools 的核心优势在于 **“零自建数据库、零扫盘能耗”**，直接向系统已有的 `mds` 索取检索结果。因此只需关闭 Spotlight 的快捷键和菜单图标，保留后台索引，即可实现极致省电、0 额外开销的毫秒级全盘秒搜！
+> * atools 的核心优势在于 **“零自建数据库、减少额外扫盘”**，直接向系统已有的 `mds` 索取检索结果。因此只需关闭 Spotlight 的快捷键和菜单图标，保留后台索引，即可获得低开销的全盘搜索体验。
+
+---
+
+## 📝 最近更新记录
+
+### 本会话：应用抽屉 (Shelf) 选中与动效打磨
+
+* 🖱️ **选中高亮跟随鼠标**（`ShelfGridView.swift`）：
+  * 新增 `ShelfItemButton.onHoverChanged` 回调，悬停到哪个图标，选中背景就跟随到哪个；
+  * 引入 `pinnedSelectionID` 区分「悬停临时选中」与「键盘/点击固定选中」，鼠标移出图标或面板后高亮自动清除，不再残留阴影；
+  * 面板打开时不再默认选中第一个图标（`applyFilter` 不强制回落首项，显示前经 `clearKeyboardSelection()` 清空残留）。
+* 🌫️ **残留阴影治理**：
+  * `baseLayer` 样式变更全部包入显式 `CATransaction`（0.10s easeOut），消除独立 CALayer 默认 0.25s 隐式动画导致的阴影拖尾；
+  * 新增 `resetInteractionStates()`：快捷键收起面板时鼠标下方的图标收不到 `mouseExited`，hover 状态会卡死，下次打开残留阴影，现于每次显示前统一重置。
+* ⚡ **收起面板闪烁与提速**（`PanelCoordinator.swift`）：
+  * 收起时不再提前移除入场动画（`sublayerTransform` 0.96→1.0 跳变会闪一帧），改为淡出完成后在回调中清理；
+  * 调整 `orderOut` 与 `alphaValue` 复位顺序，避免淡出完成瞬间闪现全亮一帧；
+  * 收起动画 160ms → 90ms，曲线改为陡降 `(0.4, 0, 1.0, 1.0)`，回收更利落。
 
 ---
 
@@ -124,7 +138,7 @@ atools/
 │   └── MemoryGuardian.swift          // 面板隐藏时三级内存退火与脏页回收
 ├── Search/
 │   ├── AppHotspotIndex.swift         // 0ms 内存 App 索引 (拼音/简拼/多路径覆盖)
-│   ├── SpotlightBridge.swift         // CoreServices MDQuery 流式文件检索
+│   ├── SpotlightBridge.swift         // NSMetadataQuery 系统索引文件检索
 │   ├── CalculatorEngine.swift        // 离线数学表达式即时计算
 │   ├── DictionaryService.swift       // DCSCopyTextDefinition 系统离线词典
 │   ├── ThumbnailPipeline.swift       // 64px 像素限制缩略图 + UTI 共享单例 (6MB 上限)

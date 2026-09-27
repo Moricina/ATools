@@ -95,17 +95,17 @@ public final class VisualEffectBackdropView: NSView {
         effectView.isHidden = false
 
         if matchesSearchCapsuleAppearance {
-            // The search capsule uses this exact glass tint at full surface
-            // opacity. Keeping the expanded sheet on the same profile prevents
-            // its dark base from being lifted toward gray by the backdrop.
-            effectView.alphaValue = 1.0
-            if isDark {
-                effectView.tintColor = GlassPalette.darkBaseTop
-                effectView.tintOpacity = 0.82
-            } else {
-                effectView.tintColor = GlassPalette.lightGlassTint
-                effectView.tintOpacity = 0.66
-            }
+            // The expanded sheet uses the emphasized search-capsule profile.
+            // Opacity is applied only to the decorative glass layer, leaving
+            // result text at full contrast.
+            let profile = SearchGlassSurfaceProfile.resolved(
+                isDark: isDark,
+                isEmphasized: true,
+                themeOpacity: ConfigManager.shared.config.themeOpacity
+            )
+            effectView.alphaValue = profile.surfaceAlpha
+            effectView.tintColor = profile.tintColor
+            effectView.tintOpacity = profile.tintOpacity
             tintOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
             window?.invalidateShadow()
             return

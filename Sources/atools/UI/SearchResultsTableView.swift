@@ -53,13 +53,15 @@ public final class SearchResultCellView: NSTableCellView {
         subtitleLabel.lineBreakMode = .byTruncatingMiddle
         addSubview(subtitleLabel)
 
+        // Symmetric horizontal padding: 10pt on left (icon) and 10pt on right (badge)
+        // keeps the layout balanced and avoids the icon sitting too far from the edge.
         NSLayoutConstraint.activate([
-            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconView.widthAnchor.constraint(equalToConstant: 32),
             iconView.heightAnchor.constraint(equalToConstant: 32),
 
-            badgeContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            badgeContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             badgeContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
             badgeContainer.heightAnchor.constraint(equalToConstant: 18),
 
@@ -67,7 +69,7 @@ public final class SearchResultCellView: NSTableCellView {
             badgeLabel.trailingAnchor.constraint(equalTo: badgeContainer.trailingAnchor, constant: -6),
             badgeLabel.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor),
 
-            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 12),
+            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 10),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: badgeContainer.leadingAnchor, constant: -8),
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8),
 
@@ -99,6 +101,8 @@ public final class SearchResultCellView: NSTableCellView {
     public func configure(with result: SearchResult) {
         titleLabel.stringValue = result.title
         subtitleLabel.stringValue = result.subtitle
+        setAccessibilityLabel("\(result.title), \(result.subtitle)")
+        setAccessibilityRole(.staticText)
 
         switch result.type {
         case .application:
@@ -346,7 +350,9 @@ public final class SearchResultRowView: NSTableRowView {
         guard isSelected else { return }
 
         let isDark = glassIsDark
-        let pillRect = bounds.insetBy(dx: 6, dy: 3)
+        // Inset horizontally by 8pt so the pill does not extend under the
+        // overlay scroller on the right edge; 3pt vertical keeps a tight row.
+        let pillRect = bounds.insetBy(dx: 8, dy: 3)
         let path = NSBezierPath(roundedRect: pillRect, xRadius: 10, yRadius: 10)
 
         if isDark {
@@ -395,6 +401,7 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
+        scrollView.verticalScroller = KnobOnlyScroller()
         scrollView.hasHorizontalScroller = false
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true

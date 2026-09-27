@@ -101,7 +101,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         ])
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.hasHorizontalScroller = false
+        scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = false
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true
@@ -135,7 +135,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         stackViewConstraints.removeAll()
 
         if orientation == .horizontal {
-            scrollView.hasHorizontalScroller = false
+            scrollView.hasHorizontalScroller = true
             scrollView.hasVerticalScroller = false
             stackView.orientation = .horizontal
             stackView.spacing = 6
@@ -192,6 +192,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         // Pills were just inserted; without a layout pass their frames are still .zero.
         stackView.layoutSubtreeIfNeeded()
         layoutSelectionCapsule(animated: false)
+        scrollSelectedPillIntoView(animated: false)
     }
 
     private func layoutSelectionCapsule(animated: Bool) {
@@ -291,7 +292,40 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         // Resolve pending pill layout first so the capsule glides to the final frame.
         stackView.layoutSubtreeIfNeeded()
         layoutSelectionCapsule(animated: true)
+        scrollSelectedPillIntoView(animated: true)
         delegate?.categoryBar(self, didSelectCategory: pill.category)
+    }
+
+    /// Move the keyboard selection by one pill in the current orientation.
+    @discardableResult
+    public func moveSelection(by offset: Int) -> Bool {
+        let pills = stackView.arrangedSubviews.compactMap { $0 as? CategoryPillView }
+        guard !pills.isEmpty else { return false }
+        let currentIndex = pills.firstIndex(where: { $0 === selectedPill }) ?? pills.firstIndex(where: { $0.isSelected }) ?? 0
+        let targetIndex = max(0, min(pills.count - 1, currentIndex + offset))
+        guard targetIndex != currentIndex else { return false }
+        categoryPillDidClick(pills[targetIndex])
+        return true
+    }
+
+    private func scrollSelectedPillIntoView(animated: Bool) {
+        guard let pill = selectedPill else { return }
+        stackView.layoutSubtreeIfNeeded()
+        let target = pill.convert(pill.bounds, to: stackView)
+        let visible = scrollView.contentView.bounds
+        guard visible.intersects(target) == false else { return }
+        let action = {
+            _ = self.scrollView.contentView.scrollToVisible(target)
+        }
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.20
+                context.allowsImplicitAnimation = true
+                action()
+            }
+        } else {
+            action()
+        }
     }
 
     public func categoryPillDidRequestRename(_ pill: CategoryPillView) {

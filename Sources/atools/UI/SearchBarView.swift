@@ -133,7 +133,7 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     public var isMergedIntoSheet: Bool = false {
         didSet {
             guard oldValue != isMergedIntoSheet else { return }
-            glassEffectView.alphaValue = isMergedIntoSheet ? 0 : 1
+            updateGlassTint()
             updateBackgroundStyles()
         }
     }
@@ -149,10 +149,26 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupViews()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleThemeChanged),
+            name: .atoolsThemeDidChange,
+            object: nil
+        )
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleThemeChanged() {
+        updateGlassTint()
+        updateBackgroundStyles()
+        textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
     }
 
     private func setupViews() {
@@ -191,6 +207,7 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         textField.delegate = self
         textField.customDelegate = nil
         textField.searchBarView = self
+        textField.setAccessibilityLabel("搜索输入框")
         addSubview(textField)
 
         // Clear Button
@@ -265,13 +282,14 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     /// the light theme stays a bright white surface and the dark theme keeps
     /// its deep liquid look.
     private func updateGlassTint() {
-        if glassIsDark {
-            glassEffectView.tintColor = GlassPalette.darkBaseTop
-            glassEffectView.tintOpacity = (isFocused || isHovered) ? 0.82 : 0.76
-        } else {
-            glassEffectView.tintColor = GlassPalette.lightGlassTint
-            glassEffectView.tintOpacity = (isFocused || isHovered) ? 0.66 : 0.58
-        }
+        let profile = SearchGlassSurfaceProfile.resolved(
+            isDark: glassIsDark,
+            isEmphasized: isFocused || isHovered,
+            themeOpacity: ConfigManager.shared.config.themeOpacity
+        )
+        glassEffectView.tintColor = profile.tintColor
+        glassEffectView.tintOpacity = profile.tintOpacity
+        glassEffectView.alphaValue = isMergedIntoSheet ? 0 : profile.surfaceAlpha
     }
 
     override public func updateTrackingAreas() {

@@ -234,12 +234,14 @@ public final class ConfigManager {
     public func updateTheme(_ theme: AppTheme) {
         self.config.theme = theme
         save()
+        NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
     }
 
     public func updateThemeOpacity(_ opacity: Double) {
         let clamped = max(0.40, min(1.00, opacity))
         self.config.themeOpacity = clamped
         save()
+        NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
     }
 
     public func updateShelfIconScale(_ scale: Double) {
@@ -341,19 +343,27 @@ public final class ConfigManager {
         save()
     }
 
-    public func addItem(_ item: LauncherItem, to categoryId: UUID) {
-        if let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) {
-            self.config.categories[idx].items.append(item)
-            save()
-        }
+    @discardableResult
+    public func addItem(_ item: LauncherItem, to categoryId: UUID) -> Bool {
+        addItems([item], to: categoryId).count == 1
     }
 
-    public func addItems(_ items: [LauncherItem], to categoryId: UUID) {
-        guard !items.isEmpty else { return }
-        if let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) {
-            self.config.categories[idx].items.append(contentsOf: items)
-            save()
+    /// Adds only new identities to a category. Duplicate drags are ignored, while the same
+    /// target is still allowed in a different category for users who organize apps by context.
+    @discardableResult
+    public func addItems(_ items: [LauncherItem], to categoryId: UUID) -> [LauncherItem] {
+        guard !items.isEmpty,
+              let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return [] }
+
+        var seen = Set(self.config.categories[idx].items.map(\.identity))
+        var added: [LauncherItem] = []
+        for item in items where seen.insert(item.identity).inserted {
+            added.append(item)
         }
+        guard !added.isEmpty else { return [] }
+        self.config.categories[idx].items.append(contentsOf: added)
+        save()
+        return added
     }
 
     public func moveCategory(from sourceIndex: Int, to destinationIndex: Int) {

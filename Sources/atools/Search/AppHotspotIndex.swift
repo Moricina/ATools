@@ -146,26 +146,12 @@ public final class AppHotspotIndex {
                             aliases.append(ls)
                         }
 
-                        // 2. Deep bundle localized strings (zh-Hans, zh_CN, zh-Hant)
-                        if let bundle = Bundle(path: fullPath) {
-                            for loc in ["zh-Hans", "zh_CN", "zh-Hant"] {
-                                if let zhPath = bundle.path(forResource: "InfoPlist", ofType: "strings", inDirectory: nil, forLocalization: loc),
-                                   let dict = NSDictionary(contentsOfFile: zhPath) {
-                                    if let disp = dict["CFBundleDisplayName"] as? String, !disp.isEmpty {
-                                        aliases.append(disp)
-                                    }
-                                    if let bName = dict["CFBundleName"] as? String, !bName.isEmpty {
-                                        aliases.append(bName)
-                                    }
-                                }
-                            }
-                            if let disp = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, !disp.isEmpty {
-                                aliases.append(disp)
-                            }
-                            if let bName = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String, !bName.isEmpty {
-                                aliases.append(bName)
-                            }
-                        }
+                        // 2. Read plist and localized strings directly. NSBundle caches every bundle
+                        // globally and is unnecessary for a background index refresh.
+                        let metadata = AppMetadataReader.read(appURL: URL(fileURLWithPath: fullPath))
+                        aliases.append(contentsOf: metadata.localizedNames)
+                        if let disp = metadata.displayName, !disp.isEmpty { aliases.append(disp) }
+                        if let bName = metadata.bundleName, !bName.isEmpty { aliases.append(bName) }
 
                         // 3. Fallback well-known Chinese mappings for standard apps
                         if let wellKnown = AppHotspotIndex.wellKnownAliases[baseName] {
@@ -177,7 +163,7 @@ public final class AppHotspotIndex {
                             name: baseName,
                             localizedName: primaryLocalizedName,
                             path: fullPath,
-                            bundleId: nil,
+                            bundleId: metadata.bundleIdentifier,
                             additionalAliases: aliases
                         )
                         results.append(indexed)

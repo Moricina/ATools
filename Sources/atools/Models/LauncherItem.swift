@@ -77,6 +77,32 @@ public struct LauncherItem: Identifiable, Codable {
     }
 }
 
+/// Stable identity used to prevent dragging the same file or application into a category twice.
+/// File system paths are standardized and symlinks are resolved so aliases to the same bundle
+/// cannot create duplicate launcher entries.
+public struct LauncherItemIdentity: Hashable {
+    public let itemType: LauncherItemType
+    public let canonicalTarget: String
+
+    public init(itemType: LauncherItemType, target: String) {
+        self.itemType = itemType
+        if itemType == .application || itemType == .fileOrFolder {
+            self.canonicalTarget = URL(fileURLWithPath: target)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path
+        } else {
+            self.canonicalTarget = target
+        }
+    }
+}
+
+public extension LauncherItem {
+    var identity: LauncherItemIdentity {
+        LauncherItemIdentity(itemType: itemType, target: target)
+    }
+}
+
 public struct Category: Identifiable, Codable {
     public var id: UUID
     public var name: String

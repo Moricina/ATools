@@ -35,6 +35,11 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         return win.frame
     }
 
+    public static var isSettingsWindowKey: Bool {
+        guard sharedInstanceCreated, let win = shared.window else { return false }
+        return NSApp.keyWindow === win
+    }
+
     private var sidebarView: SettingsSidebarView!
     private var contentContainer: NSView!
 
@@ -60,7 +65,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         win.isReleasedWhenClosed = false
         win.minSize = NSSize(width: 780, height: 600)
         win.maxSize = NSSize(width: 780, height: 800)
-        win.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
+        win.level = .normal
         super.init(window: win)
         SettingsWindowController.sharedInstanceCreated = true
         win.delegate = self

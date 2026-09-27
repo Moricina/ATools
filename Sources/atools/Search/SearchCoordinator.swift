@@ -6,6 +6,8 @@ public final class SearchCoordinator {
 
     private var debounceWorkItem: DispatchWorkItem?
     private var currentGenerationId: UInt64 = 0
+    private var dictionaryResults: [UInt64: SearchResult] = [:]
+    private var fileResults: [UInt64: [SearchResult]] = [:]
 
     private init() {}
 
@@ -14,7 +16,10 @@ public final class SearchCoordinator {
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
         currentGenerationId &+= 1
+        dictionaryResults.removeAll()
+        fileResults.removeAll()
         SpotlightBridge.shared.stop()
+        DictionaryService.shared.cancelPendingLookups()
     }
 
     public func search(query: String, onResults: @escaping ([SearchResult]) -> Void) {
@@ -92,34 +97,34 @@ public final class SearchCoordinator {
         }
         instantResults.append(contentsOf: partialActionResults)
 
-        // 4. Offline Dictionary — ranked after apps: "Safari", "Notes", "Mail"... all have
-        // dictionary entries and previously stole the default Enter action from the app.
-        if ConfigManager.shared.config.enableDictionary,
-           let def = DictionaryService.shared.lookup(trimmed) {
-            instantResults.append(SearchResult(
-                id: "dict_\(trimmed)",
-                title: "词典: \(trimmed)",
-                subtitle: def,
-                type: .dictionary,
-                score: 800,
-                icon: ThumbnailPipeline.shared.symbolIcon(name: "character.book.closed.fill"),
-                action: {
-                    let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? trimmed
-                    if let url = URL(string: "dict://\(encoded)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            ))
+        let deliver: () -> Void = { [weak self] in
+            guard let self else { return }
+            var merged = instantResults
+            if let dictionary = self.dictionaryResults[generation] { merged.append(dictionary) }
+            for result in self.fileResults[generation] ?? [] where !merged.contains(where: { $0.path == result.path }) {
+                merged.append(result)
+            }
+            if ConfigManager.shared.config.enableWebSearch { merged.append(self.makeWebSearchResult(for: trimmed)) }
+            onResults(merged)
         }
+        DispatchQueue.main.async(execute: deliver)
 
-        // Post instant results first with web search fallback
-        var instantMerged = instantResults
-        if ConfigManager.shared.config.enableWebSearch {
-            instantMerged.append(makeWebSearchResult(for: trimmed))
-        }
-        runtimeLog("[Coordinator] dispatching instant results: count=\(instantMerged.count) for '\(trimmed)'")
-        DispatchQueue.main.async {
-            onResults(instantMerged)
+        if ConfigManager.shared.config.enableDictionary {
+            DictionaryService.shared.lookup(trimmed) { [weak self] definition in
+                DispatchQueue.main.async {
+                    guard let self, self.currentGenerationId == generation, let definition else { return }
+                    self.dictionaryResults[generation] = SearchResult(
+                        id: "dict_\(trimmed)", title: "词典: \(trimmed)", subtitle: definition,
+                        type: .dictionary, score: 680,
+                        icon: ThumbnailPipeline.shared.symbolIcon(name: "character.book.closed.fill"),
+                        action: {
+                            let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? trimmed
+                            if let url = URL(string: "dict://\(encoded)") { NSWorkspace.shared.open(url) }
+                        }
+                    )
+                    deliver()
+                }
+            }
         }
 
         // Layer 2: Debounced Spotlight Full-Disk File Search (150ms)
@@ -139,24 +144,10 @@ public final class SearchCoordinator {
                     return
                 }
 
-                var merged = instantResults
-
-                // Append file results
-                for res in fileResults {
-                    if !merged.contains(where: { $0.path == res.path }) {
-                        merged.append(res)
-                    }
-                }
-
-                // Append Web Search Fallback at the very end if enabled
-                if ConfigManager.shared.config.enableWebSearch {
-                    merged.append(self.makeWebSearchResult(for: trimmed))
-                }
-
                 DispatchQueue.main.async {
                     if self.currentGenerationId == generation {
-                        runtimeLog("[Coordinator] onResults called with total \(merged.count) results for '\(trimmed)'")
-                        onResults(merged)
+                        self.fileResults[generation] = fileResults
+                        deliver()
                     }
                 }
             }
