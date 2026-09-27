@@ -35,6 +35,14 @@ public final class ThemeCardView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 10
         layer?.masksToBounds = false
+        layer?.borderWidth = 1.0
+        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.3).cgColor
+        
+        // Subtle shadow for depth
+        layer?.shadowColor = NSColor.black.withAlphaComponent(0.08).cgColor
+        layer?.shadowOffset = CGSize(width: 0, height: 1)
+        layer?.shadowRadius = 3
+        layer?.shadowOpacity = 1.0
 
         // Preview Mockup Box
         previewBox.wantsLayer = true
@@ -67,7 +75,7 @@ public final class ThemeCardView: NSView {
             previewBox.topAnchor.constraint(equalTo: topAnchor, constant: 8),
             previewBox.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             previewBox.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            previewBox.heightAnchor.constraint(equalToConstant: 48),
+            previewBox.heightAnchor.constraint(equalToConstant: 50),
 
             titleLabel.topAnchor.constraint(equalTo: previewBox.bottomAnchor, constant: 6),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
@@ -85,8 +93,12 @@ public final class ThemeCardView: NSView {
     private func setupPreviewMockup() {
         let isDark = theme.isDark
         previewBox.layer?.backgroundColor = (isDark
-            ? NSColor(white: 0.08, alpha: 1.0)
-            : NSColor(white: 0.90, alpha: 1.0)).cgColor
+            ? NSColor(white: 0.10, alpha: 1.0)
+            : NSColor(white: 0.88, alpha: 1.0)).cgColor
+        previewBox.layer?.borderWidth = 0.5
+        previewBox.layer?.borderColor = (isDark
+            ? NSColor.white.withAlphaComponent(0.12)
+            : NSColor.black.withAlphaComponent(0.08)).cgColor
 
         let winView = NSView(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
         winView.translatesAutoresizingMaskIntoConstraints = false
@@ -94,9 +106,15 @@ public final class ThemeCardView: NSView {
         winView.layer?.cornerRadius = 5
         winView.layer?.borderWidth = 0.75
         winView.layer?.backgroundColor = (isDark
-            ? NSColor(white: 0.14, alpha: 0.82)
-            : NSColor(white: 0.98, alpha: 0.82)).cgColor
-        winView.layer?.borderColor = (isDark ? NSColor.white.withAlphaComponent(0.14) : NSColor.black.withAlphaComponent(0.11)).cgColor
+            ? NSColor(white: 0.16, alpha: 0.90)
+            : NSColor(white: 0.97, alpha: 0.90)).cgColor
+        winView.layer?.borderColor = (isDark ? NSColor.white.withAlphaComponent(0.18) : NSColor.black.withAlphaComponent(0.12)).cgColor
+        
+        // Subtle shadow for the window mockup
+        winView.layer?.shadowColor = NSColor.black.withAlphaComponent(isDark ? 0.3 : 0.1).cgColor
+        winView.layer?.shadowOffset = CGSize(width: 0, height: 1)
+        winView.layer?.shadowRadius = 2
+        winView.layer?.shadowOpacity = 1.0
         previewBox.addSubview(winView)
         NSLayoutConstraint.activate([
             winView.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
@@ -141,16 +159,26 @@ public final class ThemeCardView: NSView {
         let isSysDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         checkmarkImageView.isHidden = !isSelected
 
-        // Selection is carried by the fill and the checkmark; no outline on the card edge.
-        layer?.borderWidth = 0
         if isSelected {
+            layer?.borderWidth = 1.5
+            layer?.borderColor = (isSysDark
+                ? NSColor.white.withAlphaComponent(0.25)
+                : NSColor.black.withAlphaComponent(0.15)).cgColor
             layer?.backgroundColor = GlassPalette.accentFill(isDark: isSysDark).cgColor
+            layer?.shadowRadius = 4
+            layer?.shadowColor = NSColor.black.withAlphaComponent(isSysDark ? 0.2 : 0.1).cgColor
             titleLabel.textColor = GlassPalette.textPrimary(isDark: isSysDark)
             titleLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         } else {
+            layer?.borderWidth = 1.0
+            layer?.borderColor = (isSysDark
+                ? NSColor.white.withAlphaComponent(0.08)
+                : NSColor.black.withAlphaComponent(0.06)).cgColor
             layer?.backgroundColor = isHovered
                 ? (isSysDark ? NSColor(white: 1.0, alpha: 0.06).cgColor : NSColor(white: 0.0, alpha: 0.04).cgColor)
-                : NSColor.clear.cgColor
+                : (isSysDark ? NSColor(white: 1.0, alpha: 0.03).cgColor : NSColor(white: 0.0, alpha: 0.02).cgColor)
+            layer?.shadowRadius = 3
+            layer?.shadowColor = NSColor.black.withAlphaComponent(0.08).cgColor
             titleLabel.textColor = .labelColor
             titleLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         }

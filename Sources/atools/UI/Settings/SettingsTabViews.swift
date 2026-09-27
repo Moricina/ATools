@@ -1383,7 +1383,7 @@ public final class ThemeTabView: NSView {
         themesStack.translatesAutoresizingMaskIntoConstraints = false
         themesStack.orientation = .horizontal
         themesStack.distribution = .fillEqually
-        themesStack.spacing = 12
+        themesStack.spacing = 14
         themesStack.alignment = .centerY
 
         themeCards.removeAll()
@@ -1400,9 +1400,9 @@ public final class ThemeTabView: NSView {
         themeRow.translatesAutoresizingMaskIntoConstraints = false
         themeRow.addSubview(themesStack)
         NSLayoutConstraint.activate([
-            themeRow.heightAnchor.constraint(equalToConstant: 104),
-            themesStack.topAnchor.constraint(equalTo: themeRow.topAnchor, constant: 8),
-            themesStack.bottomAnchor.constraint(equalTo: themeRow.bottomAnchor, constant: -8),
+            themeRow.heightAnchor.constraint(equalToConstant: 108),
+            themesStack.topAnchor.constraint(equalTo: themeRow.topAnchor, constant: 10),
+            themesStack.bottomAnchor.constraint(equalTo: themeRow.bottomAnchor, constant: -10),
             themesStack.leadingAnchor.constraint(equalTo: themeRow.leadingAnchor, constant: 16),
             themesStack.trailingAnchor.constraint(equalTo: themeRow.trailingAnchor, constant: -16)
         ])
