@@ -13,6 +13,15 @@ public final class VisualEffectBackdropView: NSView {
     private let effectView = LiquidGlassContainerView()
     private let tintOverlayView = NSView()
 
+    /// Match the standalone search capsule exactly when this backdrop hosts
+    /// expanded search results. Other panels keep their theme-opacity profile.
+    public var matchesSearchCapsuleAppearance: Bool = false {
+        didSet {
+            guard oldValue != matchesSearchCapsuleAppearance else { return }
+            updateAppearanceColors()
+        }
+    }
+
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         setupHierarchy()
@@ -76,7 +85,7 @@ public final class VisualEffectBackdropView: NSView {
         self.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
 
         // Corner radius: larger, glassier panel for the liquid look.
-        let radius: CGFloat = 24
+        let radius: CGFloat = matchesSearchCapsuleAppearance ? 20 : 24
         layer?.cornerRadius = radius
         layer?.borderWidth = 0
         layer?.borderColor = NSColor.clear.cgColor
@@ -84,6 +93,24 @@ public final class VisualEffectBackdropView: NSView {
         effectView.usesRegularGlass = true
 
         effectView.isHidden = false
+
+        if matchesSearchCapsuleAppearance {
+            // The search capsule uses this exact glass tint at full surface
+            // opacity. Keeping the expanded sheet on the same profile prevents
+            // its dark base from being lifted toward gray by the backdrop.
+            effectView.alphaValue = 1.0
+            if isDark {
+                effectView.tintColor = GlassPalette.darkBaseTop
+                effectView.tintOpacity = 0.82
+            } else {
+                effectView.tintColor = GlassPalette.lightGlassTint
+                effectView.tintOpacity = 0.66
+            }
+            tintOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
+            window?.invalidateShadow()
+            return
+        }
+
         effectView.alphaValue = opacity
 
         if isDark {

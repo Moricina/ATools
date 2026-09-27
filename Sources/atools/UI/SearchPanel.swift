@@ -506,6 +506,7 @@ public final class SearchPanel: NSPanel {
         self.contentView = hostView
 
         let backdrop = VisualEffectBackdropView(frame: contentRect)
+        backdrop.matchesSearchCapsuleAppearance = true
         backdrop.autoresizingMask = [.width, .height]
         hostView.addSubview(backdrop)
         searchViewController.backdropView = backdrop
