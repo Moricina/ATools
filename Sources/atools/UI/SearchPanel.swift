@@ -118,7 +118,9 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
 
         // 展开态约束：仅在展开到 520pt 时激活
         expandedConstraints = [
-            resultsTable.topAnchor.constraint(equalTo: searchBarOverlayView.bottomAnchor, constant: 10),
+            // Tight gap: results emerge right under the search text instead of
+            // floating in a visibly empty band (10pt looked too airy).
+            resultsTable.topAnchor.constraint(equalTo: searchBarOverlayView.bottomAnchor, constant: 2),
             resultsTable.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.sheetInset + 2),
             resultsTable.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -(Self.sheetInset + 2)),
             resultsTable.bottomAnchor.constraint(equalTo: hintsBar.topAnchor, constant: -4),

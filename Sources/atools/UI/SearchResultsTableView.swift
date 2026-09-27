@@ -377,6 +377,19 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
     private let scrollView = NSScrollView()
     public let tableView = ContextualSearchTableView()
 
+    // MARK: - Scroll edge fades
+    // While the list is scrolled, rows dissolve over a short gradient at the
+    // viewport edges instead of being sliced by a hard horizontal line under
+    // the search bar (and above the hints row). At rest both edges render
+    // fully opaque so the first/last rows stay crisp.
+    //
+    // Measured behaviour of CAGradientLayer (default startPoint/endPoint):
+    // colors[0] is drawn at the BOTTOM edge, colors.last at the TOP edge.
+    private let edgeFadeMask = CAGradientLayer()
+    private var boundsObserver: NSObjectProtocol?
+    private static let topFadeHeight: CGFloat = 22
+    private static let bottomFadeHeight: CGFloat = 18
+
     public var resultsCount: Int {
         return results.count
     }
@@ -433,6 +446,72 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
             scrollView.topAnchor.constraint(equalTo: topAnchor),
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
+
+        setupEdgeFades()
+    }
+
+    private func setupEdgeFades() {
+        // Black = fully opaque mask; edges only clear while scrolling.
+        edgeFadeMask.colors = [NSColor.black.cgColor, NSColor.black.cgColor,
+                               NSColor.black.cgColor, NSColor.black.cgColor]
+
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        boundsObserver = NotificationCenter.default.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.updateFadeState()
+        }
+    }
+
+    deinit {
+        if let observer = boundsObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    override public func layout() {
+        super.layout()
+        updateFadeState()
+    }
+
+    private func updateFadeState() {
+        let b = bounds
+        guard b.width > 1, b.height > Self.topFadeHeight + Self.bottomFadeHeight + 4 else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        edgeFadeMask.frame = b
+        edgeFadeMask.locations = [
+            0,
+            NSNumber(value: Double(Self.bottomFadeHeight / b.height)),
+            NSNumber(value: Double(1.0 - Self.topFadeHeight / b.height)),
+            1
+        ]
+        CATransaction.commit()
+        layer?.mask = edgeFadeMask
+
+        let visible = scrollView.documentVisibleRect
+        let documentHeight = tableView.frame.height
+        let viewportHeight = scrollView.contentView.bounds.height
+        let scrollable = documentHeight > viewportHeight + 0.5
+        let scrolledFromTop = scrollable && visible.minY > 0.5
+        let hasContentBelow = scrollable && visible.maxY < documentHeight - 0.5
+
+        let opaque = NSColor.black.cgColor
+        let clear = NSColor.clear.cgColor
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.18)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        // colors[0] = bottom edge, colors[3] = top edge.
+        edgeFadeMask.colors = [
+            hasContentBelow ? clear : opaque,
+            opaque,
+            opaque,
+            scrolledFromTop ? clear : opaque
+        ]
+        CATransaction.commit()
     }
 
     public func updateResults(_ newResults: [SearchResult]) {
@@ -460,6 +539,7 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
                 tableView.scrollRowToVisible(0)
             }
         }
+        updateFadeState()
     }
 
 
