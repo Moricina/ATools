@@ -42,8 +42,8 @@ public final class HotkeyRecorderControl: NSControl {
 
     private func setupViews() {
         wantsLayer = true
-        layer?.cornerRadius = 6
-        layer?.borderWidth = 1.0
+        layer?.cornerRadius = 8
+        layer?.borderWidth = 0
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.alignment = .center
@@ -58,7 +58,7 @@ public final class HotkeyRecorderControl: NSControl {
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
-            heightAnchor.constraint(equalToConstant: 26)
+            heightAnchor.constraint(equalToConstant: SettingsPillButton.height)
         ])
 
         updateDisplay()
@@ -79,23 +79,52 @@ public final class HotkeyRecorderControl: NSControl {
         }
     }
 
+    /// Filled field, no outline (the old 0.75pt separator border read as a hard black line).
+    /// Colours are resolved explicitly per appearance: `cgColor` of a dynamic system colour is
+    /// frozen at the moment it's read and doesn't follow light/dark changes.
     private func updateDisplay() {
+        let isDark = glassIsDark
         if isRecording {
-            titleLabel.stringValue = "请按下快捷键或连按两下Command"
+            titleLabel.stringValue = "请按下快捷键，或连按两下修饰键"
             titleLabel.textColor = .controlAccentColor
-            layer?.borderColor = NSColor.controlAccentColor.cgColor
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.28 : 0.16).cgColor
         } else {
             if let binding = currentBinding, !binding.displayString.isEmpty {
                 titleLabel.stringValue = binding.displayString
-                titleLabel.textColor = .labelColor
+                titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
             } else {
                 titleLabel.stringValue = "点击录制快捷键"
-                titleLabel.textColor = .tertiaryLabelColor
+                titleLabel.textColor = GlassPalette.textTertiary(isDark: isDark)
             }
-            layer?.borderColor = NSColor.separatorColor.cgColor
-            layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.08).cgColor
+            let alpha: CGFloat = isHovered ? (isDark ? 0.18 : 0.10) : (isDark ? 0.12 : 0.06)
+            layer?.backgroundColor = (isDark ? NSColor(white: 1.0, alpha: alpha) : NSColor(white: 0.0, alpha: alpha)).cgColor
         }
+        alphaValue = isEnabled ? 1.0 : 0.45
+    }
+
+    private var isHovered = false {
+        didSet { if oldValue != isHovered { updateDisplay() } }
+    }
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    override public func mouseEntered(with event: NSEvent) { isHovered = true }
+    override public func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override public var isEnabled: Bool {
+        didSet { updateDisplay() }
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateDisplay()
     }
 
     override public func mouseDown(with event: NSEvent) {

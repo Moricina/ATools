@@ -20,3 +20,7 @@ DerivedData/
 *.app/
 *.zip
 *.dmg
+*.sig
+
+# Local tool settings
+Sources/.claude/

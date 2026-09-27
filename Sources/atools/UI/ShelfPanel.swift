@@ -58,26 +58,15 @@ public final class ModernHeaderButton: NSButton {
     public func updateAppearanceStyles() {
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         if isAccentActive {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor
-            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.40).cgColor
-            layer?.borderWidth = 0.5
-            contentTintColor = .controlAccentColor
+            layer?.backgroundColor = GlassPalette.accentFill(isDark: isDark).cgColor
+            layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+            layer?.borderWidth = 0.75
+            contentTintColor = GlassPalette.accentText(isDark: isDark)
         } else if isHovered {
-            if isCloseStyle {
-                layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.18).cgColor
-                layer?.borderColor = NSColor.systemRed.withAlphaComponent(0.35).cgColor
-                layer?.borderWidth = 0.5
-                contentTintColor = .systemRed
-            } else {
-                layer?.backgroundColor = isDark
-                    ? NSColor(white: 1.0, alpha: 0.16).cgColor
-                    : NSColor(white: 0.0, alpha: 0.08).cgColor
-                layer?.borderColor = isDark
-                    ? NSColor(white: 1.0, alpha: 0.22).cgColor
-                    : NSColor(white: 0.0, alpha: 0.12).cgColor
-                layer?.borderWidth = 0.5
-                contentTintColor = .labelColor
-            }
+            layer?.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
+            layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+            layer?.borderWidth = 0.75
+            contentTintColor = .labelColor
         } else {
             layer?.backgroundColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.06).cgColor
@@ -179,27 +168,12 @@ public final class SidebarSplitterView: NSView {
     override public func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard let context = NSGraphicsContext.current?.cgContext else { return }
-
-        let midX = bounds.midX
-        let lineColor: CGColor
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-
-        if isDragging {
-            lineColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
-        } else if isHovered {
-            lineColor = isDark
-                ? NSColor.white.withAlphaComponent(0.35).cgColor
-                : NSColor.black.withAlphaComponent(0.28).cgColor
-        } else {
-            lineColor = isDark
-                ? NSColor.white.withAlphaComponent(0.12).cgColor
-                : NSColor.black.withAlphaComponent(0.08).cgColor
-        }
-
-        context.setStrokeColor(lineColor)
+        let alpha: CGFloat = isDragging ? 0.48 : (isHovered ? 0.30 : 0.14)
+        let lineColor = glassIsDark ? NSColor.white : NSColor.black
+        context.setStrokeColor(lineColor.withAlphaComponent(alpha).cgColor)
         context.setLineWidth(1.0)
-        context.move(to: CGPoint(x: midX, y: bounds.minY + 4))
-        context.addLine(to: CGPoint(x: midX, y: bounds.maxY - 4))
+        context.move(to: CGPoint(x: bounds.midX, y: bounds.minY + 6))
+        context.addLine(to: CGPoint(x: bounds.midX, y: bounds.maxY - 6))
         context.strokePath()
     }
 }
@@ -209,7 +183,8 @@ public final class ResizeHandleView: NSView {
     override public var mouseDownCanMoveWindow: Bool { false }
 
     private static var diagonalCursor: NSCursor = {
-        let sel = NSSelectorFromString("_windowResizeNorthEastSouthWestCursor")
+        // Bottom-right corner handle resizes along the NW–SE diagonal.
+        let sel = NSSelectorFromString("_windowResizeNorthWestSouthEastCursor")
         if NSCursor.responds(to: sel), let obj = NSCursor.perform(sel)?.takeUnretainedValue() as? NSCursor {
             return obj
         }
@@ -283,16 +258,7 @@ public final class ResizeHandleView: NSView {
         let deltaY = currentMouse.y - initialMouseLocation.y
 
         // Dynamic minimum width based on icon size & orientation to prevent impossible huge gaps
-        let config = ConfigManager.shared.config
-        let scale = config.shelfIconScale
-        let itemWidth: CGFloat = round(82.0 * scale)
-        let iconSize: CGFloat = round(48.0 * scale)
-        let sideMargin: CGFloat = max(10, round((itemWidth - iconSize) / 2.0))
-        let spacingX: CGFloat = 12
-        let isVertical = config.categoryOrientation == .vertical
-        let sidebarW: CGFloat = isVertical ? 10 + CGFloat(config.sidebarWidth) + 2 + 8 + 8 : 28
-        let minContentW: CGFloat = 2 * itemWidth + spacingX + sideMargin * 2
-        let minWidth: CGFloat = max(240, sidebarW + minContentW)
+        let minWidth = ShelfGridMetrics.minimumWindowWidth(config: ConfigManager.shared.config)
 
         let newWidth = max(minWidth, min(1400, initialWindowFrame.width + deltaX))
         let newHeight = max(180, min(900, initialWindowFrame.height - deltaY))
@@ -311,20 +277,7 @@ public final class ResizeHandleView: NSView {
             guard let window = self.window else { return }
 
             // Snap window width smoothly to exact columns on drag release so right margin perfectly matches left margin
-            let config = ConfigManager.shared.config
-            let scale = config.shelfIconScale
-            let itemWidth: CGFloat = round(82.0 * scale)
-            let iconSize: CGFloat = round(48.0 * scale)
-            let sideMargin: CGFloat = max(10, round((itemWidth - iconSize) / 2.0))
-            let spacingX: CGFloat = 12
-            let isVertical = config.categoryOrientation == .vertical
-            let sidebarW: CGFloat = isVertical ? 10 + CGFloat(config.sidebarWidth) + 2 + 8 + 8 : 28
-
-            let availableW = max(100, window.frame.width - sidebarW)
-            let rawCols = (availableW - sideMargin * 2 + spacingX) / (itemWidth + spacingX)
-            let targetCols = max(2, Int(round(rawCols)))
-            let snappedContentW = CGFloat(targetCols) * itemWidth + CGFloat(targetCols - 1) * spacingX + sideMargin * 2
-            let snappedWidth = min(1400, sidebarW + snappedContentW)
+            let snappedWidth = ShelfGridMetrics.snappedWindowWidth(currentWidth: window.frame.width, config: ConfigManager.shared.config)
 
             let finalFrame = NSRect(x: window.frame.origin.x, y: window.frame.origin.y, width: snappedWidth, height: window.frame.height)
             window.setFrame(finalFrame, display: true, animate: true)
@@ -338,9 +291,7 @@ public final class ResizeHandleView: NSView {
 
         // Draw 3 delicate diagonal grip lines in the bottom-right corner
         let alpha: CGFloat = isHovered ? 0.75 : (isDragging ? 0.90 : 0.35)
-        let strokeColor = isDragging
-            ? NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
-            : NSColor.tertiaryLabelColor.withAlphaComponent(alpha).cgColor
+        let strokeColor = NSColor.tertiaryLabelColor.withAlphaComponent(alpha).cgColor
 
         context.setStrokeColor(strokeColor)
         context.setLineWidth(1.3)
@@ -354,6 +305,20 @@ public final class ResizeHandleView: NSView {
             context.addLine(to: end)
             context.strokePath()
         }
+    }
+}
+
+/// Root view for the shelf content. The panel is borderless, so the empty
+/// glass margins must be able to start a window drag. Interactive children
+/// (pills, grid items, splitter, resize handle) each opt out explicitly.
+private final class ShelfRootView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        // Window-background dragging is not always dispatched from layered
+        // borderless panels. Start the move explicitly when this root itself is
+        // hit; interactive subviews still receive their own events first.
+        window?.performDrag(with: event)
     }
 }
 
@@ -372,7 +337,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     override public func loadView() {
         let savedW = CGFloat(ConfigManager.shared.config.shelfWidth)
         let savedH = CGFloat(ConfigManager.shared.config.shelfHeight)
-        self.view = NSView(frame: NSRect(x: 0, y: 0, width: savedW, height: savedH))
+        self.view = ShelfRootView(frame: NSRect(x: 0, y: 0, width: savedW, height: savedH))
         setupLayout()
     }
 
@@ -383,20 +348,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     public func snapWindowWidthIfNeeded() {
         guard let window = self.view.window else { return }
-        let config = ConfigManager.shared.config
-        let scale = config.shelfIconScale
-        let itemWidth: CGFloat = round(82.0 * scale)
-        let iconSize = round(48.0 * scale)
-        let sideMargin = max(10, round((itemWidth - iconSize) / 2.0))
-        let spacingX: CGFloat = 12
-        let isVertical = config.categoryOrientation == .vertical
-        let sidebarW: CGFloat = isVertical ? 10 + CGFloat(config.sidebarWidth) + 2 + 8 + 8 : 28
-
-        let availableW = max(100, window.frame.width - sidebarW)
-        let rawCols = (availableW - sideMargin * 2 + spacingX) / (itemWidth + spacingX)
-        let targetCols = max(2, Int(round(rawCols)))
-        let gridW = CGFloat(targetCols) * itemWidth + CGFloat(targetCols - 1) * spacingX + sideMargin * 2
-        let perfectWidth = min(1400, sidebarW + gridW)
+        let perfectWidth = ShelfGridMetrics.snappedWindowWidth(currentWidth: window.frame.width, config: ConfigManager.shared.config)
 
         if abs(window.frame.width - perfectWidth) > 4 {
             let finalFrame = NSRect(x: window.frame.origin.x, y: window.frame.origin.y, width: perfectWidth, height: window.frame.height)
@@ -460,6 +412,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     override public func mouseExited(with event: NSEvent) {
         guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
+        guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
         guard !PanelCoordinator.shared.isShelfPinned else { return }
         if NSApp.modalWindow != nil { return }
 
@@ -500,6 +453,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         sidebarSplitter.onDragFinished = { [weak self] in
             guard let self = self, let constraint = self.sidebarWidthConstraint else { return }
             ConfigManager.shared.updateSidebarWidth(Double(constraint.constant))
+            self.snapWindowWidthIfNeeded()
         }
 
         view.addSubview(categoryBar)
@@ -575,28 +529,21 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             NSLayoutConstraint.activate(verticalConstraints)
         }
         view.layoutSubtreeIfNeeded()
+        snapWindowWidthIfNeeded()
         shelfGrid.reloadData(items: selectedCategory?.items ?? [])
     }
 
     @objc private func handleIconSizeChanged() {
         if let window = self.view.window {
-            let config = ConfigManager.shared.config
-            let scale = config.shelfIconScale
-            let itemWidth: CGFloat = round(82.0 * scale)
-            let iconSize = round(48.0 * scale)
-            let sideMargin = max(10, round((itemWidth - iconSize) / 2.0))
-            let spacingX: CGFloat = 12
-            let isVertical = config.categoryOrientation == .vertical
-            let sidebarW: CGFloat = isVertical ? 10 + CGFloat(config.sidebarWidth) + 2 + 8 + 8 : 28
-
-            let availableW = max(100, window.frame.width - sidebarW)
-            let currentCols = max(2, Int(round((availableW - sideMargin * 2 + spacingX) / (itemWidth + spacingX))))
-            let snappedContentW = CGFloat(currentCols) * itemWidth + CGFloat(currentCols - 1) * spacingX + sideMargin * 2
-            let snappedWidth = min(1400, sidebarW + snappedContentW)
+            let snappedWidth = ShelfGridMetrics.snappedWindowWidth(currentWidth: window.frame.width, config: ConfigManager.shared.config)
 
             let finalFrame = NSRect(x: window.frame.origin.x, y: window.frame.origin.y, width: snappedWidth, height: window.frame.height)
-            window.setFrame(finalFrame, display: true, animate: true)
-            ConfigManager.shared.updateShelfSize(width: snappedWidth, height: window.frame.height)
+            if finalFrame != window.frame {
+                // `animate: true` runs a blocking modal animation; skip it while the shelf is hidden
+                // (the settings slider changes this while the panel is ordered out).
+                window.setFrame(finalFrame, display: true, animate: window.isVisible)
+                ConfigManager.shared.updateShelfSize(width: snappedWidth, height: window.frame.height)
+            }
         }
         shelfGrid.reloadData(items: selectedCategory?.items ?? [])
     }
@@ -620,7 +567,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     public func loadData() {
         var categories = ConfigManager.shared.config.categories
         if !ConfigManager.shared.config.enableFavoritesCategory {
-            categories.removeAll(where: { $0.iconSymbol == "star.fill" || $0.name == "常用" })
+            categories.removeAll(where: { $0.isFavorites })
         }
 
         if selectedCategory == nil || !categories.contains(where: { $0.id == selectedCategory?.id }) {
@@ -692,9 +639,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         alert.alertStyle = .warning
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
-        alert.window.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
 
-        if alert.runModal() == .alertFirstButtonReturn {
+        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
             let success = ConfigManager.shared.deleteCategory(id: category.id)
             if success {
                 self.selectedCategory = nil
@@ -842,7 +788,9 @@ public final class ShelfPanel: NSPanel {
         ]
         self.isOpaque = false
         self.backgroundColor = .clear
-        self.hasShadow = true
+        // Liquid Glass 自己会渲染发丝高光与柔和光晕；关闭系统方形阴影，
+        // 避免在圆角玻璃周围出现一块矩形黑影（用户反馈的“四个角”）。
+        self.hasShadow = false
         self.isMovableByWindowBackground = true
 
         let backdrop = VisualEffectBackdropView(frame: contentRect)

@@ -7,6 +7,8 @@ public struct IndexedApp {
     public let path: String
     public let bundleId: String?
     public let aliases: [String]
+    /// Lowercased once at index time; `search` runs on every keystroke on the main thread.
+    public let lowercasedAliases: [String]
     public let pinyins: [String]
     public let pinyinAbbrs: [String]
 
@@ -23,6 +25,7 @@ public struct IndexedApp {
             allAliases.insert(a)
         }
         self.aliases = Array(allAliases)
+        self.lowercasedAliases = self.aliases.map { $0.lowercased() }
 
         var pinyinList: [String] = []
         var abbrList: [String] = []
@@ -63,14 +66,21 @@ public final class AppHotspotIndex {
 
     private var apps: [IndexedApp] = []
     private let appsLock = NSLock()
-    private let queue = DispatchQueue(label: "cc.atools.appindex", qos: .userInitiated)
-    private var isIndexing = false
+    private let queue = DispatchQueue(label: "cc.atools.appindex", qos: .utility)
+    private var lastRefreshDate = Date.distantPast
 
     private init() {
         refreshIndex()
     }
 
+    /// Re-scans at most once per `interval` so apps installed after launch become searchable.
+    public func refreshIfStale(interval: TimeInterval = 120) {
+        guard Date().timeIntervalSince(lastRefreshDate) > interval else { return }
+        refreshIndex()
+    }
+
     public func refreshIndex(completion: (() -> Void)? = nil) {
+        lastRefreshDate = Date()
         queue.async { [weak self] in
             guard let self = self else { return }
             var results: [IndexedApp] = []
@@ -86,7 +96,6 @@ public final class AppHotspotIndex {
             self.appsLock.lock()
             self.apps = results
             self.appsLock.unlock()
-            self.isIndexing = false
             completion?()
         }
     }
@@ -119,8 +128,11 @@ public final class AppHotspotIndex {
             let fullPath = (dir as NSString).appendingPathComponent(item)
 
             if item.hasSuffix(".app") || item.hasSuffix(".prefPane") {
-                if !visitedPaths.contains(fullPath) {
-                    visitedPaths.insert(fullPath)
+                // /Applications/Safari.app is a symlink into the Safari cryptex; dedupe on the
+                // resolved path so the same bundle isn't listed twice.
+                let resolvedPath = (fullPath as NSString).resolvingSymlinksInPath
+                if !visitedPaths.contains(resolvedPath) {
+                    visitedPaths.insert(resolvedPath)
                     autoreleasepool {
                         let baseName = (item as NSString).deletingPathExtension
                         var aliases: [String] = []
@@ -207,7 +219,8 @@ public final class AppHotspotIndex {
         "DingTalk": ["钉钉"],
         "WXWork": ["企业微信", "企微"],
         "TencentMeeting": ["腾讯会议"],
-        "QQ": ["腾讯QQ", "QQ音乐"],
+        "QQ": ["腾讯QQ"],
+        "QQMusic": ["QQ音乐"],
         "NeteaseMusic": ["网易云音乐"]
     ]
 
@@ -231,8 +244,7 @@ public final class AppHotspotIndex {
             var matchedPinyin = false
             var matchedFuzzy = false
 
-            for alias in app.aliases {
-                let lower = alias.lowercased()
+            for lower in app.lowercasedAliases {
                 if lower == q {
                     matchedExact = true
                     break

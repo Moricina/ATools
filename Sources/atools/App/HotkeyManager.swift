@@ -87,6 +87,11 @@ public final class HotkeyManager {
 
     @discardableResult
     public func register(id: HotKeyID, binding: HotkeyBinding) -> Bool {
+        if binding.isUnassigned {
+            unregister(id: id)
+            return true
+        }
+
         if registeredBindings[id] == binding {
             return true
         }
@@ -245,6 +250,7 @@ public final class HotkeyManager {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
                 runLoopSource = nil
             }
+            CFMachPortInvalidate(tap)
             eventTap = nil
         }
         lastCGModifierPressTime.removeAll()
@@ -468,6 +474,9 @@ public final class HotkeyManager {
     /// 在应用重新激活时，刷新全局修饰键监视器
     public func reloadFlagsMonitorsIfTrusted() {
         guard !specialBindings.isEmpty else { return }
+        // Called on every app activation (i.e. every panel show). Only rebuild when the
+        // CGEventTap is missing but permission has since been granted.
+        guard eventTap == nil, HotkeyManager.isAccessibilityTrusted() else { return }
         teardownFlagsMonitors()
         setupFlagsMonitorsIfNeeded()
     }

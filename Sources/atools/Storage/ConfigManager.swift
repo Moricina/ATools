@@ -58,8 +58,8 @@ public final class ConfigManager {
                 needsSave = true
             }
             // 确保如果配置为未启用常用，不留存常用分类数据
-            if !cfg.enableFavoritesCategory && cfg.categories.contains(where: { $0.name == "常用" || $0.iconSymbol == "star.fill" }) {
-                cfg.categories.removeAll(where: { $0.name == "常用" || $0.iconSymbol == "star.fill" })
+            if !cfg.enableFavoritesCategory && cfg.categories.contains(where: { $0.isFavorites }) {
+                cfg.categories.removeAll(where: { $0.isFavorites })
                 for i in 0..<cfg.categories.count {
                     cfg.categories[i].sortWeight = i
                 }
@@ -134,7 +134,23 @@ public final class ConfigManager {
         return AtoolsConfig(categories: categories, enableFavoritesCategory: false)
     }
 
+    private var pendingSaveWorkItem: DispatchWorkItem?
+
+    /// Coalesces writes: sliders, splitter drags and resize snapping used to encode and
+    /// atomically rewrite config.json on the main thread for every mouse event.
     public func save() {
+        pendingSaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.saveNow()
+        }
+        pendingSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
+
+    /// Writes immediately (used on termination and by `flushPendingSave`).
+    public func saveNow() {
+        pendingSaveWorkItem?.cancel()
+        pendingSaveWorkItem = nil
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
@@ -143,6 +159,11 @@ public final class ConfigManager {
         } catch {
             print("[ConfigManager] Failed to save config: \(error)")
         }
+    }
+
+    public func flushPendingSave() {
+        guard pendingSaveWorkItem != nil else { return }
+        saveNow()
     }
 
     /// 激活独立隔离的沙盒测试环境，完全不读写生产环境 config.json
@@ -155,7 +176,7 @@ public final class ConfigManager {
         self.configURL = testURL
         let freshConfig = ConfigManager.createDefaultConfig()
         self.config = freshConfig
-        self.save()
+        self.saveNow()
         return tempDir
     }
 
@@ -216,7 +237,7 @@ public final class ConfigManager {
     }
 
     public func updateThemeOpacity(_ opacity: Double) {
-        let clamped = max(0.30, min(1.00, opacity))
+        let clamped = max(0.40, min(1.00, opacity))
         self.config.themeOpacity = clamped
         save()
     }
@@ -276,12 +297,12 @@ public final class ConfigManager {
         if enabled {
             // 开启后：重新检测扫描系统常用软件并加入为「常用」分类
             let detectedItems = ConfigManager.detectCommonApplications()
-            if let idx = self.config.categories.firstIndex(where: { $0.name == "常用" || $0.iconSymbol == "star.fill" }) {
+            if let idx = self.config.categories.firstIndex(where: { $0.isFavorites }) {
                 self.config.categories[idx].items = detectedItems
             } else {
                 let favoritesCategory = Category(
-                    name: "常用",
-                    iconSymbol: "star.fill",
+                    name: Category.favoritesName,
+                    iconSymbol: Category.favoritesIcon,
                     sortWeight: 0,
                     items: detectedItems
                 )
@@ -292,7 +313,7 @@ public final class ConfigManager {
             }
         } else {
             // 关闭后：彻底移除「常用」分类及其内部应用数据，不保留任何数据
-            self.config.categories.removeAll(where: { $0.name == "常用" || $0.iconSymbol == "star.fill" })
+            self.config.categories.removeAll(where: { $0.isFavorites })
             for i in 0..<self.config.categories.count {
                 self.config.categories[i].sortWeight = i
             }
@@ -429,6 +450,9 @@ public final class ConfigManager {
         }
 
         self.config.categories.remove(at: idx)
+        for i in 0..<self.config.categories.count {
+            self.config.categories[i].sortWeight = i
+        }
         save()
         return true
     }

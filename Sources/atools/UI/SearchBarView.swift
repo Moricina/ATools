@@ -32,10 +32,14 @@ public final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
     }
 
     override public func edit(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, event: NSEvent?) {
+        textObj.drawsBackground = false
+        textObj.backgroundColor = .clear
         super.edit(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate, event: event)
     }
 
     override public func select(withFrame rect: NSRect, in controlView: NSView, editor textObj: NSText, delegate: Any?, start selStart: Int, length selLength: Int) {
+        textObj.drawsBackground = false
+        textObj.backgroundColor = .clear
         super.select(withFrame: drawingRect(forBounds: rect), in: controlView, editor: textObj, delegate: delegate, start: selStart, length: selLength)
     }
 }
@@ -108,6 +112,31 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     private let iconImageView = NSImageView()
     public let textField = SearchTextField()
     private let clearButton = NSButton()
+    private let glassEffectView = LiquidGlassContainerView()
+    private var trackingArea: NSTrackingArea?
+    private var isFocused: Bool = false {
+        didSet {
+            updateGlassTint()
+            updateBackgroundStyles()
+        }
+    }
+    private var isHovered: Bool = false {
+        didSet {
+            updateGlassTint()
+            updateBackgroundStyles()
+        }
+    }
+
+    /// When the search panel expands, the capsule's own glass and outline hand over to the
+    /// results sheet, which starts exactly at the capsule's rect and grows downward — so the
+    /// capsule appears to stretch into the sheet instead of sitting inside a second panel.
+    public var isMergedIntoSheet: Bool = false {
+        didSet {
+            guard oldValue != isMergedIntoSheet else { return }
+            glassEffectView.alphaValue = isMergedIntoSheet ? 0 : 1
+            updateBackgroundStyles()
+        }
+    }
 
     public var text: String {
         get { textField.stringValue }
@@ -128,8 +157,18 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
 
     private func setupViews() {
         wantsLayer = true
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 20
+        layer?.masksToBounds = false
         updateBackgroundStyles()
+
+        // Native macOS 26 liquid-glass capsule behind the controls. The host
+        // layer stays transparent so the glass shader is the only surface.
+        glassEffectView.cornerRadius = 20
+        glassEffectView.usesRegularGlass = true
+        glassEffectView.softEdgeEnabled = false
+        glassEffectView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glassEffectView)
+        updateGlassTint()
 
         // Icon
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
@@ -141,9 +180,14 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         textField.translatesAutoresizingMaskIntoConstraints = false
         textField.isBordered = false
         textField.drawsBackground = false
+        if let textFieldCell = textField.cell as? NSTextFieldCell {
+            textFieldCell.drawsBackground = false
+            textFieldCell.backgroundColor = .clear
+        }
         textField.focusRingType = .none
-        textField.font = NSFont.systemFont(ofSize: 18, weight: .regular)
+        textField.font = NSFont.systemFont(ofSize: 18, weight: .medium)
         textField.placeholderString = "搜索应用、全盘文件、计算或输入命令..."
+        textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
         textField.delegate = self
         textField.customDelegate = nil
         textField.searchBarView = self
@@ -154,13 +198,18 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         clearButton.bezelStyle = .inline
         clearButton.isBordered = false
         clearButton.image = ThumbnailPipeline.shared.symbolIcon(name: "xmark.circle.fill", pointSize: 15, weight: .medium)
-        clearButton.contentTintColor = .tertiaryLabelColor
+        clearButton.contentTintColor = GlassPalette.textTertiary(isDark: glassIsDark)
         clearButton.target = self
         clearButton.action = #selector(clearClicked)
         clearButton.isHidden = true
         addSubview(clearButton)
 
         NSLayoutConstraint.activate([
+            glassEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glassEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glassEffectView.topAnchor.constraint(equalTo: topAnchor),
+            glassEffectView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
             iconImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             iconImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
             iconImageView.widthAnchor.constraint(equalToConstant: 22),
@@ -179,28 +228,96 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     }
 
     private func updateBackgroundStyles() {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if isDark {
-            layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
-        } else {
-            layer?.backgroundColor = NSColor(white: 0.0, alpha: 0.04).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = NSColor(white: 0.0, alpha: 0.07).cgColor
+        let isDark = glassIsDark
+
+        // The native glass view carries the surface; the host layer stays clear
+        // so the liquid blur is the only visible material.
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        if isMergedIntoSheet {
+            layer?.borderWidth = 0
+            layer?.shadowOpacity = 0
+            iconImageView.contentTintColor = GlassPalette.textSecondary(isDark: isDark)
+            return
         }
+
+        if isFocused {
+            layer?.borderWidth = 0.75
+            layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+            layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
+            layer?.shadowOpacity = 0.20
+            layer?.shadowRadius = 12
+            layer?.shadowOffset = CGSize(width: 0, height: 5)
+            iconImageView.contentTintColor = GlassPalette.textPrimary(isDark: isDark)
+            return
+        }
+
+        layer?.borderWidth = 0.75
+        layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+        layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
+        layer?.shadowOpacity = isHovered ? 0.16 : 0.10
+        layer?.shadowRadius = isHovered ? 10 : 8
+        layer?.shadowOffset = CGSize(width: 0, height: isHovered ? 4 : 3)
+        iconImageView.contentTintColor = GlassPalette.textSecondary(isDark: isDark)
+    }
+
+    /// Keep the search capsule's glass tint in sync with the active theme so
+    /// the light theme stays a bright white surface and the dark theme keeps
+    /// its deep liquid look.
+    private func updateGlassTint() {
+        if glassIsDark {
+            glassEffectView.tintColor = GlassPalette.darkBaseTop
+            glassEffectView.tintOpacity = (isFocused || isHovered) ? 0.82 : 0.76
+        } else {
+            glassEffectView.tintColor = GlassPalette.lightGlassTint
+            glassEffectView.tintOpacity = (isFocused || isHovered) ? 0.66 : 0.58
+        }
+    }
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea { removeTrackingArea(existing) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override public func mouseEntered(with event: NSEvent) {
+        isHovered = true
+    }
+
+    override public func mouseExited(with event: NSEvent) {
+        isHovered = false
     }
 
     override public func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        updateGlassTint()
         updateBackgroundStyles()
+        textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
     }
 
     public func controlTextDidChange(_ obj: Notification) {
         let currentText = textField.stringValue
-        runtimeLog("[SearchBarView] controlTextDidChange: '\(currentText)'")
         clearButton.isHidden = currentText.isEmpty
         delegate?.searchBar(self, didChangeQuery: currentText)
+    }
+
+    public func controlTextDidBeginEditing(_ obj: Notification) {
+        if let editor = textField.currentEditor() as? NSTextView {
+            editor.drawsBackground = false
+            editor.backgroundColor = .clear
+        }
+        isFocused = true
+    }
+
+    public func controlTextDidEndEditing(_ obj: Notification) {
+        isFocused = false
     }
 
     @objc private func clearClicked() {

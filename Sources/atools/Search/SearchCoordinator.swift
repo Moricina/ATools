@@ -5,10 +5,17 @@ public final class SearchCoordinator {
     public static let shared = SearchCoordinator()
 
     private var debounceWorkItem: DispatchWorkItem?
-    private let queue = DispatchQueue(label: "cc.atools.coordinator", qos: .userInteractive)
     private var currentGenerationId: UInt64 = 0
 
     private init() {}
+
+    /// Drops any debounced Spotlight query and in-flight results, e.g. when the panel hides.
+    public func cancelPendingSearches() {
+        debounceWorkItem?.cancel()
+        debounceWorkItem = nil
+        currentGenerationId &+= 1
+        SpotlightBridge.shared.stop()
+    }
 
     public func search(query: String, onResults: @escaping ([SearchResult]) -> Void) {
         debounceWorkItem?.cancel()
@@ -44,9 +51,13 @@ public final class SearchCoordinator {
         }
 
         // 2. System Commands (Lock, Sleep, Trash, etc.)
-        let matchedActions = SystemActions.shared.match(trimmed)
-        for act in matchedActions {
-            instantResults.append(SearchResult(
+        // Exact keyword hits rank above apps; partial hits go below them so that the default
+        // (first) row for an app name is the app itself, never a disruptive system action.
+        let lowerQuery = trimmed.lowercased()
+        var exactActionResults: [SearchResult] = []
+        var partialActionResults: [SearchResult] = []
+        for act in SystemActions.shared.match(trimmed) {
+            let result = SearchResult(
                 id: "sys_\(act.id)",
                 title: act.name,
                 subtitle: "系统控制指令",
@@ -54,29 +65,16 @@ public final class SearchCoordinator {
                 score: 900,
                 icon: ThumbnailPipeline.shared.symbolIcon(name: act.iconSymbol),
                 action: act.execute
-            ))
+            )
+            if act.keywords.contains(lowerQuery) {
+                exactActionResults.append(result)
+            } else {
+                partialActionResults.append(result)
+            }
         }
+        instantResults.append(contentsOf: exactActionResults)
 
-        // 3. Offline Dictionary
-        if ConfigManager.shared.config.enableDictionary,
-           let def = DictionaryService.shared.lookup(trimmed) {
-            instantResults.append(SearchResult(
-                id: "dict_\(trimmed)",
-                title: "词典: \(trimmed)",
-                subtitle: def,
-                type: .dictionary,
-                score: 800,
-                icon: ThumbnailPipeline.shared.symbolIcon(name: "character.book.closed.fill"),
-                action: {
-                    let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
-                    if let url = URL(string: "dict://\(encoded)") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-            ))
-        }
-
-        // 4. In-Memory Apps (0ms)
+        // 3. In-Memory Apps (0ms)
         let apps = AppHotspotIndex.shared.search(trimmed)
         for app in apps.prefix(AppConstants.instantAppResultCount) {
             let appPath = app.path
@@ -89,6 +87,27 @@ public final class SearchCoordinator {
                 score: 700,
                 action: {
                     LauncherExecutor.open(path: appPath)
+                }
+            ))
+        }
+        instantResults.append(contentsOf: partialActionResults)
+
+        // 4. Offline Dictionary — ranked after apps: "Safari", "Notes", "Mail"... all have
+        // dictionary entries and previously stole the default Enter action from the app.
+        if ConfigManager.shared.config.enableDictionary,
+           let def = DictionaryService.shared.lookup(trimmed) {
+            instantResults.append(SearchResult(
+                id: "dict_\(trimmed)",
+                title: "词典: \(trimmed)",
+                subtitle: def,
+                type: .dictionary,
+                score: 800,
+                icon: ThumbnailPipeline.shared.symbolIcon(name: "character.book.closed.fill"),
+                action: {
+                    let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? trimmed
+                    if let url = URL(string: "dict://\(encoded)") {
+                        NSWorkspace.shared.open(url)
+                    }
                 }
             ))
         }

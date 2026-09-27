@@ -56,11 +56,12 @@ public final class ThemeCardView: NSView {
         // Checkmark badge in top-right
         checkmarkImageView.translatesAutoresizingMaskIntoConstraints = false
         checkmarkImageView.image = ThumbnailPipeline.shared.symbolIcon(name: "checkmark.circle.fill", pointSize: 14, weight: .bold)
-        checkmarkImageView.contentTintColor = .controlAccentColor
+        checkmarkImageView.contentTintColor = GlassPalette.textPrimary(isDark: glassIsDark)
         addSubview(checkmarkImageView)
 
         NSLayoutConstraint.activate([
-            widthAnchor.constraint(equalToConstant: 114),
+            // Width comes from the settings row's fill-equally stack (two themes share the row).
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 114),
             heightAnchor.constraint(equalToConstant: 88),
 
             previewBox.topAnchor.constraint(equalTo: topAnchor, constant: 8),
@@ -82,74 +83,36 @@ public final class ThemeCardView: NSView {
     }
 
     private func setupPreviewMockup() {
-        // Gradient / Background for mockup
         let isDark = theme.isDark
-        let isLiquid = theme.isLiquid
+        previewBox.layer?.backgroundColor = (isDark
+            ? NSColor(white: 0.08, alpha: 1.0)
+            : NSColor(white: 0.90, alpha: 1.0)).cgColor
 
-        if isLiquid {
-            // Blue/gold wallpaper background like macOS Sonoma
-            let bgLayer = CAGradientLayer()
-            bgLayer.frame = CGRect(x: 0, y: 0, width: 98, height: 48)
-            if isDark {
-                bgLayer.colors = [
-                    NSColor(red: 0.12, green: 0.20, blue: 0.38, alpha: 1.0).cgColor,
-                    NSColor(red: 0.28, green: 0.22, blue: 0.15, alpha: 1.0).cgColor,
-                    NSColor(red: 0.08, green: 0.15, blue: 0.32, alpha: 1.0).cgColor
-                ]
-            } else {
-                bgLayer.colors = [
-                    NSColor(red: 0.40, green: 0.60, blue: 0.90, alpha: 1.0).cgColor,
-                    NSColor(red: 0.85, green: 0.70, blue: 0.45, alpha: 1.0).cgColor,
-                    NSColor(red: 0.25, green: 0.50, blue: 0.85, alpha: 1.0).cgColor
-                ]
-            }
-            bgLayer.startPoint = CGPoint(x: 0, y: 0)
-            bgLayer.endPoint = CGPoint(x: 1, y: 1)
-            previewBox.layer?.addSublayer(bgLayer)
-
-            // Miniature window in center
-            let winView = NSView(frame: NSRect(x: 14, y: 6, width: 70, height: 36))
-            winView.wantsLayer = true
-            winView.layer?.cornerRadius = 5
-            winView.layer?.borderWidth = 0.5
-            if isDark {
-                winView.layer?.backgroundColor = NSColor(white: 0.12, alpha: 0.82).cgColor
-                winView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.25).cgColor
-            } else {
-                winView.layer?.backgroundColor = NSColor(white: 0.96, alpha: 0.82).cgColor
-                winView.layer?.borderColor = NSColor(white: 0.0, alpha: 0.15).cgColor
-            }
-            previewBox.addSubview(winView)
-            addWindowDetails(to: winView, isDark: isDark)
-        } else {
-            // Solid wallpaper background
-            previewBox.layer?.backgroundColor = isDark
-                ? NSColor(white: 0.18, alpha: 1.0).cgColor
-                : NSColor(white: 0.88, alpha: 1.0).cgColor
-
-            // Miniature solid window
-            let winView = NSView(frame: NSRect(x: 14, y: 6, width: 70, height: 36))
-            winView.wantsLayer = true
-            winView.layer?.cornerRadius = 5
-            winView.layer?.borderWidth = 0.5
-            if isDark {
-                winView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.14, alpha: 1.0).cgColor
-                winView.layer?.borderColor = NSColor(white: 1.0, alpha: 0.18).cgColor
-            } else {
-                winView.layer?.backgroundColor = NSColor(red: 0.98, green: 0.98, blue: 0.99, alpha: 1.0).cgColor
-                winView.layer?.borderColor = NSColor(white: 0.0, alpha: 0.12).cgColor
-            }
-            previewBox.addSubview(winView)
-            addWindowDetails(to: winView, isDark: isDark)
-        }
+        let winView = NSView(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
+        winView.translatesAutoresizingMaskIntoConstraints = false
+        winView.wantsLayer = true
+        winView.layer?.cornerRadius = 5
+        winView.layer?.borderWidth = 0.75
+        winView.layer?.backgroundColor = (isDark
+            ? NSColor(white: 0.14, alpha: 0.82)
+            : NSColor(white: 0.98, alpha: 0.82)).cgColor
+        winView.layer?.borderColor = (isDark ? NSColor.white.withAlphaComponent(0.14) : NSColor.black.withAlphaComponent(0.11)).cgColor
+        previewBox.addSubview(winView)
+        NSLayoutConstraint.activate([
+            winView.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
+            winView.centerYAnchor.constraint(equalTo: previewBox.centerYAnchor),
+            winView.widthAnchor.constraint(equalToConstant: 70),
+            winView.heightAnchor.constraint(equalToConstant: 36)
+        ])
+        addWindowDetails(to: winView, isDark: isDark)
     }
 
     private func addWindowDetails(to win: NSView, isDark: Bool) {
-        // Accent blue pill / sidebar
+        // Compact selection pill
         let accent = NSView(frame: NSRect(x: 5, y: 22, width: 14, height: 4))
         accent.wantsLayer = true
         accent.layer?.cornerRadius = 2
-        accent.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+        accent.layer?.backgroundColor = (isDark ? NSColor.white.withAlphaComponent(0.72) : NSColor.black.withAlphaComponent(0.58)).cgColor
         win.addSubview(accent)
 
         // Line 1
@@ -178,15 +141,13 @@ public final class ThemeCardView: NSView {
         let isSysDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         checkmarkImageView.isHidden = !isSelected
 
+        // Selection is carried by the fill and the checkmark; no outline on the card edge.
+        layer?.borderWidth = 0
         if isSelected {
-            layer?.borderWidth = 1.5
-            layer?.borderColor = NSColor.controlAccentColor.cgColor
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(isSysDark ? 0.18 : 0.10).cgColor
-            titleLabel.textColor = .controlAccentColor
+            layer?.backgroundColor = GlassPalette.accentFill(isDark: isSysDark).cgColor
+            titleLabel.textColor = GlassPalette.textPrimary(isDark: isSysDark)
             titleLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         } else {
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isSysDark ? NSColor(white: 1.0, alpha: 0.12).cgColor : NSColor(white: 0.0, alpha: 0.12).cgColor
             layer?.backgroundColor = isHovered
                 ? (isSysDark ? NSColor(white: 1.0, alpha: 0.06).cgColor : NSColor(white: 0.0, alpha: 0.04).cgColor)
                 : NSColor.clear.cgColor

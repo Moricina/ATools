@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 
 public struct ReleaseInfo: Equatable {
     public let version: String
@@ -8,6 +9,7 @@ public struct ReleaseInfo: Equatable {
     public let downloadURL: URL
     public let assetName: String
     public let publishedAt: String
+    public let signatureURL: URL
 
     public init(
         version: String,
@@ -15,7 +17,8 @@ public struct ReleaseInfo: Equatable {
         body: String,
         downloadURL: URL,
         assetName: String,
-        publishedAt: String
+        publishedAt: String,
+        signatureURL: URL
     ) {
         self.version = version
         self.name = name
@@ -23,6 +26,7 @@ public struct ReleaseInfo: Equatable {
         self.downloadURL = downloadURL
         self.assetName = assetName
         self.publishedAt = publishedAt
+        self.signatureURL = signatureURL
     }
 }
 
@@ -61,7 +65,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         config.urlCache = nil
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
-        return URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
     }()
 
     private var targetRelease: ReleaseInfo?
@@ -95,6 +99,13 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
     // MARK: - Check for Updates
     public func checkForUpdates(isUserInitiated: Bool = true) {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.checkForUpdates(isUserInitiated: isUserInitiated)
+            }
+            return
+        }
+
         guard currentState != .checking else { return }
         currentState = .checking
         targetRelease = nil
@@ -113,72 +124,89 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         let task = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self else { return }
 
-            if let error = error {
-                let msg = (error as NSError).code == NSURLErrorNotConnectedToInternet
-                    ? "未连接互联网，请检查网络设置"
-                    : "网络请求失败：\(error.localizedDescription)"
-                self.currentState = .error(msg)
-                return
-            }
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                self.currentState = .error("服务器返回异常响应")
-                return
-            }
-
-            if httpResponse.statusCode == 403 || httpResponse.statusCode == 429 {
-                self.currentState = .error("GitHub API 访问达到限流上限，请稍后再试")
-                return
-            }
-
-            guard httpResponse.statusCode == 200, let data = data else {
-                self.currentState = .error("检测更新失败 (HTTP \(httpResponse.statusCode))")
-                return
-            }
-
-            do {
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let tagName = json["tag_name"] as? String else {
-                    self.currentState = .error("解析版本发布数据失败")
-                    return
-                }
-
-                let releaseName = json["name"] as? String ?? tagName
-                let body = json["body"] as? String ?? "暂无更新说明"
-                let publishedAt = json["published_at"] as? String ?? ""
-
-                let currentVer = self.currentAppVersion
-                let hasNewVersion = UpdateManager.isVersion(tagName, greaterThan: currentVer)
-
-                if hasNewVersion {
-                    let assets = json["assets"] as? [[String: Any]] ?? []
-                    guard let preferredAsset = UpdateManager.preferredReleaseAsset(from: assets) else {
-                        self.currentState = .error("最新版本未提供 macOS 安装镜像包")
-                        return
-                    }
-
-                    let release = ReleaseInfo(
-                        version: tagName,
-                        name: releaseName,
-                        body: body,
-                        downloadURL: preferredAsset.url,
-                        assetName: preferredAsset.name,
-                        publishedAt: publishedAt
-                    )
-                    self.targetRelease = release
-                    self.currentState = .available(release)
-                } else {
-                    self.currentState = .upToDate(currentVersion: currentVer)
-                }
-            } catch {
-                self.currentState = .error("解析版本数据异常：\(error.localizedDescription)")
+            DispatchQueue.main.async { [weak self] in
+                self?.handleUpdateCheck(data: data, response: response, error: error)
             }
         }
         task.resume()
     }
 
+    private func handleUpdateCheck(data: Data?, response: URLResponse?, error: Error?) {
+        if let error = error {
+            let msg = (error as NSError).code == NSURLErrorNotConnectedToInternet
+                ? "未连接互联网，请检查网络设置"
+                : "网络请求失败：\(error.localizedDescription)"
+            currentState = .error(msg)
+            return
+        }
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            currentState = .error("服务器返回异常响应")
+            return
+        }
+
+        if httpResponse.statusCode == 403 || httpResponse.statusCode == 429 {
+            currentState = .error("GitHub API 访问达到限流上限，请稍后再试")
+            return
+        }
+
+        guard httpResponse.statusCode == 200, let data = data else {
+            currentState = .error("检测更新失败 (HTTP \(httpResponse.statusCode))")
+            return
+        }
+
+        do {
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tagName = json["tag_name"] as? String else {
+                currentState = .error("解析版本发布数据失败")
+                return
+            }
+
+            let releaseName = json["name"] as? String ?? tagName
+            let body = json["body"] as? String ?? "暂无更新说明"
+            let publishedAt = json["published_at"] as? String ?? ""
+            let currentVer = currentAppVersion
+
+            if UpdateManager.isVersion(tagName, greaterThan: currentVer) {
+                let assets = json["assets"] as? [[String: Any]] ?? []
+                guard let preferredAsset = UpdateManager.preferredReleaseAsset(from: assets) else {
+                    currentState = .error("最新版本未提供 macOS 安装镜像包")
+                    return
+                }
+                guard let signatureURL = UpdateManager.signatureURL(
+                    for: preferredAsset.name,
+                    from: assets
+                ) else {
+                    currentState = .error("最新版本缺少 Ed25519 更新签名，已拒绝不安全的安装包")
+                    return
+                }
+
+                let release = ReleaseInfo(
+                    version: tagName,
+                    name: releaseName,
+                    body: body,
+                    downloadURL: preferredAsset.url,
+                    assetName: preferredAsset.name,
+                    publishedAt: publishedAt,
+                    signatureURL: signatureURL
+                )
+                targetRelease = release
+                currentState = .available(release)
+            } else {
+                currentState = .upToDate(currentVersion: currentVer)
+            }
+        } catch {
+            currentState = .error("解析版本数据异常：\(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Download & Install
     public func startUpdate() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.startUpdate() }
+            return
+        }
+
         guard case .available(let release) = currentState else { return }
         self.targetRelease = release
         self.currentState = .downloading(progress: 0.0)
@@ -204,6 +232,11 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
     /// 重试上次失败的安装包；若失败发生在检查阶段，则重新检查更新。
     public func retry() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.retry() }
+            return
+        }
+
         if let release = targetRelease {
             currentState = .available(release)
             startUpdate()
@@ -213,6 +246,11 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     }
 
     public func cancelUpdate() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.cancelUpdate() }
+            return
+        }
+
         currentDownloadTask?.cancel()
         currentDownloadTask = nil
         currentState = .idle
@@ -243,6 +281,66 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return nil
     }
 
+    static func signatureURL(for assetName: String, from assets: [[String: Any]]) -> URL? {
+        let signatureName = assetName + ".sig"
+        for asset in assets {
+            guard asset["name"] as? String == signatureName,
+                  let urlString = asset["browser_download_url"] as? String,
+                  let url = URL(string: urlString) else {
+                continue
+            }
+            return url
+        }
+        return nil
+    }
+
+    static let updateSigningPublicKeyBase64 = "HbGQoLgpZ8MVghAQOJIR79JC7YvkRQmzimfO2OuFE34="
+
+    static func verifyUpdateSignature(assetURL: URL, signatureURL: URL) throws {
+        let signatureData = try Data(contentsOf: signatureURL)
+        guard let signatureText = String(data: signatureData, encoding: .utf8) else {
+            throw NSError(
+                domain: "UpdateManager",
+                code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "更新签名格式无效，已拒绝安装"]
+            )
+        }
+
+        guard let rawPublicKey = Data(base64Encoded: updateSigningPublicKeyBase64),
+              let signature = Data(base64Encoded: signatureText.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: rawPublicKey) else {
+            throw NSError(
+                domain: "UpdateManager",
+                code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "更新签名格式无效，已拒绝安装"]
+            )
+        }
+
+        let digest = try UpdateManager.sha256(ofFileAt: assetURL)
+        guard publicKey.isValidSignature(signature, for: digest) else {
+            throw NSError(
+                domain: "UpdateManager",
+                code: 8,
+                userInfo: [NSLocalizedDescriptionKey: "Ed25519 更新签名校验失败，安装包可能已被篡改"]
+            )
+        }
+    }
+
+    private static func sha256(ofFileAt url: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+
+        var hasher = SHA256()
+        while true {
+            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
+            if chunk.isEmpty { break }
+            chunk.withUnsafeBytes { buffer in
+                hasher.update(bufferPointer: buffer)
+            }
+        }
+        return Data(hasher.finalize())
+    }
+
     // MARK: - URLSessionDownloadDelegate
     public func urlSession(
         _ session: URLSession,
@@ -266,34 +364,32 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        DispatchQueue.main.async { [weak self] in
-            self?.currentState = .preparing
-        }
+        currentState = .preparing
 
         guard let httpResponse = downloadTask.response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
-            DispatchQueue.main.async { [weak self] in
-                self?.currentDownloadTask = nil
-                self?.currentState = .error("下载服务器返回异常，请稍后重试")
-            }
+            currentDownloadTask = nil
+            currentState = .error("下载服务器返回异常，请稍后重试")
             return
         }
 
         do {
             // URLSession 会在本代理方法返回后删除 location，必须先同步接管临时文件。
             let preparedUpdate = try prepareDownloadedAsset(at: location)
-            DispatchQueue.main.async { [weak self] in
-                self?.currentDownloadTask = nil
-            }
+            let expectedVersion = targetRelease?.version ?? ""
+            let signatureURL = targetRelease?.signatureURL
+            currentDownloadTask = nil
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self = self else { return }
-                self.extractAndRelaunch(preparedUpdate: preparedUpdate)
+                self.extractAndRelaunch(
+                    preparedUpdate: preparedUpdate,
+                    expectedVersion: expectedVersion,
+                    signatureURL: signatureURL
+                )
             }
         } catch {
-            DispatchQueue.main.async { [weak self] in
-                self?.currentDownloadTask = nil
-                self?.currentState = .error("保存安装包失败：\(error.localizedDescription)")
-            }
+            currentDownloadTask = nil
+            currentState = .error("保存安装包失败：\(error.localizedDescription)")
         }
     }
 
@@ -327,7 +423,11 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    private func extractAndRelaunch(preparedUpdate: PreparedUpdate) {
+    private func extractAndRelaunch(
+        preparedUpdate: PreparedUpdate,
+        expectedVersion: String,
+        signatureURL: URL?
+    ) {
         let tempDir = preparedUpdate.tempDirectory
         let stagingDir = tempDir.appendingPathComponent("staging")
         let targetAppBundlePath = Bundle.main.bundlePath
@@ -339,6 +439,18 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         do {
+            guard let signatureURL = signatureURL else {
+                throw NSError(
+                    domain: "UpdateManager",
+                    code: 8,
+                    userInfo: [NSLocalizedDescriptionKey: "更新包缺少 Ed25519 分离签名，已拒绝安装"]
+                )
+            }
+            try UpdateManager.verifyUpdateSignature(
+                assetURL: preparedUpdate.assetURL,
+                signatureURL: signatureURL
+            )
+
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
             let stagingAppPath = stagingDir.appendingPathComponent("ATools.app").path
 
@@ -381,14 +493,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 }
             }
 
-            try validateStagedApp(at: stagingAppPath)
-
-            // 清除新版本隔离属性
-            let xattrProcess = Process()
-            xattrProcess.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-            xattrProcess.arguments = ["-cr", stagingAppPath]
-            try? xattrProcess.run()
-            xattrProcess.waitUntilExit()
+            try validateStagedApp(at: stagingAppPath, expectedVersion: expectedVersion)
 
             // 写入独立的平滑替换守护脚本
             let scriptPath = tempDir.appendingPathComponent("relaunch.sh").path
@@ -423,7 +528,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
     }
 
-    private func validateStagedApp(at stagingAppPath: String) throws {
+    private func validateStagedApp(at stagingAppPath: String, expectedVersion: String) throws {
         let infoPlistPath = (stagingAppPath as NSString).appendingPathComponent("Contents/Info.plist")
         let executablePath = (stagingAppPath as NSString).appendingPathComponent("Contents/MacOS/ATools")
 
@@ -443,7 +548,6 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         let currentVer = currentAppVersion
-        let expectedVersion = targetRelease?.version ?? ""
 
         // 校验：更新包版本只要高于当前运行版本，或者与目标发布版本一致，即为合法有效更新
         let isNewerThanCurrent = UpdateManager.isVersion(packagedVersion, greaterThan: currentVer)
@@ -455,7 +559,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
         let verifyProcess = Process()
         verifyProcess.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
-        verifyProcess.arguments = ["--verify", "--deep", "--strict", stagingAppPath]
+        verifyProcess.arguments = ["--verify", "--deep", "--strict", "--verbose=2", stagingAppPath]
         try verifyProcess.run()
         verifyProcess.waitUntilExit()
 
@@ -496,10 +600,9 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     # 2. 替换前清理陈旧备份
     rm -rf "$BACKUP_APP"
 
-    # 3. 先移动旧包，再使用 ditto 保留资源与权限
+    # 3. 先移动旧包，再使用 ditto 保留资源、权限与隔离属性
     if mv "$TARGET_APP" "$BACKUP_APP" 2>/dev/null; then
         if /usr/bin/ditto "$STAGING_APP" "$TARGET_APP"; then
-            /usr/bin/xattr -cr "$TARGET_APP" 2>/dev/null
             if /usr/bin/codesign --verify --deep --strict "$TARGET_APP" >/dev/null 2>&1; then
                 rm -rf "$BACKUP_APP"
             else

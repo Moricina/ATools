@@ -9,7 +9,17 @@ public final class ThumbnailPipeline {
     private let cache = NSCache<NSString, NSImage>()
     private let genericCache = NSCache<NSString, NSImage>()
     private let targetSize = CGSize(width: 64, height: 64)
-    private let queue = DispatchQueue(label: "cc.atools.thumbnail", qos: .userInitiated, attributes: .concurrent)
+    /// Bounded concurrency: icon rendering is CPU-bound, and an unbounded concurrent queue
+    /// spun up one thread per shelf item.
+    private let renderQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "cc.atools.thumbnail"
+        q.qualityOfService = .userInitiated
+        q.maxConcurrentOperationCount = 4
+        return q
+    }()
+    /// Main-thread only: callbacks waiting for an icon that is already being rendered.
+    private var pendingCallbacks: [String: [(NSImage) -> Void]] = [:]
 
     private init() {
         cache.countLimit = AppConstants.thumbnailCacheCountLimit
@@ -48,8 +58,14 @@ public final class ThumbnailPipeline {
             }
         }
 
+        if pendingCallbacks[path] != nil {
+            pendingCallbacks[path]?.append(completion)
+            return
+        }
+        pendingCallbacks[path] = [completion]
+
         // Generate thumbnail asynchronously
-        queue.async { [weak self] in
+        renderQueue.addOperation { [weak self] in
             guard let self = self else { return }
 
             let url = URL(fileURLWithPath: path)
@@ -64,13 +80,16 @@ public final class ThumbnailPipeline {
                     representationTypes: .thumbnail
                 )
                 let semaphore = DispatchSemaphore(value: 0)
+                let box = ThumbnailResultBox()
                 QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
-                    if let rep = rep {
-                        finalImage = rep.nsImage
-                    }
+                    box.store(rep?.nsImage)
                     semaphore.signal()
                 }
-                _ = semaphore.wait(timeout: .now() + 0.08)
+                if semaphore.wait(timeout: .now() + 0.08) == .timedOut {
+                    // The generator may still call back later; never let it write concurrently.
+                    box.close()
+                }
+                finalImage = box.take()
             }
 
             // Fallback to NSWorkspace icon downsampled
@@ -84,7 +103,8 @@ public final class ThumbnailPipeline {
             self.cache.setObject(result, forKey: key, cost: Self.costBytes(for: result))
 
             DispatchQueue.main.async {
-                completion(result)
+                let callbacks = self.pendingCallbacks.removeValue(forKey: path) ?? []
+                callbacks.forEach { $0(result) }
             }
         }
     }
@@ -140,5 +160,30 @@ public final class ThumbnailPipeline {
                    fraction: 1.0)
         newImage.unlockFocus()
         return newImage
+    }
+}
+
+/// Hands a QuickLook result across threads; late callbacks after a timeout are dropped.
+private final class ThumbnailResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var image: NSImage?
+    private var isClosed = false
+
+    func store(_ newImage: NSImage?) {
+        lock.lock()
+        if !isClosed { image = newImage }
+        lock.unlock()
+    }
+
+    func close() {
+        lock.lock()
+        isClosed = true
+        lock.unlock()
+    }
+
+    func take() -> NSImage? {
+        lock.lock()
+        defer { lock.unlock() }
+        return image
     }
 }

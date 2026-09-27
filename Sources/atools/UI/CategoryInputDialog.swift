@@ -92,7 +92,7 @@ public final class CategoryInputDialog: NSWindowController {
         // Title (Bold 14pt, zero icon)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.stringValue = titleText
-        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .bold)
+        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
         titleLabel.textColor = .labelColor
         container.addSubview(titleLabel)
 
@@ -129,7 +129,7 @@ public final class CategoryInputDialog: NSWindowController {
         confirmButton.target = self
         confirmButton.action = #selector(confirmClicked)
         confirmButton.keyEquivalent = "\r" // Enter key
-        confirmButton.bezelColor = .controlAccentColor
+        confirmButton.bezelColor = GlassPalette.accentText(isDark: confirmButton.glassIsDark)
         container.addSubview(confirmButton)
 
         NSLayoutConstraint.activate([

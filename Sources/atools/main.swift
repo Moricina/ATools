@@ -3,9 +3,6 @@ import AppKit
 
 if CommandLine.arguments.contains("--test") {
     let tempTestDir = ConfigManager.setupIsolatedTestEnvironment()
-    defer {
-        try? FileManager.default.removeItem(at: tempTestDir)
-    }
 
     print("==================================================")
     print(" [ATools] Running Comprehensive Diagnostic Suite (Sandbox Mode)")
@@ -17,6 +14,16 @@ if CommandLine.arguments.contains("--test") {
     assert(CalculatorEngine.shared.evaluate("(1024 * 768) / 2") == "393216", "Math expression evaluation failed")
     assert(CalculatorEngine.shared.evaluate("0x10 + 16") == "32", "Hex math evaluation failed")
     assert(CalculatorEngine.shared.evaluate("not a math expression") == nil, "Non-math should return nil")
+    // Half-typed / non-math input used to raise uncaught NSExpression exceptions.
+    for input in ["1+", "c++", "wi-fi", "iphone-15", "-", "100%", "10%", "(1+2", "3*", "sin(", "a-b"] {
+        assert(CalculatorEngine.shared.evaluate(input) == nil, "'\(input)' must not evaluate")
+    }
+    assert(CalculatorEngine.shared.evaluate("7/2") == "3.5", "Division must not truncate")
+    assert(CalculatorEngine.shared.evaluate("1/0") == nil, "Division by zero yields no result")
+    assert(CalculatorEngine.shared.evaluate("2^10") == "1024", "Power")
+    assert(CalculatorEngine.shared.evaluate("10%3") == "1", "Modulo")
+    assert(CalculatorEngine.shared.evaluate("sqrt(16)+1") == "5", "Functions")
+    assert(CalculatorEngine.shared.evaluate("2024-01-01") == nil, "Dates are not subtraction")
     print("      ✓ CalculatorEngine passed all tests.")
 
     // 2. Test SystemActions
@@ -27,6 +34,11 @@ if CommandLine.arguments.contains("--test") {
     assert(!suoActions.isEmpty, "SystemAction '锁屏' should match")
     let sleepActions = SystemActions.shared.match("sleep")
     assert(!sleepActions.isEmpty, "SystemAction 'sleep' should match")
+    assert(SystemActions.shared.match("s").isEmpty, "Single letters must not surface system actions")
+    assert(SystemActions.shared.match("clock.png").isEmpty, "File names containing a keyword must not match")
+    assert(SystemActions.shared.match("emptyfolder").isEmpty, "'emptyfolder' must not offer Empty Trash")
+    assert(HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "").isUnassigned, "Cleared binding is unassigned")
+    assert(!HotkeyBinding.defaultShelf.isUnassigned, "Default binding is assigned")
     print("      ✓ SystemActions passed all tests (matched \(SystemActions.shared.actions.count) actions).")
 
     // 3. Test ConfigManager & Dual Hotkeys & Resizable Shelf Dimensions & Panel Toggles
@@ -63,7 +75,7 @@ if CommandLine.arguments.contains("--test") {
 
     ConfigManager.shared.updateEnableFavoritesCategory(false)
     assert(ConfigManager.shared.config.enableFavoritesCategory == false, "enableFavoritesCategory should default to false")
-    assert(!ConfigManager.shared.config.categories.contains(where: { $0.name == "常用" || $0.iconSymbol == "star.fill" }), "常用分类数据在关闭后应彻底清空移除")
+    assert(!ConfigManager.shared.config.categories.contains(where: { $0.isFavorites }), "常用分类数据在关闭后应彻底清空移除")
 
     // Mutual exclusion test: if search is enabled, we can disable shelf
     ConfigManager.shared.updateEnableSearchPanel(true)
@@ -91,10 +103,15 @@ if CommandLine.arguments.contains("--test") {
     assert(decodedDoubleCmd.specialTrigger == .doubleCommand, "Decoded doubleCommand trigger correctly")
 
     // Test Theme switching
-    ConfigManager.shared.updateTheme(.solidDark)
-    assert(ConfigManager.shared.config.theme == .solidDark, "Theme should update to .solidDark")
-    assert(ConfigManager.shared.config.theme.isDark == true, "solidDark isDark should be true")
-    assert(ConfigManager.shared.config.theme.isLiquid == false, "solidDark isLiquid should be false")
+    ConfigManager.shared.updateTheme(.liquidDark)
+    assert(ConfigManager.shared.config.theme == .liquidDark, "Theme should update to .liquidDark")
+    assert(ConfigManager.shared.config.theme.isDark == true, "liquidDark isDark should be true")
+    assert(AppTheme.allCases == [.liquidDark, .liquidLight], "Only the two liquid themes remain")
+    // Configs saved with the retired solid themes migrate to the matching liquid theme.
+    let solidLightJSON = "{\"theme\": \"solidLight\"}".data(using: .utf8)!
+    assert((try! JSONDecoder().decode(AtoolsConfig.self, from: solidLightJSON)).theme == .liquidLight, "solidLight -> liquidLight")
+    let solidDarkJSON = "{\"theme\": \"solidDark\"}".data(using: .utf8)!
+    assert((try! JSONDecoder().decode(AtoolsConfig.self, from: solidDarkJSON)).theme == .liquidDark, "solidDark -> liquidDark")
     ConfigManager.shared.updateTheme(.liquidLight)
     assert(ConfigManager.shared.config.theme == .liquidLight, "Theme should update to .liquidLight")
 
@@ -113,8 +130,10 @@ if CommandLine.arguments.contains("--test") {
     // Test themeOpacity
     ConfigManager.shared.updateThemeOpacity(0.85)
     assert(ConfigManager.shared.config.themeOpacity == 0.85, "themeOpacity should update to 0.85")
-    ConfigManager.shared.updateThemeOpacity(0.10) // should clamp to 0.30
-    assert(ConfigManager.shared.config.themeOpacity == 0.30, "themeOpacity clamped to 0.30")
+    ConfigManager.shared.updateThemeOpacity(0.10) // should clamp to 0.40 (minimum floor)
+    assert(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity should be clamped to 0.40")
+    ConfigManager.shared.updateThemeOpacity(-0.5) // should clamp to 0.40
+    assert(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity clamped to 0.40")
     ConfigManager.shared.updateThemeOpacity(1.50) // should clamp to 1.00
     assert(ConfigManager.shared.config.themeOpacity == 1.00, "themeOpacity clamped to 1.00")
     ConfigManager.shared.updateThemeOpacity(0.90) // reset to default
@@ -253,9 +272,7 @@ if CommandLine.arguments.contains("--test") {
     let downloadsURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
     let testFixtureURL = downloadsURL.appendingPathComponent("atools_probe_fixture.txt")
     try? "ATools Stability Probe".data(using: .utf8)?.write(to: testFixtureURL)
-    defer {
-        try? FileManager.default.removeItem(at: testFixtureURL)
-    }
+    SpotlightBridge.shared.warmHotFolderCache(maxAge: 0)
 
     var foundFixtureFiles: [SearchResult] = []
     var isFixtureDone = false
@@ -479,6 +496,16 @@ if CommandLine.arguments.contains("--test") {
         }
     }
 
+    // Typing then clearing the query must not walk the panel down the screen.
+    let anchoredTop = searchPanel.frame.maxY
+    for _ in 0..<3 {
+        searchVC.updatePanelHeight(hasResults: true, resultCount: 4, animated: false)
+        assert(abs(searchPanel.frame.maxY - anchoredTop) < 0.5, "Expanding must keep the panel's top edge fixed")
+        searchVC.updatePanelHeight(hasResults: false, resultCount: 0, animated: false)
+        assert(abs(searchPanel.frame.maxY - anchoredTop) < 0.5, "Collapsing must keep the panel's top edge fixed")
+    }
+    print("      ✓ Search panel top edge stays fixed across repeated expand/collapse.")
+
     // Now test expansion
     searchVC.updatePanelHeight(hasResults: true, resultCount: 4, animated: false)
     assert(searchPanel.frame.height > 72, "SearchPanel height should expand when results exist")
@@ -567,6 +594,9 @@ if CommandLine.arguments.contains("--test") {
     print(" [ATools] All diagnostics PASSED successfully!")
     print("==================================================")
 
+    // `defer` blocks don't run when the process ends through exit(), so clean up explicitly.
+    try? FileManager.default.removeItem(at: testFixtureURL)
+    try? FileManager.default.removeItem(at: tempTestDir)
     exit(0)
 }
 

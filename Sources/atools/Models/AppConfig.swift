@@ -49,6 +49,12 @@ public struct HotkeyBinding: Codable, Equatable {
         self.specialTrigger = (try? container.decode(HotkeySpecialTrigger.self, forKey: .specialTrigger)) ?? .none
     }
 
+    /// A cleared binding (keyCode 0 == 'A', no modifiers) must never be registered,
+    /// otherwise the bare A key becomes a system-wide hotkey.
+    public var isUnassigned: Bool {
+        return specialTrigger == .none && carbonModifiers == 0 && displayString.isEmpty
+    }
+
     public static let defaultShelf = HotkeyBinding(
         keyCode: 0, // Key 'A'
         carbonModifiers: 2048, // optionKey in Carbon
@@ -67,24 +73,25 @@ public struct HotkeyBinding: Codable, Equatable {
 public enum AppTheme: String, Codable, CaseIterable {
     case liquidDark = "liquidDark"     // 液态玻璃 (深色)
     case liquidLight = "liquidLight"   // 液态玻璃 (浅色)
-    case solidDark = "solidDark"       // 经典纯色 (深色)
-    case solidLight = "solidLight"     // 经典纯色 (浅色)
+
+    /// Maps stored values, including the retired "经典纯色" themes, onto the remaining ones.
+    public static func migrated(from rawValue: String) -> AppTheme? {
+        switch rawValue {
+        case "liquidDark", "solidDark": return .liquidDark
+        case "liquidLight", "solidLight": return .liquidLight
+        default: return nil
+        }
+    }
 
     public var title: String {
         switch self {
         case .liquidDark: return "液态玻璃 (深色)"
         case .liquidLight: return "液态玻璃 (浅色)"
-        case .solidDark: return "经典纯色 (深色)"
-        case .solidLight: return "经典纯色 (浅色)"
         }
     }
 
     public var isDark: Bool {
-        return self == .liquidDark || self == .solidDark
-    }
-
-    public var isLiquid: Bool {
-        return self == .liquidDark || self == .liquidLight
+        return self == .liquidDark
     }
 }
 
@@ -123,6 +130,16 @@ public enum ShelfIconSize: String, Codable {
     }
 }
 
+public extension CharacterSet {
+    /// `.urlQueryAllowed` keeps `&`, `=`, `+` and `?` unescaped, which splits a query such as
+    /// "C++ & Java" into several parameters. Values must escape those as well.
+    static let urlQueryValueAllowed: CharacterSet = {
+        var set = CharacterSet.urlQueryAllowed
+        set.remove(charactersIn: "&=+?#/")
+        return set
+    }()
+}
+
 public enum WebSearchEngine: String, Codable, CaseIterable {
     case google = "google"
     case bing = "bing"
@@ -141,7 +158,7 @@ public enum WebSearchEngine: String, Codable, CaseIterable {
     }
 
     public func searchURL(for query: String, customTemplate: String = "") -> URL? {
-        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) else { return nil }
         let urlStr: String
         switch self {
         case .google: urlStr = "https://www.google.com/search?q=\(encoded)"
@@ -221,7 +238,7 @@ public struct AtoolsConfig: Codable {
         categoryOrientation: CategoryOrientation = .horizontal,
         shelfIconSize: ShelfIconSize = .medium,
         sidebarWidth: Double = 84,
-        theme: AppTheme = .liquidLight,
+        theme: AppTheme = .liquidDark,
         shelfIconScale: Double = 1.0,
         themeOpacity: Double = 0.90,
         enableShelfPanel: Bool = true,
@@ -295,11 +312,12 @@ public struct AtoolsConfig: Codable {
         self.categoryOrientation = (try? container.decode(CategoryOrientation.self, forKey: .categoryOrientation)) ?? .horizontal
         self.shelfIconSize = (try? container.decode(ShelfIconSize.self, forKey: .shelfIconSize)) ?? .medium
         self.sidebarWidth = (try? container.decode(Double.self, forKey: .sidebarWidth)) ?? 84
-        self.theme = (try? container.decode(AppTheme.self, forKey: .theme)) ?? .liquidLight
+        let rawTheme = (try? container.decode(String.self, forKey: .theme)) ?? ""
+        self.theme = AppTheme.migrated(from: rawTheme) ?? .liquidDark
         let rawScale = (try? container.decode(Double.self, forKey: .shelfIconScale)) ?? 1.0
         self.shelfIconScale = max(0.70, min(1.30, rawScale))
         let rawOpacity = (try? container.decode(Double.self, forKey: .themeOpacity)) ?? 0.90
-        self.themeOpacity = max(0.30, min(1.00, rawOpacity))
+        self.themeOpacity = max(0.40, min(1.00, rawOpacity))
 
         // New fields with strict non-destructive fallback defaults
         self.enableShelfPanel = (try? container.decode(Bool.self, forKey: .enableShelfPanel)) ?? true

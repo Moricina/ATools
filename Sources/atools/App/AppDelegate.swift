@@ -7,11 +7,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
+        setupMainMenu()
         setupStatusItem()
         setupHotkeys()
 
-        // Warm up in-memory app index
-        AppHotspotIndex.shared.refreshIndex()
+        // Warm up in-memory app index (its initializer performs the first scan)
+        _ = AppHotspotIndex.shared
 
         // Preflight user directories to register TCC permissions
         preflightUserDirectoriesAccess()
@@ -53,6 +54,35 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+
+    }
+
+    /// AppKit routes ⌘C/⌘V/⌘X/⌘A/⌘Z to text fields through main-menu key equivalents. An
+    /// accessory app without a main menu therefore can't paste into the search bar, the
+    /// category name dialog or the custom search URL field. The menu is never shown.
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "退出 ATools", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "编辑")
+        editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     private var shelfMenuItem: NSMenuItem?
@@ -174,7 +204,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "确定")
-        alert.runModal()
+        alert.runModalAboveFloatingWindows()
     }
 
     @objc private func quitApp() {
@@ -183,6 +213,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        ConfigManager.shared.flushPendingSave()
         HotkeyManager.shared.unregisterAll()
     }
 }

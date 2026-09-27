@@ -4,6 +4,7 @@ import AppKit
 /// 现代 macOS 卡片式容器视图 (自适应浅/深色背景与微高光圆角描边)
 public final class SettingsCardView: NSView {
     private let stackView = NSStackView()
+    private let backgroundView = NSVisualEffectView()
 
     public init() {
         super.init(frame: .zero)
@@ -17,9 +18,16 @@ public final class SettingsCardView: NSView {
 
     private func setupView() {
         wantsLayer = true
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 0.5
-        updateColors()
+        layer?.cornerRadius = 12
+        layer?.borderWidth = 0
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = true
+
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        backgroundView.material = .contentBackground
+        backgroundView.blendingMode = .withinWindow
+        backgroundView.state = .active
+        addSubview(backgroundView)
 
         stackView.translatesAutoresizingMaskIntoConstraints = false
         stackView.orientation = .vertical
@@ -29,27 +37,16 @@ public final class SettingsCardView: NSView {
         addSubview(stackView)
 
         NSLayoutConstraint.activate([
+            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backgroundView.topAnchor.constraint(equalTo: topAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
             stackView.topAnchor.constraint(equalTo: topAnchor),
             stackView.bottomAnchor.constraint(equalTo: bottomAnchor),
             stackView.leadingAnchor.constraint(equalTo: leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
-    }
-
-    public override func updateLayer() {
-        super.updateLayer()
-        updateColors()
-    }
-
-    private func updateColors() {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if isDark {
-            layer?.backgroundColor = NSColor(white: 0.17, alpha: 0.85).cgColor
-            layer?.borderColor = NSColor(white: 0.28, alpha: 0.8).cgColor
-        } else {
-            layer?.backgroundColor = NSColor(white: 0.98, alpha: 0.95).cgColor
-            layer?.borderColor = NSColor(white: 0.85, alpha: 0.9).cgColor
-        }
     }
 
     /// 添加一行设置项，并在需要时在行间插入标准 Inset 分割线
@@ -144,7 +141,7 @@ public final class SettingsRowView: NSView {
         if let icon = icon {
             iconImageView.translatesAutoresizingMaskIntoConstraints = false
             iconImageView.image = icon
-            iconImageView.contentTintColor = .controlAccentColor
+            iconImageView.contentTintColor = .secondaryLabelColor
             addSubview(iconImageView)
 
             NSLayoutConstraint.activate([
@@ -265,8 +262,9 @@ public final class WelcomeGuideBannerView: NSView {
 
     private let titleLabel = NSTextField(labelWithString: "")
     private let bodyLabel = NSTextField(wrappingLabelWithString: "")
-    private let guideButton = NSButton()
-    private let dismissButton = NSButton()
+    private let guideButton = SettingsPillButton(title: "查看 Spotlight 设置指南")
+    private let dismissButton = SettingsPillButton(title: "我知道了，开始体验", style: .primary)
+    private let backgroundView = NSVisualEffectView()
 
     public init() {
         super.init(frame: .zero)
@@ -278,13 +276,20 @@ public final class WelcomeGuideBannerView: NSView {
     private func setupView() {
         wantsLayer = true
         layer?.cornerRadius = 10
-        layer?.borderWidth = 1.0
-        updateColors()
+        layer?.borderWidth = 0
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = true
+
+        backgroundView.translatesAutoresizingMaskIntoConstraints = false
+        backgroundView.material = .contentBackground
+        backgroundView.blendingMode = .withinWindow
+        backgroundView.state = .active
+        addSubview(backgroundView)
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .bold)
-        titleLabel.textColor = .controlAccentColor
-        titleLabel.stringValue = "🎉 欢迎使用 ATools！双独立面板已就绪"
+        titleLabel.textColor = .labelColor
+        titleLabel.stringValue = "欢迎使用 ATools"
         addSubview(titleLabel)
 
         bodyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -292,31 +297,27 @@ public final class WelcomeGuideBannerView: NSView {
         bodyLabel.textColor = .secondaryLabelColor
         bodyLabel.maximumNumberOfLines = 0
         bodyLabel.stringValue = """
-        • 🗂️ 分类工作台：按 Option + A (⌥A) 呼出分类面板，支持拖拽文件与应用加入
-        • 🔎 全盘搜索中枢：按 Option + Space (⌥Space) 居中呼出秒搜已安装应用与全盘文件
-        • 🔍 状态栏托盘：图标已常驻在屏幕右上角菜单栏，随时点击即可调出菜单与设置
-        • 🚀 完美平替聚焦：建议关闭自带 Spotlight 快捷键并隐藏其菜单栏图标
+        分类工作台：按 Option + A (⌥A) 呼出分类面板，支持拖拽文件与应用加入
+        全盘搜索：按 Option + Space (⌥Space) 居中呼出，搜索应用与全盘文件
+        状态栏：菜单栏图标常驻，可快速打开面板、设置或退出应用
+        Spotlight 设置：建议关闭系统搜索快捷键并隐藏其菜单栏图标
         """
         addSubview(bodyLabel)
 
-        guideButton.translatesAutoresizingMaskIntoConstraints = false
-        guideButton.bezelStyle = .inline
-        guideButton.isBordered = false
-        guideButton.title = "查看聚焦平替指南 →"
-        guideButton.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        guideButton.contentTintColor = .controlAccentColor
         guideButton.target = self
         guideButton.action = #selector(handleGuideClicked)
         addSubview(guideButton)
 
-        dismissButton.translatesAutoresizingMaskIntoConstraints = false
-        dismissButton.bezelStyle = .rounded
-        dismissButton.title = "我知道了，开始体验"
         dismissButton.target = self
         dismissButton.action = #selector(handleDismiss)
         addSubview(dismissButton)
 
         NSLayoutConstraint.activate([
+            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backgroundView.topAnchor.constraint(equalTo: topAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
             titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 14),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
@@ -343,19 +344,103 @@ public final class WelcomeGuideBannerView: NSView {
         onDismiss?()
     }
 
-    public override func updateLayer() {
-        super.updateLayer()
-        updateColors()
+}
+
+/// Borderless capsule button used throughout Settings.
+///
+/// The stock `.rounded` bezel renders an almost-white fill on macOS 26, which disappears
+/// on the white settings cards and leaves only floating text. This draws its own fill
+/// (no outline) with hover / pressed / disabled states and follows the light/dark appearance.
+public final class SettingsPillButton: NSButton {
+    public enum Style {
+        case primary
+        case secondary
     }
 
-    private func updateColors() {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        if isDark {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
-            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
-        } else {
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.08).cgColor
-            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.28).cgColor
+    public var style: Style {
+        didSet { updateAppearanceStyles() }
+    }
+
+    private var isHovered = false {
+        didSet { if oldValue != isHovered { updateAppearanceStyles() } }
+    }
+    private var isPressed = false {
+        didSet { if oldValue != isPressed { updateAppearanceStyles() } }
+    }
+    private var trackingArea: NSTrackingArea?
+
+    public static let height: CGFloat = 28
+
+    public init(title: String, style: Style = .secondary, target: AnyObject? = nil, action: Selector? = nil) {
+        self.style = style
+        super.init(frame: .zero)
+        self.title = title
+        self.target = target
+        self.action = action
+        setButtonType(.momentaryChange)
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = SettingsPillButton.height / 2
+        layer?.borderWidth = 0
+        font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: SettingsPillButton.height).isActive = true
+        setContentHuggingPriority(.required, for: .horizontal)
+        updateAppearanceStyles()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override public var intrinsicContentSize: NSSize {
+        let base = super.intrinsicContentSize
+        return NSSize(width: ceil(base.width) + 28, height: SettingsPillButton.height)
+    }
+
+    override public var isEnabled: Bool {
+        didSet { updateAppearanceStyles() }
+    }
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override public func mouseEntered(with event: NSEvent) { isHovered = true }
+    override public func mouseExited(with event: NSEvent) { isHovered = false }
+
+    override public func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        isPressed = true
+        super.mouseDown(with: event) // runs the tracking loop until mouse up
+        isPressed = false
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearanceStyles()
+    }
+
+    private func updateAppearanceStyles() {
+        let isDark = glassIsDark
+        let fill: NSColor
+        let text: NSColor
+        switch style {
+        case .primary:
+            let base = GlassPalette.textPrimary(isDark: isDark)
+            fill = isPressed ? base.withAlphaComponent(0.72) : (isHovered ? base.withAlphaComponent(0.86) : base)
+            text = isDark ? NSColor(white: 0.08, alpha: 1.0) : .white
+        case .secondary:
+            let alpha: CGFloat = isPressed ? (isDark ? 0.24 : 0.14) : (isHovered ? (isDark ? 0.18 : 0.10) : (isDark ? 0.12 : 0.06))
+            fill = isDark ? NSColor(white: 1.0, alpha: alpha) : NSColor(white: 0.0, alpha: alpha)
+            text = GlassPalette.textPrimary(isDark: isDark)
         }
+        layer?.backgroundColor = fill.cgColor
+        contentTintColor = text
+        alphaValue = isEnabled ? 1.0 : 0.45
     }
 }

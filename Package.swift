@@ -17,6 +17,7 @@ let package = Package(
             path: "Sources/atools",
             linkerSettings: [
                 .linkedFramework("AppKit"),
+                .linkedFramework("SwiftUI"),
                 .linkedFramework("Carbon"),
                 .linkedFramework("CoreServices"),
                 .linkedFramework("ServiceManagement"),

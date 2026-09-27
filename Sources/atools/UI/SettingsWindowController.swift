@@ -9,8 +9,31 @@ public extension Notification.Name {
     static let atoolsThemeDidChange = Notification.Name("atoolsThemeDidChange")
 }
 
+public extension NSAlert {
+    /// The settings window and panels float at `.statusBar` or above. A plain `runModal()`
+    /// alert opens at modal-panel level *behind* them, leaving an invisible modal loop that
+    /// makes the app look frozen. Raise the alert above every ATools window first.
+    @discardableResult
+    func runModalAboveFloatingWindows() -> NSApplication.ModalResponse {
+        window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+        NSApp.activate(ignoringOtherApps: true)
+        return runModal()
+    }
+}
+
 public final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     public static let shared = SettingsWindowController()
+    private static var sharedInstanceCreated = false
+
+    /// Visibility check that doesn't instantiate the settings window as a side effect.
+    public static var isWindowVisible: Bool {
+        return visibleWindowFrame != nil
+    }
+
+    public static var visibleWindowFrame: NSRect? {
+        guard sharedInstanceCreated, let win = shared.window, win.isVisible else { return nil }
+        return win.frame
+    }
 
     private var sidebarView: SettingsSidebarView!
     private var contentContainer: NSView!
@@ -39,6 +62,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         win.maxSize = NSSize(width: 780, height: 800)
         win.level = NSWindow.Level(NSWindow.Level.statusBar.rawValue + 1)
         super.init(window: win)
+        SettingsWindowController.sharedInstanceCreated = true
         win.delegate = self
         setupUI()
     }
@@ -48,7 +72,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func showSettingsWindow() {
-        PanelCoordinator.shared.hideAllPanels()
+        PanelCoordinator.shared.hideAllPanels(restoreFocus: false)
         guard let win = window else { return }
         win.setContentSize(NSSize(width: 780, height: 620))
         win.center()

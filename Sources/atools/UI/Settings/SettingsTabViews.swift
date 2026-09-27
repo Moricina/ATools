@@ -310,8 +310,7 @@ public final class GeneralTabView: NSView {
         card3.translatesAutoresizingMaskIntoConstraints = false
         permScrollContent.addSubview(card3)
 
-        let fdaBtn = NSButton(title: "前往授权...", target: self, action: #selector(openFDA))
-        fdaBtn.bezelStyle = .rounded
+        let fdaBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openFDA))
         let rowFDA = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "lock.shield"),
             title: "完全磁盘访问权限 (Full Disk Access)",
@@ -327,8 +326,7 @@ public final class GeneralTabView: NSView {
         cardSpotlight.translatesAutoresizingMaskIntoConstraints = false
         permScrollContent.addSubview(cardSpotlight)
 
-        let kbBtn = NSButton(title: "前往键盘设置...", target: self, action: #selector(openKeyboardSettings))
-        kbBtn.bezelStyle = .rounded
+        let kbBtn = SettingsPillButton(title: "前往键盘设置...", target: self, action: #selector(openKeyboardSettings))
         let rowKB = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
             title: "步骤 1：禁用系统 Spotlight 快捷键",
@@ -337,8 +335,7 @@ public final class GeneralTabView: NSView {
         )
         cardSpotlight.addRow(rowKB)
 
-        let ccBtn = NSButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
-        ccBtn.bezelStyle = .rounded
+        let ccBtn = SettingsPillButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
         let rowCC = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "menubar.arrow.up.rectangle"),
             title: "步骤 2：隐藏系统菜单栏聚焦图标",
@@ -416,7 +413,7 @@ public final class GeneralTabView: NSView {
                 alert.informativeText = "请在「系统设置」->「通用」->「登录项」中允许 ATools 开机自启。"
                 alert.addButton(withTitle: "打开系统设置")
                 alert.addButton(withTitle: "好")
-                if alert.runModal() == .alertFirstButtonReturn {
+                if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
                     LaunchAtLoginController.shared.openLoginItemsSettings()
                 }
             }
@@ -600,13 +597,13 @@ public final class ShelfTabView: NSView {
         badgeContainer.translatesAutoresizingMaskIntoConstraints = false
         badgeContainer.wantsLayer = true
         badgeContainer.layer?.cornerRadius = 10
-        badgeContainer.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        badgeContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
         scaleContainer.addSubview(badgeContainer)
 
         iconSizeBadge = NSTextField(labelWithString: "100%（默认）")
         iconSizeBadge.translatesAutoresizingMaskIntoConstraints = false
         iconSizeBadge.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        iconSizeBadge.textColor = .controlAccentColor
+        iconSizeBadge.textColor = .labelColor
         badgeContainer.addSubview(iconSizeBadge)
 
         NSLayoutConstraint.activate([
@@ -629,7 +626,7 @@ public final class ShelfTabView: NSView {
         let rowScale = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "app.dashed"),
             title: "图标缩放比例",
-            subtitle: "支持 70% ~ 130% 无级平滑动态缩放",
+            subtitle: "支持 70% ~ 130% 五档缩放",
             accessory: scaleContainer
         )
         card1.addRow(rowScale, isLast: true)
@@ -738,6 +735,9 @@ public final class ShelfTabView: NSView {
         let scale = val / 100.0
         let pct = Int(val)
         iconSizeBadge.stringValue = (pct == 100) ? "100%（默认）" : "\(pct)%"
+        // A continuous slider fires for every drag event; only react to real value changes
+        // (each change rebuilds the grid and re-snaps the shelf window).
+        guard abs(scale - ConfigManager.shared.config.shelfIconScale) > 0.001 else { return }
         ConfigManager.shared.updateShelfIconScale(scale)
         NotificationCenter.default.post(name: .atoolsShelfIconSizeDidChange, object: nil)
     }
@@ -1168,8 +1168,7 @@ public final class HotkeysTabView: NSView {
         card2.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card2)
 
-        let sysBtn = NSButton(title: "前往系统键盘设置...", target: self, action: #selector(openKeyboardSettings))
-        sysBtn.bezelStyle = .rounded
+        let sysBtn = SettingsPillButton(title: "前往系统键盘设置...", target: self, action: #selector(openKeyboardSettings))
         let rowSys = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
             title: "释放 Spotlight 快捷键 (⌘Space)",
@@ -1178,8 +1177,7 @@ public final class HotkeysTabView: NSView {
         )
         card2.addRow(rowSys)
 
-        let ccBtn = NSButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
-        ccBtn.bezelStyle = .rounded
+        let ccBtn = SettingsPillButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
         let rowCC = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "menubar.arrow.up.rectangle"),
             title: "隐藏系统菜单栏 Spotlight 放大镜",
@@ -1219,29 +1217,63 @@ public final class HotkeysTabView: NSView {
     }
 
     private func handleShelfRecorded(_ binding: HotkeyBinding) {
-        let searchBinding = ConfigManager.shared.config.searchHotkey
-        if binding.keyCode == searchBinding.keyCode && binding.carbonModifiers == searchBinding.carbonModifiers && binding.specialTrigger == searchBinding.specialTrigger {
-            let oldShelfBinding = ConfigManager.shared.config.shelfHotkey
-            ConfigManager.shared.updateSearchHotkey(oldShelfBinding)
-            searchRecorder.currentBinding = oldShelfBinding
-            if ConfigManager.shared.config.enableSearchPanel {
-                HotkeyManager.shared.register(id: .search, binding: oldShelfBinding)
+        applyRecordedBinding(binding, for: .shelf)
+    }
+
+    /// Applies a freshly recorded binding. When it collides with the other panel's binding the
+    /// two are swapped. Both registrations are released first because Carbon refuses to
+    /// register a key combination that is still held — even by this same process.
+    private func applyRecordedBinding(_ binding: HotkeyBinding, for id: HotKeyID) {
+        let cfg = ConfigManager.shared.config
+        let otherId: HotKeyID = (id == .shelf) ? .search : .shelf
+        let previous = (id == .shelf) ? cfg.shelfHotkey : cfg.searchHotkey
+        let other = (id == .shelf) ? cfg.searchHotkey : cfg.shelfHotkey
+        let isEnabled = (id == .shelf) ? cfg.enableShelfPanel : cfg.enableSearchPanel
+        let isOtherEnabled = (id == .shelf) ? cfg.enableSearchPanel : cfg.enableShelfPanel
+        let recorder: HotkeyRecorderControl = (id == .shelf) ? shelfRecorder : searchRecorder
+        let otherRecorder: HotkeyRecorderControl = (id == .shelf) ? searchRecorder : shelfRecorder
+
+        let collides = !other.isUnassigned
+            && binding.keyCode == other.keyCode
+            && binding.carbonModifiers == other.carbonModifiers
+            && binding.specialTrigger == other.specialTrigger
+
+        if collides {
+            HotkeyManager.shared.unregister(id: .shelf)
+            HotkeyManager.shared.unregister(id: .search)
+        }
+
+        let success = isEnabled ? HotkeyManager.shared.register(id: id, binding: binding) : true
+        guard success else {
+            if collides {
+                HotkeyManager.shared.registerDefaultHotkeys()
+            }
+            showConflictAlert(binding: binding, name: id == .shelf ? "应用分类工作台" : "全盘搜索中枢")
+            recorder.currentBinding = previous
+            return
+        }
+
+        if id == .shelf {
+            ConfigManager.shared.updateShelfHotkey(binding)
+        } else {
+            ConfigManager.shared.updateSearchHotkey(binding)
+        }
+        recorder.currentBinding = binding
+
+        if collides {
+            if otherId == .shelf {
+                ConfigManager.shared.updateShelfHotkey(previous)
+            } else {
+                ConfigManager.shared.updateSearchHotkey(previous)
+            }
+            otherRecorder.currentBinding = previous
+            if isOtherEnabled {
+                HotkeyManager.shared.register(id: otherId, binding: previous)
             }
         }
 
-        let success = ConfigManager.shared.config.enableShelfPanel
-            ? HotkeyManager.shared.register(id: .shelf, binding: binding)
-            : true
-
-        if success {
-            ConfigManager.shared.updateShelfHotkey(binding)
-            shelfRecorder.currentBinding = binding
-            NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
-            checkAccessibilityIfNeeded(for: binding)
-        } else {
-            showConflictAlert(binding: binding, name: "应用分类工作台")
-            shelfRecorder.currentBinding = ConfigManager.shared.config.shelfHotkey
-        }
+        NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
+        checkAccessibilityIfNeeded(for: binding)
     }
 
     private func handleShelfCleared() {
@@ -1251,29 +1283,7 @@ public final class HotkeysTabView: NSView {
     }
 
     private func handleSearchRecorded(_ binding: HotkeyBinding) {
-        let shelfBinding = ConfigManager.shared.config.shelfHotkey
-        if binding.keyCode == shelfBinding.keyCode && binding.carbonModifiers == shelfBinding.carbonModifiers && binding.specialTrigger == shelfBinding.specialTrigger {
-            let oldSearchBinding = ConfigManager.shared.config.searchHotkey
-            ConfigManager.shared.updateShelfHotkey(oldSearchBinding)
-            shelfRecorder.currentBinding = oldSearchBinding
-            if ConfigManager.shared.config.enableShelfPanel {
-                HotkeyManager.shared.register(id: .shelf, binding: oldSearchBinding)
-            }
-        }
-
-        let success = ConfigManager.shared.config.enableSearchPanel
-            ? HotkeyManager.shared.register(id: .search, binding: binding)
-            : true
-
-        if success {
-            ConfigManager.shared.updateSearchHotkey(binding)
-            searchRecorder.currentBinding = binding
-            NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
-            checkAccessibilityIfNeeded(for: binding)
-        } else {
-            showConflictAlert(binding: binding, name: "全盘搜索中枢")
-            searchRecorder.currentBinding = ConfigManager.shared.config.searchHotkey
-        }
+        applyRecordedBinding(binding, for: .search)
     }
 
     private func checkAccessibilityIfNeeded(for binding: HotkeyBinding) {
@@ -1285,7 +1295,7 @@ public final class HotkeysTabView: NSView {
             alert.alertStyle = .informational
             alert.addButton(withTitle: "前往系统设置")
             alert.addButton(withTitle: "稍后手动开启")
-            if alert.runModal() == .alertFirstButtonReturn {
+            if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
                 HotkeyManager.openAccessibilitySettings()
             }
         }
@@ -1304,7 +1314,7 @@ public final class HotkeysTabView: NSView {
         alert.informativeText = "快捷键「\(binding.displayString)」未能注册为【\(name)】的热键。\n该快捷键可能已被系统聚焦或其他软件占用。"
         alert.addButton(withTitle: "前往系统设置...")
         alert.addButton(withTitle: "好")
-        if alert.runModal() == .alertFirstButtonReturn {
+        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
             HotkeyManager.shared.openSystemKeyboardSettings()
         }
     }
@@ -1408,9 +1418,9 @@ public final class ThemeTabView: NSView {
         let opacityContainer = NSView()
         opacityContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        opacitySlider = NSSlider(value: 90, minValue: 30, maxValue: 100, target: self, action: #selector(opacitySliderChanged(_:)))
+        opacitySlider = NSSlider(value: 90, minValue: 40, maxValue: 100, target: self, action: #selector(opacitySliderChanged(_:)))
         opacitySlider.translatesAutoresizingMaskIntoConstraints = false
-        opacitySlider.numberOfTickMarks = 8
+        opacitySlider.numberOfTickMarks = 7
         opacitySlider.allowsTickMarkValuesOnly = false
         opacitySlider.isContinuous = true
         opacityContainer.addSubview(opacitySlider)
@@ -1419,13 +1429,13 @@ public final class ThemeTabView: NSView {
         badgeContainer.translatesAutoresizingMaskIntoConstraints = false
         badgeContainer.wantsLayer = true
         badgeContainer.layer?.cornerRadius = 10
-        badgeContainer.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        badgeContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
         opacityContainer.addSubview(badgeContainer)
 
         opacityBadge = NSTextField(labelWithString: "90%（默认）")
         opacityBadge.translatesAutoresizingMaskIntoConstraints = false
         opacityBadge.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        opacityBadge.textColor = .controlAccentColor
+        opacityBadge.textColor = .labelColor
         badgeContainer.addSubview(opacityBadge)
 
         NSLayoutConstraint.activate([
@@ -1448,7 +1458,7 @@ public final class ThemeTabView: NSView {
         let rowOpacity = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.below.rectangle"),
             title: "面板背景透明度",
-            subtitle: "建议 85% ~ 90%，既保证高质感通透磨砂，又杜绝文字重影虚透",
+            subtitle: "40% 轻透玻璃，数值越高玻璃越模糊、遮光越强",
             accessory: opacityContainer
         )
         card2.addRow(rowOpacity, isLast: true)
@@ -1494,6 +1504,7 @@ public final class ThemeTabView: NSView {
         let opacity = val / 100.0
         let pct = Int(val)
         opacityBadge.stringValue = (pct == 90) ? "90%（默认）" : "\(pct)%"
+        guard abs(opacity - ConfigManager.shared.config.themeOpacity) > 0.001 else { return }
         ConfigManager.shared.updateThemeOpacity(opacity)
         NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
     }
@@ -1561,11 +1572,9 @@ public final class PerformanceTabView: NSView {
 
         rssLabel.translatesAutoresizingMaskIntoConstraints = false
         rssLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
-        rssLabel.textColor = .systemGreen
+        rssLabel.textColor = .labelColor
 
-        let purgeBtn = NSButton(title: "一键深度释放", target: self, action: #selector(handlePurge))
-        purgeBtn.translatesAutoresizingMaskIntoConstraints = false
-        purgeBtn.bezelStyle = .rounded
+        let purgeBtn = SettingsPillButton(title: "一键深度释放", target: self, action: #selector(handlePurge))
 
         let memRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "memorychip"),
@@ -1698,7 +1707,7 @@ public final class PerformanceTabView: NSView {
             self.updateMemoryMetrics()
             let delta = before - after
             if delta > 0.05 {
-                self.purgeStatusLabel.textColor = .systemGreen
+                self.purgeStatusLabel.textColor = .secondaryLabelColor
                 self.purgeStatusLabel.stringValue = String(format: "已释放 %.1f MB", delta)
             } else {
                 self.purgeStatusLabel.textColor = .secondaryLabelColor
@@ -1729,7 +1738,7 @@ public final class PerformanceTabView: NSView {
 // MARK: - 7. About Tab View
 public final class AboutTabView: NSView {
     private let statusLabel = NSTextField(labelWithString: "点击右侧按钮连接 GitHub 检查最新发布版本")
-    private let actionButton = NSButton()
+    private let actionButton = SettingsPillButton(title: "", style: .primary)
     private let progressIndicator = NSProgressIndicator()
     private let releaseNotesBox = NSView()
     private let releaseNotesText = NSTextView()
@@ -1801,17 +1810,14 @@ public final class AboutTabView: NSView {
         actionContainer.translatesAutoresizingMaskIntoConstraints = false
 
         actionButton.translatesAutoresizingMaskIntoConstraints = false
-        actionButton.bezelStyle = .rounded
         actionButton.target = self
         actionButton.action = #selector(actionButtonClicked)
-        actionButton.font = NSFont.systemFont(ofSize: 12, weight: .medium)
         actionContainer.addSubview(actionButton)
 
         NSLayoutConstraint.activate([
             actionButton.trailingAnchor.constraint(equalTo: actionContainer.trailingAnchor),
             actionButton.centerYAnchor.constraint(equalTo: actionContainer.centerYAnchor),
             actionButton.leadingAnchor.constraint(greaterThanOrEqualTo: actionContainer.leadingAnchor),
-            actionButton.heightAnchor.constraint(equalToConstant: 28),
             actionContainer.widthAnchor.constraint(greaterThanOrEqualToConstant: 96),
             actionContainer.heightAnchor.constraint(equalToConstant: 32)
         ])
@@ -1849,10 +1855,19 @@ public final class AboutTabView: NSView {
         releaseNotesBox.translatesAutoresizingMaskIntoConstraints = false
         releaseNotesBox.wantsLayer = true
         releaseNotesBox.layer?.cornerRadius = 8
-        releaseNotesBox.layer?.borderWidth = 0.5
-        releaseNotesBox.layer?.borderColor = NSColor.separatorColor.cgColor
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        releaseNotesBox.layer?.backgroundColor = isDark ? NSColor(white: 0.12, alpha: 0.6).cgColor : NSColor(white: 0.96, alpha: 0.9).cgColor
+        releaseNotesBox.layer?.backgroundColor = NSColor.clear.cgColor
+        let notesBackground = NSVisualEffectView()
+        notesBackground.translatesAutoresizingMaskIntoConstraints = false
+        notesBackground.material = .contentBackground
+        notesBackground.blendingMode = .withinWindow
+        notesBackground.state = .active
+        releaseNotesBox.addSubview(notesBackground)
+        NSLayoutConstraint.activate([
+            notesBackground.leadingAnchor.constraint(equalTo: releaseNotesBox.leadingAnchor),
+            notesBackground.trailingAnchor.constraint(equalTo: releaseNotesBox.trailingAnchor),
+            notesBackground.topAnchor.constraint(equalTo: releaseNotesBox.topAnchor),
+            notesBackground.bottomAnchor.constraint(equalTo: releaseNotesBox.bottomAnchor)
+        ])
         releaseNotesBox.isHidden = true
         updateDetailView.addSubview(releaseNotesBox)
 
@@ -1947,28 +1962,18 @@ public final class AboutTabView: NSView {
     }
 
     private static var currentArchitectureLabel: String {
-        guard let executableURL = Bundle.main.executableURL else { return "当前 Mac 原生架构" }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/lipo")
-        process.arguments = ["-archs", executableURL.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-
-        guard (try? process.run()) != nil else { return "当前 Mac 原生架构" }
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return "当前 Mac 原生架构" }
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let architectures = String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if architectures.contains("arm64") && architectures.contains("x86_64") {
+        // Read the Mach-O header via NSBundle instead of spawning /usr/bin/lipo synchronously
+        // on the main thread when the About tab is built.
+        let architectures = Bundle.main.executableArchitectures?.map { $0.intValue } ?? []
+        let hasArm = architectures.contains(NSBundleExecutableArchitectureARM64)
+        let hasIntel = architectures.contains(NSBundleExecutableArchitectureX86_64)
+        if hasArm && hasIntel {
             return "Universal (Apple Silicon + Intel)"
         }
-        if architectures.contains("arm64") {
+        if hasArm {
             return "Apple Silicon (arm64)"
         }
-        if architectures.contains("x86_64") {
+        if hasIntel {
             return "Intel (x86_64)"
         }
         return "当前 Mac 原生架构"
@@ -2006,23 +2011,23 @@ public final class AboutTabView: NSView {
 
         case .checking:
             statusLabel.stringValue = "正在连接 GitHub 检查版本发布..."
-            statusLabel.textColor = .controlAccentColor
+            statusLabel.textColor = .secondaryLabelColor
             actionButton.title = "检查中..."
             actionButton.isEnabled = false
             progressIndicator.isHidden = true
             hideReleaseNotes()
 
         case .upToDate(let ver):
-            statusLabel.stringValue = "✓ 当前版本已是最新 (v\(ver))。"
-            statusLabel.textColor = .systemGreen
+            statusLabel.stringValue = "当前版本已是最新 (v\(ver))。"
+            statusLabel.textColor = .labelColor
             actionButton.title = "重新检查"
             actionButton.isEnabled = true
             progressIndicator.isHidden = true
             hideReleaseNotes()
 
         case .available(let release):
-            statusLabel.stringValue = "🎉 发现新版本 \(release.version)（\(release.name)）！"
-            statusLabel.textColor = .controlAccentColor
+            statusLabel.stringValue = "发现新版本 \(release.version)（\(release.name)）。"
+            statusLabel.textColor = .labelColor
             actionButton.title = "一键更新"
             actionButton.isEnabled = true
             progressIndicator.isHidden = true
@@ -2031,7 +2036,7 @@ public final class AboutTabView: NSView {
         case .downloading(let progress):
             let percent = Int(progress * 100)
             statusLabel.stringValue = "正在下载更新安装包 (\(percent)%)..."
-            statusLabel.textColor = .controlAccentColor
+            statusLabel.textColor = .secondaryLabelColor
             actionButton.title = "取消"
             actionButton.isEnabled = true
             progressIndicator.isHidden = false
@@ -2039,15 +2044,15 @@ public final class AboutTabView: NSView {
 
         case .preparing:
             statusLabel.stringValue = "正在解包校验并准备原地平滑替换与重启..."
-            statusLabel.textColor = .controlAccentColor
+            statusLabel.textColor = .secondaryLabelColor
             actionButton.title = "更新中..."
             actionButton.isEnabled = false
             progressIndicator.isHidden = false
             progressIndicator.doubleValue = 1.0
 
         case .error(let msg):
-            statusLabel.stringValue = "❌ \(msg)"
-            statusLabel.textColor = .systemRed
+            statusLabel.stringValue = msg
+            statusLabel.textColor = .labelColor
             actionButton.title = "重试"
             actionButton.isEnabled = true
             progressIndicator.isHidden = true

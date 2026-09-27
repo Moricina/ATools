@@ -56,12 +56,11 @@ extension SearchResult {
         case .dictionary:
             return "\(title): \(subtitle)" as NSString
         case .webSearch:
-            let query = title.replacingOccurrences(of: "在浏览器中搜索 \"", with: "").replacingOccurrences(of: "\"", with: "")
-            if let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-               let url = URL(string: "https://www.google.com/search?q=\(encoded)") {
-                return url as NSURL
-            }
-            return nil
+            // The web result id is "web_<query>"; honour the user's configured engine.
+            guard id.hasPrefix("web_") else { return nil }
+            let query = String(id.dropFirst(4))
+            let config = ConfigManager.shared.config
+            return config.webSearchEngine.searchURL(for: query, customTemplate: config.customWebSearchURL) as NSURL?
         case .systemAction:
             return nil
         }

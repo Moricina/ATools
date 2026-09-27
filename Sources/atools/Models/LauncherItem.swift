@@ -98,3 +98,15 @@ public struct Category: Identifiable, Codable {
         self.items = items
     }
 }
+
+extension Category {
+    public static let favoritesName = "常用"
+    public static let favoritesIcon = "star.fill"
+
+    /// The auto-generated favourites category. Requires *both* name and icon: user categories
+    /// are created with "folder.fill" and renaming never changes the icon, so a user category
+    /// that happens to be called "常用" is never mistaken for it (and silently deleted).
+    public var isFavorites: Bool {
+        return name == Category.favoritesName && iconSymbol == Category.favoritesIcon
+    }
+}

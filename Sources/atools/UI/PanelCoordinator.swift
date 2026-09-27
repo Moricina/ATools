@@ -10,13 +10,20 @@ public final class PanelCoordinator {
     public static let shared = PanelCoordinator()
 
     private var shelfPanelCreated = false
+    private var searchPanelCreated = false
 
     public private(set) lazy var shelfPanel: ShelfPanel = {
         shelfPanelCreated = true
         return ShelfPanel()
     }()
 
-    public private(set) lazy var searchPanel: SearchPanel = SearchPanel()
+    public private(set) lazy var searchPanel: SearchPanel = {
+        searchPanelCreated = true
+        return SearchPanel()
+    }()
+
+    /// App that was frontmost before a panel was summoned; it gets keyboard focus back on dismiss.
+    private var previousFrontmostApp: NSRunningApplication?
 
     private var activePanel: PanelKind?
     private var globalClickMonitor: Any?
@@ -38,7 +45,25 @@ public final class PanelCoordinator {
         }
     }
 
-    private init() {}
+    private init() {
+        // "失焦时自动关闭": also collapse when the user switches apps (⌘Tab, Dock, Mission Control),
+        // not only on outside clicks.
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didResignActiveNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleAppResignedActive()
+        }
+    }
+
+    private func handleAppResignedActive() {
+        guard let active = activePanel, !isDraggingActive, NSApp.modalWindow == nil else { return }
+        if active == .shelf && (isShelfPinned || !ConfigManager.shared.config.autoCloseOnDeactivate) {
+            return
+        }
+        hideAllPanels(restoreFocus: false)
+    }
 
     /// 初始化时把面板固定按钮状态同步到当前配置值。
     public func refreshShelfPinState() {
@@ -61,6 +86,12 @@ public final class PanelCoordinator {
         if target == .shelf && !ConfigManager.shared.config.enableShelfPanel { return }
         if target == .search && !ConfigManager.shared.config.enableSearchPanel { return }
 
+        if activePanel == nil,
+           let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            previousFrontmostApp = frontmost
+        }
+
         // 1. Atomically order out any previously active panel (no overlap)
         if let current = activePanel, current != target {
             let panelToHide = (current == .shelf) ? shelfPanel : searchPanel
@@ -69,32 +100,98 @@ public final class PanelCoordinator {
         }
         switch target {
         case .shelf:
+            // Build content first so the entrance animation isn't stalled by data loading.
+            shelfPanel.prepareForDisplay()
             // 鼠标跟随定位 + 多屏可见区域 Clamping
             positionPanelFollowMouse(shelfPanel)
+            animatePanelEntrance(shelfPanel)
             NSApp.activate(ignoringOtherApps: true)
             shelfPanel.makeKeyAndOrderFront(nil)
             shelfPanel.orderFrontRegardless()
-            shelfPanel.prepareForDisplay()
+            // Liquid Glass 的 Metal 活跃着色器依赖窗口在本进程内处于 Key 状态。
+            // `.nonactivatingPanel` 保证不抢占其他 App 的前台焦点，这里显式 makeKey()
+            // 才能触发真正通透的玻璃材质，避免退回不透明的 inactive 灰底。
+            shelfPanel.makeKey()
         case .search:
+            AppHotspotIndex.shared.refreshIfStale()
             // Prepare for display (resets to 72pt height) before calculating screen anchor
             searchPanel.prepareForDisplay()
             positionPanelToScreenCenter(searchPanel)
+            animatePanelEntrance(searchPanel)
             NSApp.activate(ignoringOtherApps: true)
             searchPanel.makeKeyAndOrderFront(nil)
             searchPanel.orderFrontRegardless()
+            searchPanel.makeKey()
         }
 
         activePanel = target
         installGlobalOutsideClickMonitor()
     }
 
-    public func hideAllPanels() {
+    /// Liquid-glass entrance: the panel condenses from scale 0.96 with a soft
+    /// fade into full clarity, then settles with a gentle rise.
+    ///
+    /// The scale runs as an explicit Core Animation on the content layer around its centre.
+    /// (A view-backed layer's anchorPoint is (0,0), so the previous affine transform grew
+    /// the panel out of its bottom-left corner.) The window frame is no longer animated:
+    /// NSWindow frame animation is timer-driven and re-lays-out the glass every step.
+    private func animatePanelEntrance(_ panel: NSPanel) {
+        panel.alphaValue = 0.0
+        let duration: CFTimeInterval = 0.26
+        let timing = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
+
+        if let layer = panel.contentView?.layer {
+            let bounds = layer.bounds
+            let center = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
+            let scaled = CATransform3DScale(center, 0.96, 0.96, 1)
+            let from = CATransform3DTranslate(scaled, -bounds.midX, -bounds.midY + 8, 0)
+
+            let scale = CABasicAnimation(keyPath: "sublayerTransform")
+            scale.fromValue = NSValue(caTransform3D: from)
+            scale.toValue = NSValue(caTransform3D: CATransform3DIdentity)
+            scale.duration = duration
+            scale.timingFunction = timing
+            layer.add(scale, forKey: "atools.entrance")
+        }
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = duration
+            ctx.timingFunction = timing
+            panel.animator().alphaValue = 1.0
+        }
+    }
+
+    /// Reset any transient entrance animation left on a panel's content view.
+    private func resetPanelEntrance(_ panel: NSPanel) {
+        panel.contentView?.layer?.removeAnimation(forKey: "atools.entrance")
+        panel.alphaValue = 1.0
+    }
+
+    /// - Parameter restoreFocus: re-activate the app that was frontmost before the panel was
+    ///   summoned. Without this, dismissing with Esc left ATools (a window-less accessory app)
+    ///   active and keyboard input went nowhere until the user clicked another window.
+    public func hideAllPanels(restoreFocus: Bool = true) {
+        let wasShowingPanel = activePanel != nil
         isDraggingActive = false
         stopGlobalOutsideClickMonitor()
 
-        shelfPanel.orderOut(nil)
-        searchPanel.orderOut(nil)
+        // Only touch panels that exist; the lazy getters would otherwise build both panels.
+        if shelfPanelCreated {
+            resetPanelEntrance(shelfPanel)
+            shelfPanel.orderOut(nil)
+        }
+        if searchPanelCreated {
+            resetPanelEntrance(searchPanel)
+            searchPanel.orderOut(nil)
+        }
         activePanel = nil
+
+        let settingsVisible = SettingsWindowController.isWindowVisible
+        if restoreFocus, wasShowingPanel, !settingsVisible, NSApp.isActive,
+           let previous = previousFrontmostApp, !previous.isTerminated {
+            previous.activate(options: [])
+        }
+        previousFrontmostApp = nil
 
         MemoryGuardian.shared.onPanelsDidHide()
     }
@@ -107,7 +204,7 @@ public final class PanelCoordinator {
             // Do not dismiss panel if a modal alert/window is currently presented or Settings window is clicked
             if NSApp.modalWindow != nil { return }
             let clickLoc = NSEvent.mouseLocation
-            if let settingsWin = SettingsWindowController.shared.window, settingsWin.isVisible && NSPointInRect(clickLoc, settingsWin.frame) {
+            if let settingsFrame = SettingsWindowController.visibleWindowFrame, NSPointInRect(clickLoc, settingsFrame) {
                 return
             }
 

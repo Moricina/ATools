@@ -1,10 +1,16 @@
 import Foundation
 import AppKit
 
+/// The primary glass backdrop for both panels.
+///
+/// This leans on the system's own liquid-glass stack (`NSVisualEffectView`)
+/// instead of hand-rolled layers. The semantic materials drive the blur,
+/// saturation and translucency exactly like macOS panels, while a thin tint
+/// overlay only adds the dreamy rose-purple wash on top.
 public final class VisualEffectBackdropView: NSView {
     override public var isFlipped: Bool { true }
 
-    private let effectView = NSVisualEffectView()
+    private let effectView = LiquidGlassContainerView()
     private let tintOverlayView = NSView()
 
     override public init(frame frameRect: NSRect) {
@@ -18,17 +24,20 @@ public final class VisualEffectBackdropView: NSView {
 
     private func setupHierarchy() {
         wantsLayer = true
-        layer?.cornerRadius = 18
-        layer?.masksToBounds = true
 
-        // 1. Core popover material with behindWindow blending for frosted glass effect
-        effectView.material = .popover
-        effectView.blendingMode = .behindWindow
-        effectView.state = .active
+        // Clip every child (system glass, tint, content) to the same rounded
+        // silhouette so no square corners can peek out behind the glass.
+        layer?.cornerRadius = 24
+        layer?.masksToBounds = true
+        layer?.borderWidth = 0
+        layer?.borderColor = NSColor.clear.cgColor
+
+        // The true liquid-glass surface is the visual anchor.
         effectView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(effectView)
 
-        // 2. Adaptive opacity tint overlay
+        // A very thin tint sits above the system material to tint the glass
+        // toward the dreamy deep-purple palette without hiding the blur.
         tintOverlayView.wantsLayer = true
         tintOverlayView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(tintOverlayView)
@@ -45,8 +54,6 @@ public final class VisualEffectBackdropView: NSView {
             tintOverlayView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        // 3. Rim highlight border (delicate physical boundary)
-        layer?.borderWidth = 0.5
         updateAppearanceColors()
 
         NotificationCenter.default.addObserver(
@@ -63,40 +70,30 @@ public final class VisualEffectBackdropView: NSView {
 
     private func updateAppearanceColors() {
         let theme = ConfigManager.shared.config.theme
-        let opacity = ConfigManager.shared.config.themeOpacity
+        let opacity = CGFloat(ConfigManager.shared.config.themeOpacity)
         let isDark = theme.isDark
 
-        // Propagate appearance to self and window so subviews adapt
         self.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
 
-        layer?.borderWidth = 0.5
+        // Corner radius: larger, glassier panel for the liquid look.
+        let radius: CGFloat = 24
+        layer?.cornerRadius = radius
+        layer?.borderWidth = 0
+        layer?.borderColor = NSColor.clear.cgColor
+        effectView.cornerRadius = radius
+        effectView.usesRegularGlass = true
 
-        if theme.isLiquid {
-            effectView.isHidden = false
-            effectView.material = .popover
-            effectView.state = .active
-            effectView.alphaValue = 1.0 // Keep physical Gaussian blur fully active
+        effectView.isHidden = false
+        effectView.alphaValue = opacity
 
-            // Regulate translucency through the tint overlay layer with themeOpacity
-            let tintAlpha = CGFloat(opacity * (isDark ? 0.70 : 0.80))
-            if isDark {
-                tintOverlayView.layer?.backgroundColor = NSColor(white: 0.10, alpha: tintAlpha).cgColor
-                layer?.borderColor = NSColor(white: 1.0, alpha: 0.15 * CGFloat(opacity)).cgColor
-            } else {
-                tintOverlayView.layer?.backgroundColor = NSColor(white: 0.98, alpha: tintAlpha).cgColor
-                layer?.borderColor = NSColor(white: 0.0, alpha: 0.09 * CGFloat(opacity)).cgColor
-            }
+        if isDark {
+            effectView.tintColor = GlassPalette.darkBaseTop
+            effectView.tintOpacity = 0.76
+            tintOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.08 * opacity).cgColor
         } else {
-            // Solid theme (sleek acrylic): 0.5pt delicate physical stroke
-            effectView.isHidden = true
-            let solidAlpha = CGFloat(opacity)
-            if isDark {
-                tintOverlayView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.14, alpha: solidAlpha).cgColor
-                layer?.borderColor = NSColor(white: 1.0, alpha: 0.14).cgColor
-            } else {
-                tintOverlayView.layer?.backgroundColor = NSColor(red: 0.97, green: 0.97, blue: 0.98, alpha: solidAlpha).cgColor
-                layer?.borderColor = NSColor(white: 0.0, alpha: 0.09).cgColor
-            }
+            effectView.tintColor = GlassPalette.lightGlassTint
+            effectView.tintOpacity = 0.58
+            tintOverlayView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06 * opacity).cgColor
         }
 
         window?.invalidateShadow()

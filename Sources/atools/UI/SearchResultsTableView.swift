@@ -15,6 +15,7 @@ public final class SearchResultCellView: NSTableCellView {
     public let subtitleLabel = NSTextField(labelWithString: "")
     public let badgeContainer = NSView()
     public let badgeLabel = NSTextField(labelWithString: "")
+    private var representedIconPath: String?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -77,20 +78,18 @@ public final class SearchResultCellView: NSTableCellView {
     }
 
     public func updateSelectionState(isSelected: Bool) {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let isDark = glassIsDark
         if isSelected {
-            titleLabel.textColor = .labelColor
-            titleLabel.font = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
-            subtitleLabel.textColor = .secondaryLabelColor
-            badgeLabel.textColor = .labelColor
+            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+            subtitleLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
+            badgeLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
             badgeContainer.layer?.backgroundColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.16).cgColor
-                : NSColor(white: 0.0, alpha: 0.09).cgColor
+                ? NSColor(white: 1.0, alpha: 0.18).cgColor
+                : NSColor(white: 0.0, alpha: 0.10).cgColor
         } else {
-            titleLabel.textColor = .labelColor
-            titleLabel.font = NSFont.systemFont(ofSize: 13.5, weight: .medium)
-            subtitleLabel.textColor = .secondaryLabelColor
-            badgeLabel.textColor = .tertiaryLabelColor
+            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+            subtitleLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
+            badgeLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
             badgeContainer.layer?.backgroundColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.07).cgColor
                 : NSColor(white: 0.0, alpha: 0.04).cgColor
@@ -118,15 +117,35 @@ public final class SearchResultCellView: NSTableCellView {
             badgeLabel.stringValue = "网络"
         }
 
+        representedIconPath = result.path
         if let icon = result.icon {
             iconView.image = icon
         } else if let path = result.path {
+            // Clear the reused cell's previous icon, and ignore late callbacks for a row this
+            // cell no longer shows.
+            iconView.image = nil
             ThumbnailPipeline.shared.icon(forPath: path) { [weak self] img in
-                self?.iconView.image = img
+                guard let self = self, self.representedIconPath == path else { return }
+                self.iconView.image = img
             }
         } else {
             iconView.image = ThumbnailPipeline.shared.symbolIcon(name: "doc")
         }
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // On first display the inherited appearance may still resolve as light
+        // before the dark window appearance propagates. Re-apply colors once
+        // the cell is actually in a window so text never flashes black.
+        let isSelected = (superview as? SearchResultRowView)?.isSelected ?? false
+        updateSelectionState(isSelected: isSelected)
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        let isSelected = (superview as? SearchResultRowView)?.isSelected ?? false
+        updateSelectionState(isSelected: isSelected)
     }
 }
 
@@ -149,13 +168,27 @@ public final class ContextualSearchTableView: NSTableView {
         trackingArea = area
     }
 
+    private var lastMouseScreenLocation: NSPoint?
+
+    /// Called when the result list is (re)shown so a stationary cursor doesn't steal focus.
+    public func resetHoverTracking() {
+        lastMouseScreenLocation = NSEvent.mouseLocation
+    }
+
     override public func mouseEntered(with event: NSEvent) {
         super.mouseEntered(with: event)
-        updateSelectionForMouse(event: event)
+        // The panel expands underneath a resting cursor; that must not move the keyboard
+        // selection away from the top match. Only real pointer movement selects.
+        lastMouseScreenLocation = NSEvent.mouseLocation
     }
 
     override public func mouseMoved(with event: NSEvent) {
         super.mouseMoved(with: event)
+        let location = NSEvent.mouseLocation
+        if let last = lastMouseScreenLocation, hypot(location.x - last.x, location.y - last.y) < 2 {
+            return
+        }
+        lastMouseScreenLocation = location
         updateSelectionForMouse(event: event)
     }
 
@@ -194,7 +227,8 @@ public final class ContextualSearchTableView: NSTableView {
 
             menu.addItem(NSMenuItem.separator())
 
-            let openItem = NSMenuItem(title: "🚀 打开", action: #selector(openFileAction(_:)), keyEquivalent: "")
+            let openItem = NSMenuItem(title: "打开", action: #selector(openFileAction(_:)), keyEquivalent: "")
+            openItem.image = ThumbnailPipeline.shared.symbolIcon(name: "play", pointSize: 13)
             openItem.target = self
             openItem.representedObject = result
             menu.addItem(openItem)
@@ -207,7 +241,8 @@ public final class ContextualSearchTableView: NSTableView {
 
             menu.addItem(NSMenuItem.separator())
 
-            let runItem = NSMenuItem(title: "🚀 执行 / 打开", action: #selector(openFileAction(_:)), keyEquivalent: "")
+            let runItem = NSMenuItem(title: "执行或打开", action: #selector(openFileAction(_:)), keyEquivalent: "")
+            runItem.image = ThumbnailPipeline.shared.symbolIcon(name: "play", pointSize: 13)
             runItem.target = self
             runItem.representedObject = result
             menu.addItem(runItem)
@@ -310,21 +345,21 @@ public final class SearchResultRowView: NSTableRowView {
         super.drawBackground(in: dirtyRect)
         guard isSelected else { return }
 
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let pillRect = bounds.insetBy(dx: 6, dy: 2)
-        let path = NSBezierPath(roundedRect: pillRect, xRadius: 8, yRadius: 8)
+        let isDark = glassIsDark
+        let pillRect = bounds.insetBy(dx: 6, dy: 3)
+        let path = NSBezierPath(roundedRect: pillRect, xRadius: 10, yRadius: 10)
 
         if isDark {
-            NSColor(white: 1.0, alpha: 0.14).setFill()
+            NSColor(white: 1.0, alpha: 0.11).setFill()
         } else {
-            NSColor(white: 0.0, alpha: 0.07).setFill()
+            NSColor(white: 0.0, alpha: 0.06).setFill()
         }
         path.fill()
 
-        let borderPath = NSBezierPath(roundedRect: pillRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 7.5, yRadius: 7.5)
-        let borderColor = isDark ? NSColor(white: 1.0, alpha: 0.08) : NSColor(white: 0.0, alpha: 0.05)
+        let borderPath = NSBezierPath(roundedRect: pillRect.insetBy(dx: 0.5, dy: 0.5), xRadius: 9.5, yRadius: 9.5)
+        let borderColor = isDark ? NSColor(white: 1.0, alpha: 0.14) : NSColor(white: 0.0, alpha: 0.06)
         borderColor.setStroke()
-        borderPath.lineWidth = 1.0
+        borderPath.lineWidth = 0.75
         borderPath.stroke()
     }
 }
@@ -355,6 +390,9 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
     }
 
     private func setupViews() {
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
@@ -401,6 +439,7 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
         let previousSelectedId = (tableView.selectedRow >= 0 && tableView.selectedRow < results.count) ? results[tableView.selectedRow].id : nil
         self.results = newResults
         tableView.reloadData()
+        tableView.resetHoverTracking()
 
         if !results.isEmpty {
             // If the previous selection was a temporary webSearch fallback and real files/apps have now arrived, focus the top real match (index 0)
@@ -537,8 +576,11 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
         return context == .withinApplication ? [] : [.copy, .generic]
     }
 
+    private var draggedRow: Int?
+
     public func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
         PanelCoordinator.shared.isDraggingActive = true
+        draggedRow = rowIndexes.first
     }
 
     public func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
@@ -548,7 +590,8 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
         if operation != [] {
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                let row = tableView.selectedRow
+                let row = self.draggedRow ?? tableView.selectedRow
+                self.draggedRow = nil
                 guard row >= 0 && row < self.results.count else {
                     PanelCoordinator.shared.hideAllPanels()
                     return

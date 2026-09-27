@@ -15,6 +15,54 @@ private final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
+/// A single flowing liquid-glass capsule that slides between category pills.
+/// It is the shared "selected" element: the pill text stays put while this
+/// capsule glides from the old pill to the new one on selection change.
+///
+/// The capsule uses the same regular liquid-glass material as the drawer
+/// backdrop. Only this compact selected-state frame remains; the category
+/// container itself stays transparent.
+private final class SelectionCapsuleView: NSView {
+    private let glass = LiquidGlassContainerView()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        glass.usesRegularGlass = true
+        glass.softEdgeEnabled = false
+        glass.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(glass)
+        NSLayoutConstraint.activate([
+            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
+            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
+            glass.topAnchor.constraint(equalTo: topAnchor),
+            glass.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+        updateColors()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateColors() {
+        let isDark = glassIsDark
+        // Keep the selected capsule on exactly the same glass recipe as the
+        // drawer backdrop; the compact shape alone provides the selection cue.
+        if isDark {
+            glass.tintColor = GlassPalette.darkBaseTop
+            glass.tintOpacity = 0.72
+        } else {
+            glass.tintColor = GlassPalette.lightGlassTint
+            glass.tintOpacity = 0.48
+        }
+    }
+
+    func updateCornerRadius(_ radius: CGFloat) {
+        glass.cornerRadius = radius
+    }
+}
+
 public final class CategoryBarView: NSView, CategoryPillDelegate {
     public weak var delegate: CategoryBarDelegate?
 
@@ -30,7 +78,9 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     private var selectedCategoryId: UUID?
     private let stackView = FlippedStackView()
     private let scrollView = NSScrollView()
+    private let selectionCapsule = SelectionCapsuleView()
     private var stackViewConstraints: [NSLayoutConstraint] = []
+    private weak var selectedPill: CategoryPillView?
 
     override public var isFlipped: Bool { return true }
 
@@ -56,10 +106,19 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
+        scrollView.backgroundColor = .clear
+        scrollView.contentView.drawsBackground = false
+        scrollView.contentView.layer?.backgroundColor = NSColor.clear.cgColor
+        scrollView.layer?.backgroundColor = NSColor.clear.cgColor
+        scrollView.layer?.borderWidth = 0
+
         addSubview(scrollView)
 
         stackView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stackView
+        // The flowing capsule sits below every pill so only its text remains
+        // above it, giving the shared-element glide a clean silhouette.
+        stackView.addSubview(selectionCapsule, positioned: .below, relativeTo: nil)
 
         NSLayoutConstraint.activate([
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -126,12 +185,57 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
                 pill.widthAnchor.constraint(equalTo: stackView.widthAnchor).isActive = true
             }
         }
+
+        // Pin the flowing capsule underneath the arranged pills and align it to
+        // the currently selected pill without animation on initial layout.
+        selectedPill = stackView.arrangedSubviews.first(where: { ($0 as? CategoryPillView)?.isSelected == true }) as? CategoryPillView
+        // Pills were just inserted; without a layout pass their frames are still .zero.
+        stackView.layoutSubtreeIfNeeded()
+        layoutSelectionCapsule(animated: false)
+    }
+
+    private func layoutSelectionCapsule(animated: Bool) {
+        guard let pill = selectedPill else {
+            selectionCapsule.isHidden = true
+            return
+        }
+        selectionCapsule.isHidden = false
+        selectionCapsule.updateCornerRadius(pill.layer?.cornerRadius ?? 15)
+        selectionCapsule.updateColors()
+
+        let target = pill.convert(pill.bounds, to: stackView)
+        if animated {
+            // Flow like a liquid: slide and stretch toward the new pill with a
+            // soft, slightly-overshooting ease-out so it reads as inertia.
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.26
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
+                ctx.allowsImplicitAnimation = true
+                selectionCapsule.animator().frame = target
+            }
+        } else {
+            selectionCapsule.frame = target
+        }
+    }
+
+    override public func layout() {
+        super.layout()
+        // Don't cut a running glide short; the animation already targets the final frame.
+        if !selectionCapsule.isHidden, selectionCapsule.layer?.animationKeys()?.isEmpty ?? true {
+            layoutSelectionCapsule(animated: false)
+        }
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        selectionCapsule.updateColors()
     }
 
     // MARK: - Right Click on CategoryBarView (Blank Area)
     override public func rightMouseDown(with event: NSEvent) {
         let menu = NSMenu(title: "CategoryBarMenu")
-        let addItem = NSMenuItem(title: "➕ 新建分类...", action: #selector(contextAddCategory), keyEquivalent: "")
+        let addItem = NSMenuItem(title: "新建分类...", action: #selector(contextAddCategory), keyEquivalent: "")
+        addItem.image = ThumbnailPipeline.shared.symbolIcon(name: "plus", pointSize: 13)
         addItem.target = self
         menu.addItem(addItem)
 
@@ -145,7 +249,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         pinItem.target = self
         menu.addItem(pinItem)
 
-        let settingsItem = NSMenuItem(title: "⚙️ 偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: "偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
+        settingsItem.image = ThumbnailPipeline.shared.symbolIcon(name: "gearshape", pointSize: 13)
         settingsItem.keyEquivalentModifierMask = .command
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -182,6 +287,10 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
                 p.isSelected = (p.category.id == pill.category.id)
             }
         }
+        selectedPill = pill
+        // Resolve pending pill layout first so the capsule glides to the final frame.
+        stackView.layoutSubtreeIfNeeded()
+        layoutSelectionCapsule(animated: true)
         delegate?.categoryBar(self, didSelectCategory: pill.category)
     }
 
@@ -310,25 +419,23 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
             }
 
             let loc = convert(sender.draggingLocation, from: nil)
-            var targetIndex = categories.count - 1
+            // "Insert before" slot in the original order; `count` means "after the last pill".
+            var insertionSlot = categories.count
 
             for (idx, subview) in stackView.arrangedSubviews.enumerated() {
                 if let pill = subview as? CategoryPillView {
                     let pillFrame = convert(pill.bounds, from: pill)
-                    if orientation == .horizontal {
-                        if loc.x < pillFrame.midX {
-                            targetIndex = idx
-                            break
-                        }
-                    } else {
-                        if loc.y < pillFrame.midY {
-                            targetIndex = idx
-                            break
-                        }
+                    let isBefore = orientation == .horizontal ? loc.x < pillFrame.midX : loc.y < pillFrame.midY
+                    if isBefore {
+                        insertionSlot = idx
+                        break
                     }
                 }
             }
 
+            // Once the source is removed, every slot after it shifts left by one.
+            let targetIndex = min(categories.count - 1, insertionSlot > sourceIndex ? insertionSlot - 1 : insertionSlot)
+            guard targetIndex != sourceIndex else { return true }
             delegate?.categoryBar(self, didMoveCategoryFrom: sourceIndex, to: targetIndex)
             return true
         }

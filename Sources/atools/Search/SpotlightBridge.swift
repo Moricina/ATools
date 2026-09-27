@@ -9,7 +9,22 @@ public final class SpotlightBridge {
     private var activeProcess: Process?
     private var activePipe: Pipe?
     private let queue = DispatchQueue(label: "cc.atools.spotlight.process", qos: .userInitiated)
-    private var currentQueryId = UUID()
+    private let queryIdLock = NSLock()
+    private var _currentQueryId = UUID()
+
+    /// Written on the main thread, read on the background queue for every enumerated file.
+    private var currentQueryId: UUID {
+        get {
+            queryIdLock.lock()
+            defer { queryIdLock.unlock() }
+            return _currentQueryId
+        }
+        set {
+            queryIdLock.lock()
+            _currentQueryId = newValue
+            queryIdLock.unlock()
+        }
+    }
 
     private init() {}
 
@@ -40,76 +55,45 @@ public final class SpotlightBridge {
         currentQueryId = queryId
         runtimeLog("[Spotlight] searchFiles requested: '\(trimmed)', queryId=\(queryId)")
 
+        // 1. Terminate the previous mdfind right away. The queue is serial and the previous
+        // block may be parked in a blocking `availableData` read; killing the process hands it
+        // EOF so the new query doesn't wait for the old one to finish on its own.
+        terminateActiveProcess()
+
         queue.async { [weak self] in
             guard let self = self else { return }
-
-            // 1. Terminate any previous active process immediately
+            // A stale block may have spawned a process after the call above; clean it up too.
             self.terminateActiveProcess()
-
             guard self.currentQueryId == queryId else { return }
 
             var results: [SearchResult] = []
             var seenPaths = Set<String>()
-            let lock = NSLock()
 
             let home = FileManager.default.homeDirectoryForCurrentUser
             let lowerQuery = trimmed.lowercased()
 
-            // 2. Fast scan of user primary hot folders (Downloads, Desktop, Documents)
-            // Guarantees instant results for active working files regardless of Spotlight indexing state
-            let hotFolders = [
-                home.appendingPathComponent("Downloads"),
-                home.appendingPathComponent("Desktop"),
-                home.appendingPathComponent("Documents")
-            ]
-
-            for folder in hotFolders {
+            // 2. Hot folders (Downloads, Desktop, Documents) from an in-memory snapshot.
+            // They used to be enumerated from disk for every debounced keystroke, on this same
+            // serial queue, before mdfind could start. On TCC-protected or iCloud-synced
+            // Desktop/Documents that alone took seconds per query.
+            for file in self.hotFilesSnapshot(waitingUpTo: 0.3) {
                 guard self.currentQueryId == queryId else { break }
-                guard let enumerator = FileManager.default.enumerator(
-                    at: folder,
-                    includingPropertiesForKeys: [.nameKey, .isDirectoryKey],
-                    options: [.skipsHiddenFiles, .skipsPackageDescendants]
-                ) else { continue }
-
-                for case let fileURL as URL in enumerator {
-                    guard self.currentQueryId == queryId else { break }
-                    if enumerator.level > AppConstants.spotlightHotFolderDepth {
-                        enumerator.skipDescendants()
-                        continue
+                guard file.name.localizedCaseInsensitiveContains(trimmed), !seenPaths.contains(file.path) else { continue }
+                seenPaths.insert(file.path)
+                let path = file.path
+                let score = file.name.lowercased().hasPrefix(lowerQuery) ? 70 : 60
+                results.append(SearchResult(
+                    title: file.name,
+                    subtitle: path,
+                    path: path,
+                    type: file.isDirectory ? .folder : .file,
+                    score: score,
+                    action: {
+                        LauncherExecutor.open(path: path)
                     }
-
-                    let filename = fileURL.lastPathComponent
-                    if filename.hasPrefix(".") || filename.hasSuffix(".app") { continue }
-
-                    if filename == "node_modules" || filename == "DerivedData" || filename == ".git" {
-                        enumerator.skipDescendants()
-                        continue
-                    }
-
-                    if filename.localizedCaseInsensitiveContains(trimmed) {
-                        let path = fileURL.path
-                        lock.lock()
-                        if !seenPaths.contains(path) {
-                            seenPaths.insert(path)
-                            let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                            let score = filename.lowercased().hasPrefix(lowerQuery) ? 70 : 60
-                            results.append(SearchResult(
-                                title: filename,
-                                subtitle: path,
-                                path: path,
-                                type: isDir ? .folder : .file,
-                                score: score,
-                                action: {
-                                    LauncherExecutor.open(path: path)
-                                }
-                            ))
-                        }
-                        lock.unlock()
-                    }
-
-                    if seenPaths.count >= limit {
-                        break
-                    }
+                ))
+                if results.count >= limit {
+                    break
                 }
             }
 
@@ -186,14 +170,8 @@ public final class SpotlightBridge {
                         continue
                     }
 
-                    lock.lock()
-                    let alreadySeen = seenPaths.contains(path)
-                    if !alreadySeen {
-                        seenPaths.insert(path)
-                    }
-                    lock.unlock()
-
-                    if alreadySeen { continue }
+                    if seenPaths.contains(path) { continue }
+                    seenPaths.insert(path)
 
                     let url = URL(fileURLWithPath: path)
                     let name = url.lastPathComponent
@@ -243,6 +221,94 @@ public final class SpotlightBridge {
                 }
             }
         }
+    }
+
+    // MARK: - Hot folder snapshot
+
+    private struct HotFile {
+        let name: String
+        let path: String
+        let isDirectory: Bool
+    }
+
+    private let hotCacheQueue = DispatchQueue(label: "cc.atools.spotlight.hotcache", qos: .utility)
+    private let hotCacheCondition = NSCondition()
+    private var hotCache: [String: [HotFile]] = [:]
+    private var hotCacheDate = Date.distantPast
+    private var hotCacheBuildStarted = Date.distantPast
+    private var hotFolderUpdated: [String: Date] = [:]
+    private var isBuildingHotCache = false
+
+    /// Rebuilds the hot-folder snapshot in the background when it is older than `maxAge`.
+    /// Folders are published one at a time, so a fast folder (Downloads) is searchable while a
+    /// slow one (e.g. iCloud Desktop) is still being listed.
+    public func warmHotFolderCache(maxAge: TimeInterval = 30) {
+        hotCacheCondition.lock()
+        let isStale = Date().timeIntervalSince(hotCacheDate) > maxAge
+        guard isStale, !isBuildingHotCache else {
+            hotCacheCondition.unlock()
+            return
+        }
+        isBuildingHotCache = true
+        hotCacheBuildStarted = Date()
+        hotCacheCondition.unlock()
+
+        hotCacheQueue.async { [weak self] in
+            guard let self = self else { return }
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            for folder in ["Downloads", "Desktop", "Documents"] {
+                let files = self.listHotFolder(home.appendingPathComponent(folder))
+                self.hotCacheCondition.lock()
+                self.hotCache[folder] = files
+                self.hotFolderUpdated[folder] = Date()
+                self.hotCacheCondition.broadcast()
+                self.hotCacheCondition.unlock()
+            }
+            self.hotCacheCondition.lock()
+            self.hotCacheDate = Date()
+            self.isBuildingHotCache = false
+            self.hotCacheCondition.broadcast()
+            self.hotCacheCondition.unlock()
+        }
+    }
+
+    private func listHotFolder(_ folder: URL) -> [HotFile] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: folder,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        var files: [HotFile] = []
+        for case let fileURL as URL in enumerator {
+            // Stop descending at the depth limit instead of listing one level too deep.
+            if enumerator.level >= AppConstants.spotlightHotFolderDepth {
+                enumerator.skipDescendants()
+            }
+            let filename = fileURL.lastPathComponent
+            if filename == "node_modules" || filename == "DerivedData" || filename == ".git" {
+                enumerator.skipDescendants()
+                continue
+            }
+            if filename.hasPrefix(".") || filename.hasSuffix(".app") { continue }
+            let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            files.append(HotFile(name: filename, path: fileURL.path, isDirectory: isDir))
+        }
+        return files
+    }
+
+    /// Returns the current snapshot, briefly waiting for an in-progress rebuild.
+    private func hotFilesSnapshot(waitingUpTo timeout: TimeInterval) -> [HotFile] {
+        warmHotFolderCache()
+        let deadline = Date().addingTimeInterval(timeout)
+        hotCacheCondition.lock()
+        defer { hotCacheCondition.unlock() }
+        // Wait for the rebuild's Downloads listing (usually milliseconds) so just-downloaded
+        // files show up; slower folders are used from the previous snapshot meanwhile.
+        while isBuildingHotCache,
+              (hotFolderUpdated["Downloads"] ?? .distantPast) < hotCacheBuildStarted,
+              hotCacheCondition.wait(until: deadline) {}
+        return ["Downloads", "Desktop", "Documents"].flatMap { hotCache[$0] ?? [] }
     }
 
     public func stop() {

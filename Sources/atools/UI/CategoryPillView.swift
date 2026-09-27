@@ -55,7 +55,7 @@ public final class CategoryPillView: NSView {
 
     private func setupViews() {
         wantsLayer = true
-        layer?.cornerRadius = isVertical ? 7 : 14
+        layer?.cornerRadius = isVertical ? 11 : 15
         layer?.masksToBounds = true
         registerForDraggedTypes([
             NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType),
@@ -87,52 +87,55 @@ public final class CategoryPillView: NSView {
     }
 
     private func updateAppearanceStyles() {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let isDark = glassIsDark
 
-        // Zero shadow across all states as requested by user
-        layer?.shadowOpacity = 0.0
-        layer?.shadowColor = nil
-        layer?.shadowPath = nil
+        layer?.shadowOffset = CGSize(width: 0, height: 3)
+        layer?.shadowRadius = 8
+
+        // Liquid easing for the background, border and glow so the capsule
+        // reads as a flowing glass droplet rather than an instant color swap.
+        // View-backed layers ignore CATransaction durations (AppKit returns no action),
+        // so implicit animation has to be enabled through NSAnimationContext.
+        // One font weight for every state: switching weights changed the pill width and made
+        // neighbouring tabs jump while the selection capsule was gliding.
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = window == nil ? 0 : 0.18
+        NSAnimationContext.current.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        NSAnimationContext.current.allowsImplicitAnimation = true
 
         if isDropTarget {
-            titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-            layer?.borderWidth = 1.5
-            layer?.borderColor = NSColor.controlAccentColor.cgColor
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
-            titleLabel.textColor = NSColor.controlAccentColor
+            layer?.borderWidth = 0.75
+            layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+            layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
+            layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
+            layer?.shadowOpacity = 0.16
+            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
         } else if isSelected {
-            titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-            layer?.borderWidth = 0.5
-
-            if isDark {
-                layer?.backgroundColor = NSColor(white: 0.28, alpha: 0.85).cgColor
-                layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
-                titleLabel.textColor = .white
-            } else {
-                layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.95).cgColor
-                layer?.borderColor = NSColor(white: 0.0, alpha: 0.06).cgColor
-                titleLabel.textColor = NSColor(white: 0.12, alpha: 1.0)
-            }
+            // The selected background is rendered by the shared flowing capsule
+            // in CategoryBarView, so the pill only changes its text here.
+            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.borderWidth = 0.0
+            layer?.shadowOpacity = 0.0
+            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
         } else {
-            titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-
             if isHovered {
-                layer?.borderWidth = 0.5
-                if isDark {
-                    layer?.backgroundColor = NSColor(white: 0.18, alpha: 0.7).cgColor
-                    layer?.borderColor = NSColor(white: 1.0, alpha: 0.10).cgColor
-                    titleLabel.textColor = .labelColor
-                } else {
-                    layer?.backgroundColor = NSColor(white: 0.0, alpha: 0.06).cgColor
-                    layer?.borderColor = NSColor(white: 0.0, alpha: 0.06).cgColor
-                    titleLabel.textColor = .labelColor
-                }
+                layer?.borderWidth = 0.75
+                layer?.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
+                layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+                layer?.shadowColor = nil
+                layer?.shadowOpacity = 0.0
+                titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
             } else {
                 layer?.borderWidth = 0.0
                 layer?.backgroundColor = NSColor.clear.cgColor
-                titleLabel.textColor = .secondaryLabelColor
+                layer?.shadowColor = nil
+                layer?.shadowOpacity = 0.0
+                titleLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
             }
         }
+
+        NSAnimationContext.endGrouping()
     }
 
     override public func layout() {
@@ -141,8 +144,9 @@ public final class CategoryPillView: NSView {
     }
 
     private func updateShadowPath() {
-        layer?.shadowOpacity = 0.0
-        layer?.shadowColor = nil
+        // Soft glow without an explicit path: Core Animation falls back to a
+        // rounded-rect shadow derived from the layer's corner radius, avoiding
+        // the macOS 14+ `cgPath` API while keeping the macOS 12 floor intact.
         layer?.shadowPath = nil
     }
 
@@ -212,7 +216,7 @@ public final class CategoryPillView: NSView {
 
     private func startDragSession(with event: NSEvent) {
         let pbItem = NSPasteboardItem()
-        pbItem.setString(category.id.uuidString, forType: NSPasteboard.PasteboardType("cc.atools.category-reorder"))
+        pbItem.setString(category.id.uuidString, forType: NSPasteboard.PasteboardType(AppConstants.categoryReorderType))
 
         let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
         let snapshot = snapshotImage()
@@ -289,11 +293,13 @@ public final class CategoryPillView: NSView {
 
         let menu = NSMenu(title: "CategoryMenu")
 
-        let renameItem = NSMenuItem(title: "✏️ 重命名分类...", action: #selector(contextRename), keyEquivalent: "")
+        let renameItem = NSMenuItem(title: "重命名分类...", action: #selector(contextRename), keyEquivalent: "")
+        renameItem.image = ThumbnailPipeline.shared.symbolIcon(name: "pencil", pointSize: 13)
         renameItem.target = self
         menu.addItem(renameItem)
 
-        let deleteItem = NSMenuItem(title: "🗑️ 删除分类", action: #selector(contextDelete), keyEquivalent: "")
+        let deleteItem = NSMenuItem(title: "删除分类", action: #selector(contextDelete), keyEquivalent: "")
+        deleteItem.image = ThumbnailPipeline.shared.symbolIcon(name: "trash", pointSize: 13)
         deleteItem.target = self
         // Disable delete if this is the only category
         let totalCategories = ConfigManager.shared.config.categories.count
@@ -305,12 +311,14 @@ public final class CategoryPillView: NSView {
 
         menu.addItem(NSMenuItem.separator())
 
-        let addItem = NSMenuItem(title: "➕ 新建分类...", action: #selector(contextAdd), keyEquivalent: "")
+        let addItem = NSMenuItem(title: "新建分类...", action: #selector(contextAdd), keyEquivalent: "")
+        addItem.image = ThumbnailPipeline.shared.symbolIcon(name: "plus", pointSize: 13)
         addItem.target = self
         menu.addItem(addItem)
 
         menu.addItem(NSMenuItem.separator())
-        let settingsItem = NSMenuItem(title: "⚙️ 偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: "偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
+        settingsItem.image = ThumbnailPipeline.shared.symbolIcon(name: "gearshape", pointSize: 13)
         settingsItem.keyEquivalentModifierMask = .command
         settingsItem.target = self
         menu.addItem(settingsItem)

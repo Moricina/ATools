@@ -41,6 +41,10 @@ private final class SidebarRowButton: NSButton {
     var isCurrentSelected: Bool = false {
         didSet { updateAppearance() }
     }
+    private var isHovered = false {
+        didSet { updateAppearance() }
+    }
+    private var trackingArea: NSTrackingArea?
 
     init(item: SettingsSidebarItem, target: AnyObject?, action: Selector) {
         self.item = item
@@ -91,17 +95,35 @@ private final class SidebarRowButton: NSButton {
 
     func updateAppearance() {
         if isCurrentSelected {
-            layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-            titleLabel.textColor = .white
+            layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.78).cgColor
+            titleLabel.textColor = .labelColor
             titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-            iconView.contentTintColor = .white
+            iconView.contentTintColor = .labelColor
         } else {
-            layer?.backgroundColor = NSColor.clear.cgColor
+            layer?.backgroundColor = isHovered
+                ? NSColor.controlBackgroundColor.withAlphaComponent(0.42).cgColor
+                : NSColor.clear.cgColor
             titleLabel.textColor = .labelColor
             titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .regular)
             iconView.contentTintColor = .secondaryLabelColor
         }
     }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) { isHovered = true }
+    override func mouseExited(with event: NSEvent) { isHovered = false }
 }
 
 /// 侧边栏主视图 (宽 200pt, 磨砂半透明背景 + 顶部 App 标志 + 菜单列表 + 底部就绪状态)
@@ -208,7 +230,7 @@ public final class SettingsSidebarView: NSView {
         let statusIcon = NSImageView()
         statusIcon.translatesAutoresizingMaskIntoConstraints = false
         statusIcon.image = ThumbnailPipeline.shared.symbolIcon(name: "checkmark.seal.fill", pointSize: 13, weight: .semibold)
-        statusIcon.contentTintColor = .systemBlue
+        statusIcon.contentTintColor = .secondaryLabelColor
         bottomContainer.addSubview(statusIcon)
 
         let statusLabel = NSTextField(labelWithString: "常驻极简就绪")
