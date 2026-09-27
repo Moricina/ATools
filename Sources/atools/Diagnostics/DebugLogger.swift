@@ -50,3 +50,6 @@ public func runtimeLog(_ message: @autoclosure () -> String) {
         RuntimeLogSink.write(data)
     }
 }
+
+/// Whether diagnostic logging is on (used to skip building trace strings).
+public var runtimeLogEnabled: Bool { RuntimeLogSink.isEnabled }

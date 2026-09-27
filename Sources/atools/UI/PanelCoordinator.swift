@@ -204,6 +204,7 @@ public final class PanelCoordinator {
     }
 
     public func switchToPanel(_ target: PanelKind) {
+        runtimeLog("[Panel] switchToPanel(\(target))")
         if target == .shelf && !ConfigManager.shared.config.enableShelfPanel { return }
         if target == .search && !ConfigManager.shared.config.enableSearchPanel { return }
 

@@ -77,6 +77,9 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func showSettingsWindow() {
+        // Diagnostic: every open path funnels here; log the exact caller chain when
+        // debug logging is enabled (defaults write cc.atools.app atools.debugLog -bool YES).
+        runtimeLog("[Settings] showSettingsWindow called from:\n" + Thread.callStackSymbols.prefix(16).joined(separator: "\n"))
         PanelCoordinator.shared.hideAllPanels(restoreFocus: false)
         guard let win = window else { return }
         win.setContentSize(NSSize(width: 780, height: 620))

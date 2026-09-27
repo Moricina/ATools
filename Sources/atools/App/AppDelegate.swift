@@ -40,6 +40,16 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         print("         Search Hotkey: \(config.searchHotkey.displayString)")
         runtimeLog("[App] ATools launched. PID: \(getpid()), FullDiskSearch: \(config.enableFullDiskSearch)")
 
+        // Raw key trace for diagnosing accidental-shortcut reports (debug log only;
+        // runtimeLog is a no-op unless atools.debugLog is enabled).
+        NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            Self.traceRawEvent(event, source: "local")
+            return event
+        }
+        NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            Self.traceRawEvent(event, source: "global")
+        }
+
         DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("cc.atools.testSearch"),
             object: nil,
@@ -157,6 +167,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupHotkeys() {
         HotkeyManager.shared.onHotKeyTriggered = { id in
+            runtimeLog("[Hotkey] onHotKeyTriggered(\(id))")
             switch id {
             case .shelf:
                 PanelCoordinator.shared.togglePanel(.shelf)
@@ -177,6 +188,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         SettingsWindowController.shared.showSettingsWindow()
+    }
+
+    private static func traceRawEvent(_ event: NSEvent, source: String) {
+        guard runtimeLogEnabled else { return }
+        let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        let chars = event.characters ?? ""
+        runtimeLog("[RawKey] \(source) \(event.type.rawValue) code=\(event.keyCode) chars=\(chars.debugDescription) mods=\(mods.rawValue)")
     }
 
     private func preflightUserDirectoriesAccess() {
