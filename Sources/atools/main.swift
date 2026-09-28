@@ -614,6 +614,33 @@ if CommandLine.arguments.contains("--test") {
     exit(0)
 }
 
+// Maintenance flag (no UI): inspect or flip login-item registration for *this* bundle path.
+// The system keys SMAppService.mainApp items by the running app's bundle, so a dev copy
+// and the installed copy register separately; running this flag per copy lets us clean up
+// stale duplicates: `ATools --login-item [status|register|unregister]`
+if CommandLine.arguments.contains("--login-item") {
+    let action = CommandLine.arguments.dropFirst().last { $0 != "--login-item" } ?? "status"
+    let controller = LaunchAtLoginController.shared
+    do {
+        switch action {
+        case "register":
+            try controller.setEnabled(true)
+        case "unregister":
+            try controller.setEnabled(false)
+        case "status":
+            break
+        default:
+            fputs("usage: ATools --login-item [status|register|unregister]\n", stderr)
+            exit(2)
+        }
+        print("[login-item] bundle=\(Bundle.main.bundlePath) state=\(controller.state)")
+    } catch {
+        fputs("[login-item] \(action) failed: \(error)\n", stderr)
+        exit(1)
+    }
+    exit(0)
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
