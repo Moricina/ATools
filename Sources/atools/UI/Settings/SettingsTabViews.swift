@@ -2065,7 +2065,8 @@ public final class AboutTabView: NSView {
     }
 
     private func showReleaseNotes(_ text: String) {
-        releaseNotesText.string = text
+        // GitHub release body 是 Markdown；直接塞纯文本会把 `**`、`-` 原样露出来。
+        releaseNotesText.textStorage?.setAttributedString(MarkdownText.render(text))
         releaseNotesBox.isHidden = false
         releaseNotesHeightConstraint?.constant = 110
         layoutSubtreeIfNeeded()
