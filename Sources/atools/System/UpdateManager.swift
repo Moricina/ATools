@@ -595,34 +595,53 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包代码签名校验失败"])
         }
 
-        try validateCodeSignature(at: stagingAppPath)
+        try Self.validateCodeSignature(at: stagingAppPath, currentAppPath: Bundle.main.bundlePath)
     }
 
     /// Validates the Apple designated requirement and signer identity in addition to structural
     /// codesign verification. Ad-hoc builds remain supported, but may only replace ad-hoc builds;
     /// Developer ID builds must retain the same Team ID.
-    private func validateCodeSignature(at stagingAppPath: String) throws {
+    ///
+    /// 静态 + internal：`--test` 诊断套件会拿真实包做回归，防止历史 bug 重现。
+    static func validateCodeSignature(at stagingAppPath: String, currentAppPath: String) throws {
         let stagedDescription = UpdateManager.codesign(arguments: ["-dv", "--verbose=4", stagingAppPath])
         let stagedRequirement = UpdateManager.codesign(arguments: ["-dr", "-", stagingAppPath])
-        guard stagedDescription.status == 0,
-              stagedRequirement.status == 0,
-              stagedRequirement.output.contains("identifier \"\(UpdateManager.expectedBundleIdentifier)\"") else {
+        guard stagedDescription.status == 0, stagedRequirement.status == 0 else {
             throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包 designated requirement 无效"])
         }
 
-        let currentDescription = UpdateManager.codesign(arguments: ["-dv", "--verbose=4", Bundle.main.bundlePath])
+        // 证书签名（Developer ID 等）的 DR 形如：
+        //   designated => identifier "cc.atools.app" and certificate leaf=H"..."
+        // ad-hoc 签名没有证书，DR 只会是 cdhash（`# designated => cdhash H"..."`），
+        // 根本不含 identifier——只查 DR 的话所有 ad-hoc 正式包都会被误拒，
+        // 所以退回用 -dv 输出的 Identifier= 校验（历史上就是这里导致更新报错）。
+        let requirementMatches = stagedRequirement.output.contains("identifier \"\(UpdateManager.expectedBundleIdentifier)\"")
+        let identifierMatches = UpdateManager.identifierValue(in: stagedDescription.output) == UpdateManager.expectedBundleIdentifier
+        guard requirementMatches || identifierMatches else {
+            throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包 designated requirement 无效"])
+        }
+
+        let currentDescription = UpdateManager.codesign(arguments: ["-dv", "--verbose=4", currentAppPath])
         let currentTeam = UpdateManager.teamIdentifier(in: currentDescription.output)
         let stagedTeam = UpdateManager.teamIdentifier(in: stagedDescription.output)
+        let stagedIsAdhoc = stagedDescription.output.contains("Signature=adhoc")
 
         if let currentTeam {
-            guard stagedTeam == currentTeam else {
+            guard !stagedIsAdhoc, stagedTeam == currentTeam else {
                 throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包签名 Team ID 与当前应用不一致"])
             }
         } else {
-            guard stagedTeam == nil, stagedDescription.output.contains("Signature=adhoc") else {
+            guard stagedIsAdhoc, stagedTeam == nil else {
                 throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "当前 ad-hoc 构建仅接受 ad-hoc 更新包"])
             }
         }
+    }
+
+    private static func identifierValue(in output: String) -> String? {
+        for line in output.split(separator: "\n") where line.hasPrefix("Identifier=") {
+            return String(line.dropFirst("Identifier=".count))
+        }
+        return nil
     }
 
     private static func teamIdentifier(in output: String) -> String? {

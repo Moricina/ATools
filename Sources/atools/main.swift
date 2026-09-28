@@ -563,6 +563,32 @@ if CommandLine.arguments.contains("--test") {
     TestAssertions.expect(UpdateManager.isVersion("2.0.0", greaterThan: "1.9.99") == true, "2.0.0 > 1.9.99")
     print("      ✓ UpdateManager semantic versioning algorithm verified.")
 
+    // 签名校验回归：ad-hoc 包的 `codesign -dr` 输出只有 cdhash，不含 identifier，
+    // 必须走 -dv 的 Identifier= 兜底；否则所有 ad-hoc 正式包更新都会报
+    // “更新包 designated requirement 无效”（v1.2.2 起的历史 bug）。
+    let repoAppBundle = FileManager.default.currentDirectoryPath + "/ATools.app"
+    if FileManager.default.fileExists(atPath: repoAppBundle) {
+        do {
+            try UpdateManager.validateCodeSignature(at: repoAppBundle, currentAppPath: repoAppBundle)
+            print("      ✓ ad-hoc 更新包签名校验通过（DR 仅 cdhash 时走 Identifier= 兑底）")
+        } catch {
+            TestAssertions.expect(false, "ad-hoc 更新包必须通过签名校验，但被拒：\(error.localizedDescription)")
+        }
+
+        // 负例：非本应用的签名包必须被拒绝
+        let foreignApp = "/System/Applications/Utilities/Terminal.app"
+        if FileManager.default.fileExists(atPath: foreignApp) {
+            var rejected = false
+            do {
+                try UpdateManager.validateCodeSignature(at: foreignApp, currentAppPath: repoAppBundle)
+            } catch {
+                rejected = true
+            }
+            TestAssertions.expect(rejected, "外源签名包必须被签名校验拒绝")
+        }
+        print("      ✓ 更新包签名校验正/反例验证完成.")
+    }
+
     let releaseAssets: [[String: Any]] = [
         ["name": "ATools.zip", "browser_download_url": "https://example.com/ATools.zip"],
         ["name": "ATools.dmg", "browser_download_url": "https://example.com/ATools.dmg"]
