@@ -87,11 +87,23 @@ touch "$APP_BUNDLE"
 
 if [ "$SIGNING_IDENTITY" = "-" ]; then
     echo "==> Signing ATools.app bundle with ad-hoc signature..."
+    codesign --force --deep --sign "-" "$APP_BUNDLE"
 else
     echo "==> Signing ATools.app bundle with identity: $SIGNING_IDENTITY..."
+    if [[ "$SIGNING_IDENTITY" == Developer\ ID\ Application:* ]]; then
+        # Developer ID：hardened runtime + 可信时间戳（后续公证的前提）
+        codesign --force --deep --sign "$SIGNING_IDENTITY" --options runtime --timestamp "$APP_BUNDLE"
+    else
+        # 自签名等：不加 runtime/timestamp（自签名无 TSA，runtime 无公证也无收益）
+        codesign --force --deep --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
+    fi
 fi
-codesign --force --deep --sign "$SIGNING_IDENTITY" "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+echo "==> Designated requirement:"
+codesign -dr - "$APP_BUNDLE" 2>&1 | sed 's/^/    /'
+if [ "$SIGNING_IDENTITY" != "-" ]; then
+    echo "    ↑ 若是 certificate leaf = H\"...\"，把它填入 UpdateManager.expectedSigningLeafHash"
+fi
 
 BIN_SIZE=$(du -h "$MACOS/ATools" | cut -f1)
 TOTAL_SIZE=$(du -sh "$APP_BUNDLE" | cut -f1)

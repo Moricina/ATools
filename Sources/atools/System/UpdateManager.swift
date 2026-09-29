@@ -631,10 +631,46 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包签名 Team ID 与当前应用不一致"])
             }
         } else {
-            guard stagedIsAdhoc, stagedTeam == nil else {
-                throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "当前 ad-hoc 构建仅接受 ad-hoc 更新包"])
+            // 当前是 ad-hoc / 无 Team 构建（自签名证书同样 TeamIdentifier=not set）：
+            // ① 放行 ad-hoc 包（历史默认）
+            // ② 放行 pinned leaf 指纹匹配的证书包（自签名证书迁移路径）
+            // 指纹填入 expectedSigningLeafHash 后生效；留空则行为与旧版完全一致。
+            guard Self.acceptsUpdateWithoutTeam(stagedIsAdhoc: stagedIsAdhoc,
+                                                stagedTeam: stagedTeam,
+                                                stagedRequirement: stagedRequirement.output,
+                                                pinnedLeafHash: Self.expectedSigningLeafHash) else {
+                throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "当前 ad-hoc 构建仅接受 ad-hoc 或已固定指纹的证书更新包"])
             }
         }
+    }
+
+    // MARK: - 签名指纹 pinning（自签名证书迁移路径）
+
+    /// 自签名证书的 leaf 指纹：`codesign -dr` 输出里 `certificate leaf = H"..."` 的十六进制串。
+    /// 证书创建后由 package_app.sh 打印，填入此处；留空 = 只接受 ad-hoc 包（旧行为）。
+    /// 换证书 = 换指纹，需随对应版本提前发布 pinning。
+    static let expectedSigningLeafHash = ""
+
+    /// 解析 `-dr` 输出中的 `certificate leaf = H"..."` 指纹；无证书（ad-hoc）返回 nil。
+    static func certificateLeafHash(in requirementOutput: String) -> String? {
+        guard let leafRange = requirementOutput.range(of: "certificate leaf") else { return nil }
+        let tail = requirementOutput[leafRange.upperBound...]
+        guard let hOpen = tail.range(of: "H\"") else { return nil }
+        let after = tail[hOpen.upperBound...]
+        guard let close = after.firstIndex(of: "\"") else { return nil }
+        let hash = String(after[after.startIndex..<close])
+        return hash.isEmpty ? nil : hash
+    }
+
+    /// 无 Team 的当前构建接受哪种更新包（纯函数，供 --test 回归）。
+    static func acceptsUpdateWithoutTeam(stagedIsAdhoc: Bool,
+                                         stagedTeam: String?,
+                                         stagedRequirement: String,
+                                         pinnedLeafHash: String) -> Bool {
+        if stagedIsAdhoc && stagedTeam == nil { return true }
+        guard !pinnedLeafHash.isEmpty else { return false }
+        guard let leaf = certificateLeafHash(in: stagedRequirement) else { return false }
+        return leaf.caseInsensitiveCompare(pinnedLeafHash) == .orderedSame
     }
 
     private static func identifierValue(in output: String) -> String? {

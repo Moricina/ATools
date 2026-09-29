@@ -843,6 +843,29 @@ if CommandLine.arguments.contains("--test") {
             TestAssertions.expect(rejected, "外源签名包必须被签名校验拒绝")
         }
         print("      ✓ 更新包签名校验正/反例验证完成.")
+
+        // 签名指纹 pinning（自签名证书迁移路径的纯函数回归）
+        let drCert = "designated => identifier \"cc.atools.app\" and certificate leaf = H\"AABBCC1122\""
+        let drAdhoc = "# designated => cdhash H\"1ea93cbc6183c810\""
+        TestAssertions.expect(UpdateManager.certificateLeafHash(in: drCert) == "AABBCC1122",
+                              "必须解析出 certificate leaf 指纹")
+        TestAssertions.expect(UpdateManager.certificateLeafHash(in: drAdhoc) == nil,
+                              "ad-hoc DR 无 leaf，必须返回 nil")
+        TestAssertions.expect(UpdateManager.certificateLeafHash(in: "garbage") == nil,
+                              "无 leaf 的任意输入必须返回 nil")
+        TestAssertions.expect(UpdateManager.acceptsUpdateWithoutTeam(
+            stagedIsAdhoc: true, stagedTeam: nil, stagedRequirement: drAdhoc, pinnedLeafHash: ""),
+            "ad-hoc 客户端必须接受 ad-hoc 包（历史行为）")
+        TestAssertions.expect(!UpdateManager.acceptsUpdateWithoutTeam(
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHash: ""),
+            "指纹未 pin 时必须拒绝证书包（与旧版一致）")
+        TestAssertions.expect(UpdateManager.acceptsUpdateWithoutTeam(
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHash: "aabbcc1122"),
+            "指纹匹配（忽略大小写）必须放行")
+        TestAssertions.expect(!UpdateManager.acceptsUpdateWithoutTeam(
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHash: "FFEEDD"),
+            "指纹不匹配必须拒绝")
+        print("      ✓ 签名指纹 pinning（解析/放行/拒绝）回归通过.")
     }
 
     let releaseAssets: [[String: Any]] = [
