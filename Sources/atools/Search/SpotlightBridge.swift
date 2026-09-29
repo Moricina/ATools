@@ -28,6 +28,18 @@ public final class SpotlightBridge {
 
     private init() {}
 
+    /// 单个 CJK 字符（汉字/假名/谚文/扩展区）视为可独立检索的完整词。
+    static func isCJK(_ ch: Character) -> Bool {
+        let scalars = ch.unicodeScalars
+        guard scalars.count == 1, let v = scalars.first?.value else { return false }
+        return (0x4E00...0x9FFF).contains(v)    // CJK Unified Ideographs
+            || (0x3400...0x4DBF).contains(v)    // Extension A
+            || (0xF900...0xFAFF).contains(v)    // Compatibility Ideographs
+            || (0x3040...0x30FF).contains(v)    // Hiragana & Katakana
+            || (0xAC00...0xD7AF).contains(v)    // Hangul Syllables
+            || (0x20000...0x3FFFF).contains(v)  // Extension B+
+    }
+
     private func terminateActiveProcess() {
         processLock.lock()
         if let p = activeProcess, p.isRunning {
@@ -65,10 +77,16 @@ public final class SpotlightBridge {
                                     action: { LauncherExecutor.open(path: path) })
             }
 
-            // One character matches an enormous fraction of the disk; the hot
-            // folders + app index cover those keystrokes, full metadata starts
-            // at two characters.
-            guard trimmed.count >= 2 else {
+            // One ASCII character matches an enormous fraction of the disk (empirically
+            // tens of seconds of scanning), so the hot folders + app index cover those
+            // keystrokes and full metadata starts at two characters.
+            //
+            // CJK 是例外：单个汉字/假名/谚文本身就是完整检索词（如 "报"），
+            // 实测全盘命中量与耗时都很小（~100-300ms），中文用户习惯单字起搜，
+            // 放行到全盘不会重踏性能坑。
+            let firstChar = trimmed.first
+            let singleCharFullDiskOK = trimmed.count >= 2 || (firstChar.map { Self.isCJK($0) } ?? false)
+            guard singleCharFullDiskOK else {
                 DispatchQueue.main.async {
                     completion(Array(hot.prefix(limit)))
                 }

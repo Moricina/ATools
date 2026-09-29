@@ -24,14 +24,35 @@ public final class MetadataFileSearchBackend: NSObject {
     private let idLock = NSLock()
     private var currentSearchID = UUID()
 
-    /// Prefetched alongside every result, so scoring never pays an XPC per item.
+    /// Prefetched alongside every result.
+    ///
+    /// 性能关键：`kMDItemPath` 是免费的（随每条结果自带，实测 0.004ms/条），
+    /// 而 FSName/ContentType/日期即使声明了预取，每条仍要一次 ~0.28ms 的同步 XPC。
+    /// 所以大循环只读 path（文件名直接从 path 截取），属性只在 Top-N 第二轮里补读。
     private static let prefetchAttributes: [CFString] = [
-        kMDItemFSName!,
-        kMDItemPath!,
-        kMDItemContentType!,
-        kMDItemContentModificationDate!,
-        kMDItemLastUsedDate!
+        kMDItemPath!
     ]
+
+    /// 构建 Spotlight 查询谓词。
+    ///
+    /// **MDQueryCreate 的谓词语言不支持 NSPredicate 的 `CONTAINS`/`LIKE`/`BEGINSWITH`**
+    /// （对它们直接返回 NULL，历史 bug：全盘检索静默返回空）。只能用通配符形式：
+    /// `kMDItemFSName == '*<text>*'cd`（c=忽略大小写 d=忽略变音符）。
+    /// 查询串中的 `\ ' * ?` 是元字符/转义符，必须按字面量转义。
+    static func predicateText(matching text: String) -> String {
+        var escaped = ""
+        escaped.reserveCapacity(text.count + 4)
+        for ch in text {
+            switch ch {
+            case "\\": escaped += "\\\\"   // 反斜杠先转
+            case "'":  escaped += "\\'"
+            case "*":  escaped += "\\*"    // 防止用户输入变成通配符（如 a*b 扫全盘）
+            case "?":  escaped += "\\?"
+            default:   escaped.append(ch)
+            }
+        }
+        return "kMDItemFSName == '*\(escaped)*'cd"
+    }
 
     public func search(matching text: String, limit: Int, completion: @escaping ([SearchResult]) -> Void) {
         let searchID = UUID()
@@ -66,26 +87,23 @@ public final class MetadataFileSearchBackend: NSObject {
 
     private func execute(predicateText text: String, limit: Int) -> [SearchResult] {
         let lower = text.lowercased()
-        let escaped = text
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "'", with: "\\'")
-        // CONTAINS[cd] is literal (no LIKE wildcards) and case/diacritic insensitive.
-        let predicate = "kMDItemFSName CONTAINS[cd] '\(escaped)'"
+        let predicate = Self.predicateText(matching: text)
 
-        guard let query = MDQueryCreate(
-            kCFAllocatorDefault,
-            predicate as CFString,
-            Self.prefetchAttributes as CFArray,
-            [] as CFArray
-        ) else { return [] }
+        guard let query = MDQueryCreate(kCFAllocatorDefault, predicate as CFString,
+                                        Self.prefetchAttributes as CFArray, [] as CFArray) else {
+            runtimeLog("[MDQuery] predicate not parsable: \(predicate)")
+            return []
+        }
 
         MDQuerySetSearchScope(query, [kMDQueryScopeComputer!] as CFArray, 0)
-        guard MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return [] }
+        guard MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) else {
+            runtimeLog("[MDQuery] execute failed: \(predicate)")
+            return []
+        }
 
         let count = MDQueryGetResultCount(query)
-        // Lightweight candidates first: only the top `limit` become SearchResult
-        // objects (closures + string copies), so a huge match set never turns
-        // into a huge allocation storm.
+        // 第一轮（全量）：只读 kMDItemPath —— 免费；其余属性每条 0.28ms XPC。
+        // 旧实现在这一轮就读 5 个属性，扫 6801 条要 8 秒；同样数据现在 ~70ms。
         var candidates: [Candidate] = []
         candidates.reserveCapacity(min(Int(count), limit * 8))
 
@@ -98,21 +116,30 @@ public final class MetadataFileSearchBackend: NSObject {
                   !path.hasSuffix(".app"),
                   !Self.isExcluded(path) else { continue }
 
-            let name = (MDItemCopyAttribute(item, kMDItemFSName) as? String)
-                ?? (path as NSString).lastPathComponent
-            let modified = MDItemCopyAttribute(item, kMDItemContentModificationDate) as? Date
-            let lastUsed = MDItemCopyAttribute(item, kMDItemLastUsedDate) as? Date
-            let contentType = MDItemCopyAttribute(item, kMDItemContentType) as? String
-            let isFolder = contentType.map { UTType($0)?.conforms(to: .folder) ?? false } ?? false
-
-            let score = Self.score(name: name, path: path, query: lower,
-                                   modified: modified, lastUsed: lastUsed)
-            candidates.append(Candidate(score: score, name: name, path: path,
-                                        isFolder: isFolder, modified: modified))
+            let name = (path as NSString).lastPathComponent
+            candidates.append(Candidate(
+                baseScore: Self.baseScore(name: name, path: path, query: lower),
+                name: name, path: path, item: item))
         }
 
-        let top = candidates.sorted { $0.score > $1.score }.prefix(max(1, limit))
-        return top.map { c in
+        // 第二轮：只为 Top-N 补读 ContentType/日期（N×0.28ms ≈ 17ms），细化打分。
+        let top = candidates.sorted { $0.baseScore > $1.baseScore }.prefix(max(1, limit))
+        var finalized: [(score: Int, name: String, path: String, isFolder: Bool)] = []
+        finalized.reserveCapacity(top.count)
+        for c in top {
+            let modified = MDItemCopyAttribute(c.item, kMDItemContentModificationDate) as? Date
+            let lastUsed = MDItemCopyAttribute(c.item, kMDItemLastUsedDate) as? Date
+            let contentType = MDItemCopyAttribute(c.item, kMDItemContentType) as? String
+            let isFolder = contentType.map { UTType($0)?.conforms(to: .folder) ?? false } ?? false
+
+            var score = c.baseScore
+            if let lastUsed { score += min(12, max(0, 12 - Int(Date().timeIntervalSince(lastUsed) / 86_400))) }
+            if let modified { score += min(8, max(0, 8 - Int(Date().timeIntervalSince(modified) / 86_400))) }
+            finalized.append((score, c.name, c.path, isFolder))
+        }
+
+        let best = finalized.sorted { $0.score > $1.score }
+        return best.map { c in
             let path = c.path
             return SearchResult(title: c.name, subtitle: path, path: path,
                                 type: c.isFolder ? .folder : .file,
@@ -122,18 +149,16 @@ public final class MetadataFileSearchBackend: NSObject {
     }
 
     private struct Candidate {
-        let score: Int
+        let baseScore: Int
         let name: String
         let path: String
-        let isFolder: Bool
-        let modified: Date?
+        /// Top-N 复审阶段读属性用；ARC 持有到 execute() 结束（先于 query 释放）。
+        let item: MDItem
     }
 
-    private static func score(name: String, path: String, query: String, modified: Date?, lastUsed: Date?) -> Int {
+    private static func baseScore(name: String, path: String, query: String) -> Int {
         let lower = name.lowercased()
         var score = lower == query ? 120 : (lower.hasPrefix(query) ? 105 : (lower.contains(query) ? 90 : 60))
-        if let lastUsed { score += min(12, max(0, 12 - Int(Date().timeIntervalSince(lastUsed) / 86_400))) }
-        if let modified { score += min(8, max(0, 8 - Int(Date().timeIntervalSince(modified) / 86_400))) }
         // NSString pathComponents avoids allocating an NSURL per item.
         score -= min(10, (path as NSString).pathComponents.count)
         return score

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CoreServices
 
 // Diagnostic expectations are deliberately kept out of Swift's assert machinery so they run
 // in release builds as well as debug builds.
@@ -291,6 +292,87 @@ if CommandLine.arguments.contains("--test") {
     }
     print("      ✓ SpotlightBridge file search returned \(foundFixtureFiles.count) results.")
     TestAssertions.expect(!foundFixtureFiles.isEmpty, "SpotlightBridge should find fixture file in user hot folders")
+
+    // 6.1 全盘检索（MDQuery）回归：中文谓词 + 热目录之外的文件 + CJK 单字门限
+    // 历史 bug：MDQueryCreate 不支持 NSPredicate 的 CONTAINS，谓词解析失败静默返回空，
+    // 中文/英文文件全盘检索全部失效（测试文件恰在 Downloads 热目录，故未暴露）。
+    print("[6.1] Testing full-disk MDQuery (Chinese predicate, fixture outside hot folders)...")
+    do {
+        // (a) 谓词必须可被 MDQuery 解析（含转义边界输入）
+        for probe in ["报告", "don't", "C++*", "a?b", "报", "path with space", "测试\\",
+                      "全盘检索中文", "it's a *wild* card?"] {
+            let text = MetadataFileSearchBackend.predicateText(matching: probe)
+            var parsed = false
+            if let mq = MDQueryCreate(kCFAllocatorDefault, text as CFString,
+                                      [kMDItemPath!] as CFArray, [] as CFArray) {
+                MDQuerySetSearchScope(mq, [kMDQueryScopeComputer!] as CFArray, 0)
+                parsed = MDQueryExecute(mq, CFOptionFlags(kMDQuerySynchronous.rawValue))
+            }
+            TestAssertions.expect(parsed, "MDQuery 谓词必须可解析: \(text)")
+        }
+        print("      ✓ MDQuery 谓词解析（中文/引号/通配符/空格）全部通过.")
+
+        // (b) 端到端：家目录根（不在热目录列表里）的中文文件名必须能被全盘检索命中
+        let homeFixture = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("atools全盘检索中文验证_毛静斐.txt")
+        try? "fixture".data(using: .utf8)?.write(to: homeFixture)
+
+        let mdimport = Process()
+        mdimport.executableURL = URL(fileURLWithPath: "/usr/bin/mdimport")
+        mdimport.arguments = [homeFixture.path]
+
+        func fixtureIndexed() -> Bool {
+            let pt = MetadataFileSearchBackend.predicateText(matching: "全盘检索中文验证")
+            guard let mq = MDQueryCreate(kCFAllocatorDefault, pt as CFString,
+                                         [kMDItemPath!] as CFArray, [] as CFArray) else { return false }
+            MDQuerySetSearchScope(mq, [kMDQueryScopeComputer!] as CFArray, 0)
+            guard MDQueryExecute(mq, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return false }
+            for i in 0..<MDQueryGetResultCount(mq) {
+                guard let raw = MDQueryGetResultAtIndex(mq, i) else { continue }
+                let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
+                if let p = MDItemCopyAttribute(item, kMDItemPath) as? String, p == homeFixture.path {
+                    return true
+                }
+            }
+            return false
+        }
+
+        var ready = false
+        let indexDeadline = Date().addingTimeInterval(12)
+        while Date() < indexDeadline {
+            try? mdimport.run()
+            mdimport.waitUntilExit()
+            if fixtureIndexed() { ready = true; break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        TestAssertions.expect(ready, "测试夹具必须被 Spotlight 索引，否则本组回归无意义")
+
+        func fullDiskSearch(_ q: String) -> [SearchResult] {
+            var out: [SearchResult] = []
+            var done = false
+            SpotlightBridge.shared.searchFiles(matching: q, limit: 30) { r in
+                out = r
+                done = true
+            }
+            let dl = Date().addingTimeInterval(6)
+            while !done && Date() < dl {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            return out
+        }
+
+        if ready {
+            let multi = fullDiskSearch("全盘检索中文")
+            TestAssertions.expect(multi.contains(where: { $0.path == homeFixture.path }),
+                                  "全盘检索必须命中热目录之外的中文文件（MDQuery 谓词回归）")
+
+            let single = fullDiskSearch("验")
+            TestAssertions.expect(single.contains(where: { $0.path == homeFixture.path }),
+                                  "单个中文字必须放行到全盘检索并命中")
+            print("      ✓ 中文全盘检索（多字 + 单字）端到端回归通过.")
+        }
+        try? FileManager.default.removeItem(at: homeFixture)
+    }
 
     var coordinatorResults: [SearchResult] = []
     var isCoordDone = false
