@@ -107,7 +107,7 @@ public final class SpotlightBridge {
             if trimmed.count >= 2 || (trimmed.first.map { Self.isCJK($0) } ?? false) {
                 scope = .computer
             } else {
-                scope = .directories(Self.hotFolderURLs())
+                scope = .directories(self.hotFolderURLs())
             }
 
             MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit, scope: scope) { metadataResults in
@@ -137,9 +137,38 @@ public final class SpotlightBridge {
     /// 默认热目录（相对家目录）。快照与单字符 MDQuery 作用域共用同一列表。
     static let defaultHotFolders = ["Downloads", "Desktop", "Documents"]
 
-    static func hotFolderURLs() -> [URL] {
+    /// 用户自定义热目录（绝对路径）。由 ConfigManager 在变更时与初始化时推送，
+    /// 读写都在 hotCacheCondition 锁内——后台枚举/查询绝不直接读主线程的配置对象。
+    private var extraFolders: [String] = []
+
+    /// ConfigManager 变更自定义热目录后推送；随后应调用 dropHotFolderCache()
+    /// 让下次搜索按新列表重建快照。
+    public func setExtraHotFolders(_ paths: [String]) {
+        hotCacheCondition.lock()
+        extraFolders = paths
+        hotCacheCondition.unlock()
+    }
+
+    /// 所有热目录（默认在前，自定义在后）。key 用绝对路径，避免同名目录冲突。
+    static func hotFolderEntries(extraFolders: [String]) -> [(key: String, url: URL)] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return defaultHotFolders.map { home.appendingPathComponent($0) }
+        var entries = defaultHotFolders.map { name -> (key: String, url: URL) in
+            let url = home.appendingPathComponent(name)
+            return (key: url.path, url: url)
+        }
+        entries.append(contentsOf: extraFolders.map { (key: $0, url: URL(fileURLWithPath: $0)) })
+        return entries
+    }
+
+    private func hotFolderEntries() -> [(key: String, url: URL)] {
+        hotCacheCondition.lock()
+        let extra = extraFolders
+        hotCacheCondition.unlock()
+        return Self.hotFolderEntries(extraFolders: extra)
+    }
+
+    private func hotFolderURLs() -> [URL] {
+        hotFolderEntries().map(\.url)
     }
 
     // MARK: - Pinyin matching (热目录文件名拼音/首字母匹配)
@@ -217,12 +246,11 @@ public final class SpotlightBridge {
 
         hotCacheQueue.async { [weak self] in
             guard let self = self else { return }
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            for folder in Self.defaultHotFolders {
-                let files = self.listHotFolder(home.appendingPathComponent(folder))
+            for entry in self.hotFolderEntries() {
+                let files = self.listHotFolder(entry.url)
                 self.hotCacheCondition.lock()
-                self.hotCache[folder] = files
-                self.hotFolderUpdated[folder] = Date()
+                self.hotCache[entry.key] = files
+                self.hotFolderUpdated[entry.key] = Date()
                 self.hotCacheCondition.broadcast()
                 self.hotCacheCondition.unlock()
             }
@@ -274,16 +302,21 @@ public final class SpotlightBridge {
     /// Returns the current snapshot, briefly waiting for an in-progress rebuild.
     private func hotFilesSnapshot(waitingUpTo timeout: TimeInterval) -> [HotFile] {
         warmHotFolderCache()
+        let entries = hotFolderEntries()
         let deadline = Date().addingTimeInterval(timeout)
         hotCacheCondition.lock()
         defer { hotCacheCondition.unlock() }
         // Wait for the rebuild's first folder listing (usually milliseconds) so just-downloaded
         // files show up; slower folders are used from the previous snapshot meanwhile.
-        let firstFolder = Self.defaultHotFolders.first ?? ""
+        let firstKey = entries.first?.key ?? ""
         while isBuildingHotCache,
-              (hotFolderUpdated[firstFolder] ?? .distantPast) < hotCacheBuildStarted,
+              // ① 首个目录（默认最先发布，通常毫秒级）刷到本次构建，保证刚下载的文件可搜；
+              // ② 任何目录尚无快照（例如刚添加的自定义目录）时也必须等——
+              //    否则添加后的首次搜索会因为新目录还没枚举完而搜不到。
+              ((hotFolderUpdated[firstKey] ?? .distantPast) < hotCacheBuildStarted
+                || entries.contains { hotCache[$0.key] == nil }),
               hotCacheCondition.wait(until: deadline) {}
-        return Self.defaultHotFolders.flatMap { hotCache[$0] ?? [] }
+        return entries.flatMap { hotCache[$0.key] ?? [] }
     }
 
     public func stop() {

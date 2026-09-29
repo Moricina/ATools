@@ -27,6 +27,7 @@ public final class ConfigManager {
         if let custom = ConfigManager.overrideConfigURL {
             self.configURL = custom
             self.config = ConfigManager.loadOrCreateDefault(from: custom)
+            SpotlightBridge.shared.setExtraHotFolders(self.config.extraHotFolders)
             return
         }
 
@@ -45,6 +46,9 @@ public final class ConfigManager {
         
         self.configURL = atoolsDir.appendingPathComponent("config.json")
         self.config = ConfigManager.loadOrCreateDefault(from: self.configURL)
+        // 启动时把自定义热目录推送给快照（后台读配置会与主线程写配置竞争，
+        // 所以 SpotlightBridge 不直接读 ConfigManager，由这里和变更时推送）。
+        SpotlightBridge.shared.setExtraHotFolders(self.config.extraHotFolders)
     }
 
     private static func loadOrCreateDefault(from url: URL) -> AtoolsConfig {
@@ -270,6 +274,59 @@ public final class ConfigManager {
     public func updateEnableFullDiskSearch(_ enabled: Bool) {
         self.config.enableFullDiskSearch = enabled
         save()
+    }
+
+    // MARK: - 自定义热目录
+
+    public static let maxExtraHotFolders = 8
+
+    /// 校验自定义热目录路径；通过返回 standardized 路径，不合法返回 nil。
+    /// 规则：必须是存在的绝对路径目录；拒绝家目录及其祖先（防止单个目录吃掉全盘）；
+    /// 拒绝与默认热目录或已有项重复/互相包含；拒绝废纸篓。
+    public func validatedHotFolderPath(_ rawPath: String) -> String? {
+        let path = (rawPath as NSString).standardizingPath
+        guard path.hasPrefix("/") else { return nil }
+
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return nil }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        // 根路径特殊处理：path=="/" 时拼前缀是 "//"，会漏过祖先判断
+        let prefix = path.hasSuffix("/") ? path : path + "/"
+        if home.path == path || home.path.hasPrefix(prefix) { return nil }
+        if path.contains("/.Trash") { return nil }
+
+        for name in SpotlightBridge.defaultHotFolders {
+            if home.appendingPathComponent(name).path == path { return nil }
+        }
+        for existing in config.extraHotFolders {
+            if existing == path
+                || existing.hasPrefix(path + "/")
+                || path.hasPrefix(existing + "/") { return nil }
+        }
+        return path
+    }
+
+    @discardableResult
+    public func addHotFolder(_ rawPath: String) -> Bool {
+        guard let path = validatedHotFolderPath(rawPath) else { return false }
+        guard !config.extraHotFolders.contains(path) else { return false }
+        guard config.extraHotFolders.count < Self.maxExtraHotFolders else { return false }
+        config.extraHotFolders.append(path)
+        save()
+        SpotlightBridge.shared.setExtraHotFolders(config.extraHotFolders)
+        SpotlightBridge.shared.dropHotFolderCache()
+        return true
+    }
+
+    public func removeHotFolder(_ rawPath: String) {
+        let path = (rawPath as NSString).standardizingPath
+        let before = config.extraHotFolders.count
+        config.extraHotFolders.removeAll { $0 == path }
+        guard config.extraHotFolders.count != before else { return }
+        save()
+        SpotlightBridge.shared.setExtraHotFolders(config.extraHotFolders)
+        SpotlightBridge.shared.dropHotFolderCache()
     }
 
     @discardableResult

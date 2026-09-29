@@ -760,6 +760,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     private var pageContainer: NSView!
     private var pages: [NSView] = []
     private var headerView: SettingsHeaderView!
+    private var hotFolderStack: NSStackView!
 
     public init() {
         super.init(frame: .zero)
@@ -835,9 +836,46 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
             card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
             card1.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
-            card1.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28),
-            card1.bottomAnchor.constraint(equalTo: optionsScrollContent.bottomAnchor, constant: -28)
+            card1.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28)
         ])
+
+        // 自定义热目录：内存快照白名单（只进快照，不影响全盘检索范围）
+        let secHotTitle = makeSectionHeader(title: "自定义热目录")
+        optionsScrollContent.addSubview(secHotTitle)
+
+        let cardHot = SettingsCardView()
+        cardHot.translatesAutoresizingMaskIntoConstraints = false
+        optionsScrollContent.addSubview(cardHot)
+
+        let hotFolderContainer = NSView()
+        hotFolderContainer.translatesAutoresizingMaskIntoConstraints = false
+        cardHot.addRow(hotFolderContainer, isLast: true)
+
+        hotFolderStack = NSStackView()
+        hotFolderStack.orientation = .vertical
+        hotFolderStack.spacing = 0
+        hotFolderStack.distribution = .fill
+        hotFolderStack.alignment = .leading
+        hotFolderStack.translatesAutoresizingMaskIntoConstraints = false
+        hotFolderContainer.addSubview(hotFolderStack)
+        NSLayoutConstraint.activate([
+            hotFolderStack.topAnchor.constraint(equalTo: hotFolderContainer.topAnchor),
+            hotFolderStack.bottomAnchor.constraint(equalTo: hotFolderContainer.bottomAnchor),
+            hotFolderStack.leadingAnchor.constraint(equalTo: hotFolderContainer.leadingAnchor),
+            hotFolderStack.trailingAnchor.constraint(equalTo: hotFolderContainer.trailingAnchor),
+            hotFolderStack.widthAnchor.constraint(equalTo: hotFolderContainer.widthAnchor)
+        ])
+
+        NSLayoutConstraint.activate([
+            secHotTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 20),
+            secHotTitle.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
+
+            cardHot.topAnchor.constraint(equalTo: secHotTitle.bottomAnchor, constant: 8),
+            cardHot.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
+            cardHot.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28),
+            cardHot.bottomAnchor.constraint(equalTo: optionsScrollContent.bottomAnchor, constant: -28)
+        ])
+        reloadHotFolderRows()
 
         // Page 1: 扩展功能
         let extPage = NSView()
@@ -997,6 +1035,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
     public func refresh() {
         let cfg = ConfigManager.shared.config
+        reloadHotFolderRows()
         diskSearchSwitch.state = cfg.enableFullDiskSearch ? .on : .off
         calcSwitch.state = cfg.enableCalculator ? .on : .off
         dictSwitch.state = cfg.enableDictionary ? .on : .off
@@ -1033,6 +1072,203 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
     @objc private func toggleDiskSearch(_ sender: NSSwitch) {
         ConfigManager.shared.updateEnableFullDiskSearch(sender.state == .on)
+    }
+
+    // MARK: - 自定义热目录列表
+
+    private func reloadHotFolderRows() {
+        guard hotFolderStack != nil else { return }
+        for view in hotFolderStack.arrangedSubviews {
+            hotFolderStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        func addRow(_ view: NSView) {
+            // 必须先入栈再激活宽度约束：激活时两视图需在同一层级
+            //（否则 “no common ancestor” 直接抛 NSGenericException）。
+            hotFolderStack.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: hotFolderStack.widthAnchor).isActive = true
+        }
+
+        let folders = ConfigManager.shared.config.extraHotFolders
+        if folders.isEmpty {
+            addRow(makeHotFolderInfoRow(
+                subtitle: "默认热目录：下载 / 桌面 / 文档（深度 3 层）。可在此添加更多目录进内存快照，搜索毫秒级即时命中；快照未覆盖的文件由全盘检索兜底。"))
+        } else {
+            for (index, path) in folders.enumerated() {
+                if index > 0 { addRow(makeSeparator()) }
+                addRow(makeHotFolderRow(path: path))
+            }
+            addRow(makeSeparator())
+        }
+        addRow(makeAddHotFolderRow(count: folders.count))
+    }
+
+    private func makeHotFolderRow(path: String) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = ThumbnailPipeline.shared.symbolIcon(name: "folder")
+        icon.contentTintColor = .secondaryLabelColor
+        row.addSubview(icon)
+
+        let titleLabel = NSTextField(labelWithString: (path as NSString).lastPathComponent)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        row.addSubview(titleLabel)
+
+        let pathLabel = NSTextField(labelWithString: path)
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.font = NSFont.systemFont(ofSize: 11)
+        pathLabel.textColor = .secondaryLabelColor
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        row.addSubview(pathLabel)
+
+        let removeBtn = NSButton(image: NSImage(systemSymbolName: "minus.circle.fill",
+                                                accessibilityDescription: "移除") ?? NSImage(),
+                                 target: self, action: #selector(removeHotFolderClicked(_:)))
+        removeBtn.translatesAutoresizingMaskIntoConstraints = false
+        removeBtn.isBordered = false
+        removeBtn.identifier = NSUserInterfaceItemIdentifier(path)
+        removeBtn.toolTip = "从热目录移除"
+        removeBtn.contentTintColor = .secondaryLabelColor
+        row.addSubview(removeBtn)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 46),
+
+            icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
+
+            removeBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            removeBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 44),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
+
+            pathLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            pathLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
+            pathLabel.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7)
+        ])
+        return row
+    }
+
+    private func makeAddHotFolderRow(count: Int) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "添加目录…")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        titleLabel.textColor = .controlAccentColor
+        row.addSubview(titleLabel)
+
+        let subtitle = NSTextField(labelWithString: "已添加 \(count)/\(ConfigManager.maxExtraHotFolders) · 深度 3 层、每目录上限 25,000 条，超出部分由全盘检索兜底")
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+        subtitle.font = NSFont.systemFont(ofSize: 11)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.lineBreakMode = .byTruncatingMiddle
+        row.addSubview(subtitle)
+
+        let addBtn = NSButton(image: NSImage(systemSymbolName: "plus.circle.fill",
+                                             accessibilityDescription: "添加") ?? NSImage(),
+                              target: self, action: #selector(addHotFolderClicked(_:)))
+        addBtn.translatesAutoresizingMaskIntoConstraints = false
+        addBtn.isBordered = false
+        addBtn.toolTip = "添加热目录"
+        addBtn.isEnabled = count < ConfigManager.maxExtraHotFolders
+        addBtn.contentTintColor = .controlAccentColor
+        row.addSubview(addBtn)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 46),
+
+            titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: addBtn.leadingAnchor, constant: -8),
+
+            subtitle.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: addBtn.leadingAnchor, constant: -8),
+            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7),
+
+            addBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            addBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
+        return row
+    }
+
+    private func makeHotFolderInfoRow(subtitle: String) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(wrappingLabelWithString: subtitle)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = NSFont.systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        row.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(greaterThanOrEqualToConstant: 46),
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: row.topAnchor, constant: 12),
+            label.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -12)
+        ])
+        return row
+    }
+
+    private func makeSeparator() -> NSView {
+        let container = NSView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.heightAnchor.constraint(equalToConstant: 0.5).isActive = true
+        let line = NSBox()
+        line.boxType = .separator
+        line.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(line)
+        NSLayoutConstraint.activate([
+            line.topAnchor.constraint(equalTo: container.topAnchor),
+            line.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            line.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            line.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16)
+        ])
+        return container
+    }
+
+    @objc private func removeHotFolderClicked(_ sender: NSButton) {
+        guard let path = sender.identifier?.rawValue, !path.isEmpty else { return }
+        ConfigManager.shared.removeHotFolder(path)
+        reloadHotFolderRows()
+    }
+
+    @objc private func addHotFolderClicked(_ sender: Any?) {
+        guard ConfigManager.shared.config.extraHotFolders.count < ConfigManager.maxExtraHotFolders else {
+            NSSound.beep()
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "添加"
+        panel.message = "选择加入热目录快照的文件夹（深度 3 层，每目录上限 25,000 条）"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if ConfigManager.shared.addHotFolder(url.path) {
+            reloadHotFolderRows()
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "无法添加该目录"
+            alert.informativeText = "目录不存在、与已有热目录重复或互相包含、或已达到上限（\(ConfigManager.maxExtraHotFolders) 个）。"
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     @objc private func toggleCalc(_ sender: NSSwitch) {

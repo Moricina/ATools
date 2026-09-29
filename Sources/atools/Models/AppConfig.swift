@@ -232,6 +232,9 @@ public struct AtoolsConfig: Codable {
     public var memoryAnnealDelay: Double
     public var searchDebounceMs: Int
     public var thumbnailCacheLimitMB: Int
+    /// 用户自定义热目录（绝对路径）。仅进内存快照（深度3层、每目录上限25,000条），
+    /// 不影响全盘检索范围；卸载的卷会保留在配置里，重新挂载后自动生效。
+    public var extraHotFolders: [String]
 
     public init(
         version: Int = 4,
@@ -262,7 +265,8 @@ public struct AtoolsConfig: Codable {
         customWebSearchURL: String = "https://www.google.com/search?q={query}",
         memoryAnnealDelay: Double = 3.0,
         searchDebounceMs: Int = 150,
-        thumbnailCacheLimitMB: Int = 6
+        thumbnailCacheLimitMB: Int = 6,
+        extraHotFolders: [String] = []
     ) {
         self.version = version
         self.shelfHotkey = shelfHotkey
@@ -293,6 +297,7 @@ public struct AtoolsConfig: Codable {
         self.memoryAnnealDelay = memoryAnnealDelay
         self.searchDebounceMs = searchDebounceMs
         self.thumbnailCacheLimitMB = thumbnailCacheLimitMB
+        self.extraHotFolders = extraHotFolders
     }
 
     enum CodingKeys: String, CodingKey {
@@ -304,6 +309,7 @@ public struct AtoolsConfig: Codable {
         case isShelfPinned
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
+        case extraHotFolders
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
     }
@@ -343,6 +349,7 @@ public struct AtoolsConfig: Codable {
         self.memoryAnnealDelay = (try? container.decode(Double.self, forKey: .memoryAnnealDelay)) ?? 3.0
         self.searchDebounceMs = (try? container.decode(Int.self, forKey: .searchDebounceMs)) ?? 150
         self.thumbnailCacheLimitMB = (try? container.decode(Int.self, forKey: .thumbnailCacheLimitMB)) ?? 6
+        self.extraHotFolders = (try? container.decode([String].self, forKey: .extraHotFolders)) ?? []
 
         if let shelf = try? container.decode(HotkeyBinding.self, forKey: .shelfHotkey) {
             self.shelfHotkey = shelf
@@ -392,5 +399,6 @@ public struct AtoolsConfig: Codable {
         try container.encode(memoryAnnealDelay, forKey: .memoryAnnealDelay)
         try container.encode(searchDebounceMs, forKey: .searchDebounceMs)
         try container.encode(thumbnailCacheLimitMB, forKey: .thumbnailCacheLimitMB)
+        try container.encode(extraHotFolders, forKey: .extraHotFolders)
     }
 }

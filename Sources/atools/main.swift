@@ -493,6 +493,61 @@ if CommandLine.arguments.contains("--test") {
         try? FileManager.default.removeItem(at: downloads.appendingPathComponent("atools_scope"))
     }
 
+    // 6.3 自定义热目录：校验负例 + 配置持久化往返 + 快照即时命中
+    print("[6.3] Testing custom hot folders (validation, round-trip, snapshot search)...")
+    do {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        let extraDir = home.appendingPathComponent("atools_extra_hot_自定义")
+        try? fm.createDirectory(at: extraDir, withIntermediateDirectories: true)
+        let fixture = extraDir.appendingPathComponent("自定义热目录即时命中文件.txt")
+        try? "hot".data(using: .utf8)?.write(to: fixture)
+
+        let originalFolders = ConfigManager.shared.config.extraHotFolders
+
+        // 校验负例
+        TestAssertions.expect(ConfigManager.shared.validatedHotFolderPath("/") == nil, "必须拒绝根路径")
+        TestAssertions.expect(ConfigManager.shared.validatedHotFolderPath(home.path) == nil, "必须拒绝家目录本身")
+        TestAssertions.expect(ConfigManager.shared.validatedHotFolderPath(home.appendingPathComponent("Downloads").path) == nil,
+                              "必须拒绝默认热目录")
+        TestAssertions.expect(ConfigManager.shared.validatedHotFolderPath("/不存在的目录_atools_xyz") == nil,
+                              "必须拒绝不存在的目录")
+
+        // 正例 + 重复拒绝 + 持久化往返
+        TestAssertions.expect(ConfigManager.shared.addHotFolder(extraDir.path), "合法目录必须能添加")
+        TestAssertions.expect(ConfigManager.shared.addHotFolder(extraDir.path) == false, "重复添加必须被拒绝")
+        if let json = try? JSONEncoder().encode(ConfigManager.shared.config),
+           let decoded = try? JSONDecoder().decode(AtoolsConfig.self, from: json) {
+            TestAssertions.expect(decoded.extraHotFolders.contains(extraDir.path),
+                                  "extraHotFolders 必须能持久化往返")
+        } else {
+            TestAssertions.expect(false, "配置编码/解码不得失败")
+        }
+
+        // 端到端：快照包含自定义目录，文件名匹配即时命中（不依赖 Spotlight 索引）
+        var hits: [SearchResult] = []
+        var done = false
+        SpotlightBridge.shared.searchFiles(matching: "自定义热目录即时命中", limit: 40) { r in
+            hits = r
+            done = true
+        }
+        let dl = Date().addingTimeInterval(6)
+        while !done && Date() < dl {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        if hits.contains(where: { $0.path == fixture.path }) {
+            print("      ✓ 自定义热目录（校验/往返/快照命中）通过.")
+        } else {
+            TestAssertions.expect(false, "自定义热目录中的文件必须被内存快照命中")
+        }
+
+        // 清理：恢复原配置与磁盘
+        ConfigManager.shared.removeHotFolder(extraDir.path)
+        TestAssertions.expect(ConfigManager.shared.config.extraHotFolders == originalFolders,
+                              "清理后配置必须复原")
+        try? fm.removeItem(at: extraDir)
+    }
+
     var coordinatorResults: [SearchResult] = []
     var isCoordDone = false
     SearchCoordinator.shared.search(query: "999生僻词测试XYZ") { results in
