@@ -854,18 +854,21 @@ if CommandLine.arguments.contains("--test") {
         TestAssertions.expect(UpdateManager.certificateLeafHash(in: "garbage") == nil,
                               "无 leaf 的任意输入必须返回 nil")
         TestAssertions.expect(UpdateManager.acceptsUpdateWithoutTeam(
-            stagedIsAdhoc: true, stagedTeam: nil, stagedRequirement: drAdhoc, pinnedLeafHash: ""),
+            stagedIsAdhoc: true, stagedTeam: nil, stagedRequirement: drAdhoc, pinnedLeafHashes: []),
             "ad-hoc 客户端必须接受 ad-hoc 包（历史行为）")
         TestAssertions.expect(!UpdateManager.acceptsUpdateWithoutTeam(
-            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHash: ""),
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHashes: []),
             "指纹未 pin 时必须拒绝证书包（与旧版一致）")
         TestAssertions.expect(UpdateManager.acceptsUpdateWithoutTeam(
-            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHash: "aabbcc1122"),
-            "指纹匹配（忽略大小写）必须放行")
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHashes: ["aabbcc1122"]),
+            "指纹命中（忽略大小写）必须放行")
+        TestAssertions.expect(UpdateManager.acceptsUpdateWithoutTeam(
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHashes: ["FFEEDD", "aabbcc1122"]),
+            "双指纹过渡：新旧并存时命中任一项即放行")
         TestAssertions.expect(!UpdateManager.acceptsUpdateWithoutTeam(
-            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHash: "FFEEDD"),
-            "指纹不匹配必须拒绝")
-        print("      ✓ 签名指纹 pinning（解析/放行/拒绝）回归通过.")
+            stagedIsAdhoc: false, stagedTeam: nil, stagedRequirement: drCert, pinnedLeafHashes: ["FFEEDD", "9988"]),
+            "指纹列表全部不匹配必须拒绝")
+        print("      ✓ 签名指纹 pinning（解析/放行/拒绝/双指纹过渡）回归通过.")
     }
 
     let releaseAssets: [[String: Any]] = [

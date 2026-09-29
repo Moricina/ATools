@@ -102,7 +102,7 @@ codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 echo "==> Designated requirement:"
 codesign -dr - "$APP_BUNDLE" 2>&1 | sed 's/^/    /'
 if [ "$SIGNING_IDENTITY" != "-" ]; then
-    echo "    ↑ 若是 certificate leaf = H\"...\"，把它填入 UpdateManager.expectedSigningLeafHash"
+    echo "    ↑ 若是 certificate leaf = H\"...\"，把它填入 UpdateManager.expectedSigningLeafHashes"
 fi
 
 BIN_SIZE=$(du -h "$MACOS/ATools" | cut -f1)

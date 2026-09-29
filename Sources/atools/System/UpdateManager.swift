@@ -638,7 +638,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             guard Self.acceptsUpdateWithoutTeam(stagedIsAdhoc: stagedIsAdhoc,
                                                 stagedTeam: stagedTeam,
                                                 stagedRequirement: stagedRequirement.output,
-                                                pinnedLeafHash: Self.expectedSigningLeafHash) else {
+                                                pinnedLeafHashes: Self.expectedSigningLeafHashes) else {
                 throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "当前 ad-hoc 构建仅接受 ad-hoc 或已固定指纹的证书更新包"])
             }
         }
@@ -646,10 +646,12 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
     // MARK: - 签名指纹 pinning（自签名证书迁移路径）
 
-    /// 自签名证书的 leaf 指纹：`codesign -dr` 输出里 `certificate leaf = H"..."` 的十六进制串。
-    /// 证书创建后由 package_app.sh 打印，填入此处；留空 = 只接受 ad-hoc 包（旧行为）。
-    /// 换证书 = 换指纹，需随对应版本提前发布 pinning。
-    static let expectedSigningLeafHash = ""
+    /// 自签名证书的 leaf 指纹集合（`codesign -dr` 输出里 `certificate leaf = H"..."` 的十六进制串）。
+    ///
+    /// 支持新旧并存：换证书/升级签名体系时，先发一版同时 pin [旧, 新] 双指纹，
+    /// 确保存量用户能自动更新到该版；下一版再收敛为只 pin [新]。
+    /// 留空数组 = 只接受 ad-hoc 包（与未加固行为完全一致）。
+    static let expectedSigningLeafHashes: [String] = []
 
     /// 解析 `-dr` 输出中的 `certificate leaf = H"..."` 指纹；无证书（ad-hoc）返回 nil。
     static func certificateLeafHash(in requirementOutput: String) -> String? {
@@ -662,15 +664,18 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return hash.isEmpty ? nil : hash
     }
 
-    /// 无 Team 的当前构建接受哪种更新包（纯函数，供 --test 回归）。
+    /// 无 Team 的当前构建接受哪种更新包（纯函数，供 --test 回归）：
+    /// ① ad-hoc 包；② 指纹命中 pinnedLeafHashes 任一项的证书包。
     static func acceptsUpdateWithoutTeam(stagedIsAdhoc: Bool,
                                          stagedTeam: String?,
                                          stagedRequirement: String,
-                                         pinnedLeafHash: String) -> Bool {
+                                         pinnedLeafHashes: [String]) -> Bool {
         if stagedIsAdhoc && stagedTeam == nil { return true }
-        guard !pinnedLeafHash.isEmpty else { return false }
+        guard !pinnedLeafHashes.isEmpty else { return false }
         guard let leaf = certificateLeafHash(in: stagedRequirement) else { return false }
-        return leaf.caseInsensitiveCompare(pinnedLeafHash) == .orderedSame
+        return pinnedLeafHashes.contains {
+            leaf.caseInsensitiveCompare($0) == .orderedSame
+        }
     }
 
     private static func identifierValue(in output: String) -> String? {
