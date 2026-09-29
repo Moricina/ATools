@@ -338,7 +338,7 @@ if CommandLine.arguments.contains("--test") {
         }
 
         var ready = false
-        let indexDeadline = Date().addingTimeInterval(12)
+        let indexDeadline = Date().addingTimeInterval(25)
         while Date() < indexDeadline {
             try? mdimport.run()
             mdimport.waitUntilExit()
@@ -372,6 +372,85 @@ if CommandLine.arguments.contains("--test") {
             print("      ✓ 中文全盘检索（多字 + 单字）端到端回归通过.")
         }
         try? FileManager.default.removeItem(at: homeFixture)
+    }
+
+    // 6.2 热目录拼音匹配 + 单 ASCII 字符限定作用域（快照覆盖不到的深层文件）
+    print("[6.2] Testing hot-folder pinyin match & scoped single-char search...")
+    do {
+        let downloads = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+
+        // (a) 拼音首字母/全拼：文件名里不含查询串，只有拼音路径能命中
+        let pinyinFixture = downloads.appendingPathComponent("热目录拼音验证报告.txt")
+        try? "py".data(using: .utf8)?.write(to: pinyinFixture)
+
+        // (b) 深度 4 的文件：热目录快照只到 3 层，只能靠单字符限定作用域的 MDQuery
+        let deepDir = downloads.appendingPathComponent("atools_scope/a/b")
+        try? FileManager.default.createDirectory(at: deepDir, withIntermediateDirectories: true)
+        let deepFixture = deepDir.appendingPathComponent("zq 单字符作用域 fixture.txt")
+        try? "deep".data(using: .utf8)?.write(to: deepFixture)
+
+        SpotlightBridge.shared.warmHotFolderCache(maxAge: 0)
+
+        func search(_ q: String) -> [SearchResult] {
+            var out: [SearchResult] = []
+            var done = false
+            SpotlightBridge.shared.searchFiles(matching: q, limit: 40) { r in
+                out = r
+                done = true
+            }
+            let dl = Date().addingTimeInterval(6)
+            while !done && Date() < dl {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+            }
+            return out
+        }
+
+        // 拼音匹配基于内存快照，不依赖索引，立刻可验
+        // 「热目录拼音验证报告」→ tokens [re,mu,lu,pin,yin,yan,zheng,bao,gao,txt]
+        let abbr = search("rmlp")
+        TestAssertions.expect(abbr.contains { $0.path == pinyinFixture.path },
+                              "拼音首字母 rmlp 必须命中「热目录拼音验证报告.txt」")
+        let full = search("remulupinyin")
+        TestAssertions.expect(full.contains { $0.path == pinyinFixture.path },
+                              "拼音全拼必须命中「热目录拼音验证报告.txt」")
+        print("      ✓ 拼音首字母/全匹匹配通过.")
+
+        // 深层文件需等 Spotlight 索引（单字符查询走限定作用域的 MDQuery）
+        let mdimport = Process()
+        mdimport.executableURL = URL(fileURLWithPath: "/usr/bin/mdimport")
+        mdimport.arguments = [downloads.path]
+        let deepNeedle = MetadataFileSearchBackend.predicateText(matching: "单字符作用域")
+        func deepIndexed() -> Bool {
+            guard let mq = MDQueryCreate(kCFAllocatorDefault, deepNeedle as CFString,
+                                         [kMDItemPath!] as CFArray, [] as CFArray) else { return false }
+            MDQuerySetSearchScope(mq, [downloads as CFURL] as CFArray, 0)
+            guard MDQueryExecute(mq, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return false }
+            for i in 0..<MDQueryGetResultCount(mq) {
+                guard let raw = MDQueryGetResultAtIndex(mq, i) else { continue }
+                let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
+                if let p = MDItemCopyAttribute(item, kMDItemPath) as? String, p == deepFixture.path { return true }
+            }
+            return false
+        }
+        var ready = false
+        let indexDeadline = Date().addingTimeInterval(25)
+        while Date() < indexDeadline {
+            try? mdimport.run()
+            mdimport.waitUntilExit()
+            if deepIndexed() { ready = true; break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        }
+        TestAssertions.expect(ready, "深层夹具必须被 Spotlight 索引")
+
+        if ready {
+            let single = search("z")
+            TestAssertions.expect(single.contains { $0.path == deepFixture.path },
+                                  "单 ASCII 字符必须通过限定作用域的 MDQuery 命中快照之外(深度>3)的文件")
+            print("      ✓ 单字符限定作用域检索通过.")
+        }
+
+        try? FileManager.default.removeItem(at: pinyinFixture)
+        try? FileManager.default.removeItem(at: downloads.appendingPathComponent("atools_scope"))
     }
 
     var coordinatorResults: [SearchResult] = []

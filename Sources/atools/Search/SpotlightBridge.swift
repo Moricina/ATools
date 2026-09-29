@@ -69,31 +69,29 @@ public final class SpotlightBridge {
         // of this ran on the main run loop.
         DispatchQueue.global(qos: .userInitiated).async {
             let hot = self.hotFilesSnapshot(waitingUpTo: 0.3).compactMap { file -> SearchResult? in
-                guard file.name.localizedCaseInsensitiveContains(trimmed) else { return nil }
+                guard let tier = Self.hotMatchTier(name: file.name,
+                                                   pinyinFull: file.pinyinFull,
+                                                   pinyinAbbr: file.pinyinAbbr,
+                                                   query: trimmed) else { return nil }
                 let path = file.path
                 return SearchResult(title: file.name, subtitle: path, path: path,
                                     type: file.isDirectory ? .folder : .file,
-                                    score: file.name.lowercased().hasPrefix(trimmed.lowercased()) ? 125 : 115,
+                                    score: tier,
                                     action: { LauncherExecutor.open(path: path) })
             }
 
-            // One ASCII character matches an enormous fraction of the disk (empirically
-            // tens of seconds of scanning), so the hot folders + app index cover those
-            // keystrokes and full metadata starts at two characters.
-            //
-            // CJK 是例外：单个汉字/假名/谚文本身就是完整检索词（如 "报"），
-            // 实测全盘命中量与耗时都很小（~100-300ms），中文用户习惯单字起搜，
-            // 放行到全盘不会重踏性能坑。
-            let firstChar = trimmed.first
-            let singleCharFullDiskOK = trimmed.count >= 2 || (firstChar.map { Self.isCJK($0) } ?? false)
-            guard singleCharFullDiskOK else {
-                DispatchQueue.main.async {
-                    completion(Array(hot.prefix(limit)))
-                }
-                return
+            // 分层选取全盘检索作用域：
+            // - ≥2 字符或单个 CJK 字：全盘（kMDQueryScopeComputer）
+            // - 单个 ASCII 字符：限定在热目录内 —— 命中量可控（实测 45-240ms），
+            //   且完整覆盖目录全深度（快照只到 3 层），补上“单字符搜不到快照外文件”的空档
+            let scope: MetadataFileSearchBackend.ScopeTarget
+            if trimmed.count >= 2 || (trimmed.first.map { Self.isCJK($0) } ?? false) {
+                scope = .computer
+            } else {
+                scope = .directories(Self.hotFolderURLs())
             }
 
-            MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit) { metadataResults in
+            MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit, scope: scope) { metadataResults in
                 var merged = Array(hot.prefix(limit))
                 for result in metadataResults where !merged.contains(where: { $0.path == result.path }) {
                     merged.append(result)
@@ -110,10 +108,78 @@ public final class SpotlightBridge {
 
     // MARK: - Hot folder snapshot
 
+    /// 默认热目录（相对家目录）。快照与单字符 MDQuery 作用域共用同一列表。
+    static let defaultHotFolders = ["Downloads", "Desktop", "Documents"]
+
+    static func hotFolderURLs() -> [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return defaultHotFolders.map { home.appendingPathComponent($0) }
+    }
+
+    // MARK: - Pinyin matching (热目录文件名拼音/首字母匹配)
+
+    private static let pinyinCacheLock = NSLock()
+    private static var pinyinCache: [String: (full: String, abbr: String)] = [:]
+
+    /// 文件名 → 拼音形态。
+    /// Han-Latin 转换约 0.1ms/条（25k 条 ≈ 2.4s），所以只在快照重建时调用，
+    /// 按文件名缓存：重建时只有新文件名会真正转换，旧的一律命中缓存。
+    static func pinyinForms(for name: String) -> (full: String, abbr: String) {
+        pinyinCacheLock.lock()
+        if let hit = pinyinCache[name] {
+            pinyinCacheLock.unlock()
+            return hit
+        }
+        pinyinCacheLock.unlock()
+
+        // Han-Latin：按音节切分且多音字按词组正确（重庆→chóng、银行→yín háng）；
+        // Latin-ASCII：去声调（bào → bao）。
+        let han = name.applyingTransform(StringTransform(rawValue: "Han-Latin"), reverse: false) ?? name
+        let ascii = han.applyingTransform(StringTransform(rawValue: "Latin-ASCII"), reverse: false) ?? han
+        // 音节/拉丁词按非字母数字切分：
+        // "mao jing fei_kai ti bao gao. docx" → [mao,jing,fei,kai,ti,bao,gao,docx]
+        let tokens = ascii.lowercased().split { !$0.isLetter && !$0.isNumber }
+        let forms = (full: tokens.joined(),
+                     abbr: tokens.compactMap { $0.first.map(String.init) }.joined())
+
+        pinyinCacheLock.lock()
+        if pinyinCache.count > 120_000 { pinyinCache.removeAll() }
+        pinyinCache[name] = forms
+        pinyinCacheLock.unlock()
+        return forms
+    }
+
+    /// 热目录命中分层打分（也为后续热目录/全盘统一归并排序准备）。
+    /// 返回 nil = 未命中。
+    static func hotMatchTier(name: String, pinyinFull: String, pinyinAbbr: String, query: String) -> Int? {
+        let q = query.lowercased()
+        if name.localizedCaseInsensitiveContains(query) {
+            let lowerName = name.lowercased()
+            if lowerName == q { return 130 }        // 文件名完全相等
+            if lowerName.hasPrefix(q) { return 120 } // 前缀
+            return 110                              // 包含
+        }
+        // 拼音匹配至少 2 字符（单字符靠文件名匹配 + 限定作用域的 MDQuery 覆盖，
+        // 否则首字母表里每个文件都会被单字母命中）
+        guard q.count >= 2 else { return nil }
+        let qCompact = q.replacingOccurrences(of: " ", with: "")
+        guard !qCompact.isEmpty else { return nil }
+        if pinyinFull == qCompact { return 108 }      // 全拼音相等（kaitibaogao）
+        if pinyinFull.hasPrefix(qCompact) { return 104 }
+        if pinyinFull.contains(qCompact) { return 100 }
+        if pinyinAbbr.hasPrefix(qCompact) { return 96 }  // 首字母前缀（ktbg）
+        if pinyinAbbr.contains(qCompact) { return 92 }
+        return nil
+    }
+
     private struct HotFile {
         let name: String
         let path: String
         let isDirectory: Bool
+        /// 拼音匹配形态（快照重建时后台计算，缓存复用）：
+        /// full = 音节拼接（"kaitibaogao"），abbr = 音节首字母（"ktbg"）
+        let pinyinFull: String
+        let pinyinAbbr: String
     }
 
     private let hotCacheQueue = DispatchQueue(label: "cc.atools.spotlight.hotcache", qos: .utility)
@@ -141,7 +207,7 @@ public final class SpotlightBridge {
         hotCacheQueue.async { [weak self] in
             guard let self = self else { return }
             let home = FileManager.default.homeDirectoryForCurrentUser
-            for folder in ["Downloads", "Desktop", "Documents"] {
+            for folder in Self.defaultHotFolders {
                 let files = self.listHotFolder(home.appendingPathComponent(folder))
                 self.hotCacheCondition.lock()
                 self.hotCache[folder] = files
@@ -183,7 +249,10 @@ public final class SpotlightBridge {
             }
             if filename.hasPrefix(".") || filename.hasSuffix(".app") { continue }
             let isDir = (try? fileURL.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            files.append(HotFile(name: filename, path: fileURL.path, isDirectory: isDir))
+            // 拼音形态按文件名缓存，重建快照时只有新文件名会真正转换。
+            let pinyin = Self.pinyinForms(for: filename)
+            files.append(HotFile(name: filename, path: fileURL.path, isDirectory: isDir,
+                                 pinyinFull: pinyin.full, pinyinAbbr: pinyin.abbr))
         }
         return files
     }
@@ -194,12 +263,13 @@ public final class SpotlightBridge {
         let deadline = Date().addingTimeInterval(timeout)
         hotCacheCondition.lock()
         defer { hotCacheCondition.unlock() }
-        // Wait for the rebuild's Downloads listing (usually milliseconds) so just-downloaded
+        // Wait for the rebuild's first folder listing (usually milliseconds) so just-downloaded
         // files show up; slower folders are used from the previous snapshot meanwhile.
+        let firstFolder = Self.defaultHotFolders.first ?? ""
         while isBuildingHotCache,
-              (hotFolderUpdated["Downloads"] ?? .distantPast) < hotCacheBuildStarted,
+              (hotFolderUpdated[firstFolder] ?? .distantPast) < hotCacheBuildStarted,
               hotCacheCondition.wait(until: deadline) {}
-        return ["Downloads", "Desktop", "Documents"].flatMap { hotCache[$0] ?? [] }
+        return Self.defaultHotFolders.flatMap { hotCache[$0] ?? [] }
     }
 
     public func stop() {
@@ -219,5 +289,9 @@ public final class SpotlightBridge {
         hotCacheBuildStarted = Date.distantPast
         hotCacheCondition.broadcast()
         hotCacheCondition.unlock()
+        // 拼音缓存同样属于可重建的缓存态内存，退火时一并归还。
+        Self.pinyinCacheLock.lock()
+        Self.pinyinCache.removeAll()
+        Self.pinyinCacheLock.unlock()
     }
 }

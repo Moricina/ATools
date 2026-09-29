@@ -19,6 +19,13 @@ import UniformTypeIdentifiers
 public final class MetadataFileSearchBackend: NSObject {
     public static let shared = MetadataFileSearchBackend()
 
+    /// 查询范围。`.directories` 用于单字符查询：命中量仍可控，但完整覆盖目录全深度
+    /// （热目录快照只到 3 层，MDQuery 范围内到任意深度）。
+    public enum ScopeTarget {
+        case computer
+        case directories([URL])
+    }
+
     /// Serial queue: at most one synchronous MDQuery runs at a time.
     private let queue = DispatchQueue(label: "cc.atools.metadata.mdquery", qos: .userInitiated)
     private let idLock = NSLock()
@@ -54,7 +61,9 @@ public final class MetadataFileSearchBackend: NSObject {
         return "kMDItemFSName == '*\(escaped)*'cd"
     }
 
-    public func search(matching text: String, limit: Int, completion: @escaping ([SearchResult]) -> Void) {
+    public func search(matching text: String, limit: Int,
+                       scope: ScopeTarget = .computer,
+                       completion: @escaping ([SearchResult]) -> Void) {
         let searchID = UUID()
         idLock.lock()
         currentSearchID = searchID
@@ -65,7 +74,7 @@ public final class MetadataFileSearchBackend: NSObject {
             // Coalesce: a newer request arrived while this one was queued.
             guard self.isCurrent(searchID) else { return }
 
-            let results = self.execute(predicateText: text, limit: limit)
+            let results = self.execute(predicateText: text, limit: limit, scope: scope)
 
             // Drop results that were superseded while the query ran.
             guard self.isCurrent(searchID) else { return }
@@ -85,7 +94,7 @@ public final class MetadataFileSearchBackend: NSObject {
         return currentSearchID == id
     }
 
-    private func execute(predicateText text: String, limit: Int) -> [SearchResult] {
+    private func execute(predicateText text: String, limit: Int, scope: ScopeTarget) -> [SearchResult] {
         let lower = text.lowercased()
         let predicate = Self.predicateText(matching: text)
 
@@ -95,7 +104,13 @@ public final class MetadataFileSearchBackend: NSObject {
             return []
         }
 
-        MDQuerySetSearchScope(query, [kMDQueryScopeComputer!] as CFArray, 0)
+        switch scope {
+        case .computer:
+            MDQuerySetSearchScope(query, [kMDQueryScopeComputer!] as CFArray, 0)
+        case .directories(let urls):
+            // 纯目录 URL 数组（混入 Scope 字符串会被当作全盘处理）。
+            MDQuerySetSearchScope(query, urls.map { $0 as CFURL } as CFArray, 0)
+        }
         guard MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) else {
             runtimeLog("[MDQuery] execute failed: \(predicate)")
             return []
