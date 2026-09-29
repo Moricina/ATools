@@ -651,7 +651,10 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     /// 支持新旧并存：换证书/升级签名体系时，先发一版同时 pin [旧, 新] 双指纹，
     /// 确保存量用户能自动更新到该版；下一版再收敛为只 pin [新]。
     /// 留空数组 = 只接受 ad-hoc 包（与未加固行为完全一致）。
-    static let expectedSigningLeafHashes: [String] = []
+    static let expectedSigningLeafHashes: [String] = [
+        // "ATools Sign" 自签名证书（有效期至 2036-09-26），创建于 2026-09-30
+        "e27bee7aa3e27e544d365c8042723d2c6624fbdb"
+    ]
 
     /// 解析 `-dr` 输出中的 `certificate leaf = H"..."` 指纹；无证书（ad-hoc）返回 nil。
     static func certificateLeafHash(in requirementOutput: String) -> String? {
