@@ -166,11 +166,13 @@ public final class HotkeyManager {
     }
 
     private func setupFlagsMonitorsIfNeeded() {
-        if eventTap == nil && HotkeyManager.isAccessibilityTrusted() {
+        let trusted = HotkeyManager.isAccessibilityTrusted()
+        if eventTap == nil && trusted {
             setupNativeEventTap()
         }
         // If eventTap could not be installed (e.g. accessibility permission not yet granted), fall back to AppKit monitors
         guard eventTap == nil else {
+            runtimeLog("[HotkeyManager] special triggers: CGEventTap active (axTrusted=\(trusted))")
             if let m = globalFlagsMonitor {
                 NSEvent.removeMonitor(m)
                 globalFlagsMonitor = nil
@@ -181,6 +183,9 @@ public final class HotkeyManager {
             }
             return
         }
+
+        // 兜底路径更敏感（阈值/状态机不同），失灵时优先怀疑权限而不是用户手速。
+        runtimeLog("[HotkeyManager] special triggers: FALLBACK NSEvent monitors (axTrusted=\(trusted), eventTap=\(eventTap != nil))")
 
         if globalFlagsMonitor == nil {
             globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -212,6 +217,9 @@ public final class HotkeyManager {
         lastModifierPressTime.removeAll()
         lastModifierReleaseTime.removeAll()
         lastObservedModifierMask = []
+        lastCGModifierPressTime.removeAll()
+        lastCGModifierReleaseTime.removeAll()
+        lastSpecialFireTime.removeAll()
     }
 
     private func setupNativeEventTap() {
@@ -277,6 +285,7 @@ public final class HotkeyManager {
             isModifierTainted = true
             lastCGModifierPressTime.removeAll()
             lastCGModifierReleaseTime.removeAll()
+            runtimeLog("[Hotkey] candidate state: CLEARED by keyDown (another key pressed between taps)")
             return Unmanaged.passUnretained(event)
         }
 
@@ -297,15 +306,17 @@ public final class HotkeyManager {
                 if trigger != .none {
                     isModifierTainted = false
                     lastCGModifierPressTime[trigger] = now
-                    if let releaseTime = lastCGModifierReleaseTime[trigger], (now - releaseTime) < 0.38 {
+                    if let releaseTime = lastCGModifierReleaseTime[trigger], (now - releaseTime) < Self.doubleTapGap {
                         // Double tap matched!
-                        for (id, spec) in specialBindings where spec == trigger {
-                            DispatchQueue.main.async { [weak self] in
-                                self?.onHotKeyTriggered?(id)
-                            }
-                        }
+                        fireSpecialTrigger(trigger, source: "cgTap")
                         lastCGModifierReleaseTime.removeValue(forKey: trigger)
                         lastCGModifierPressTime.removeValue(forKey: trigger)
+                    } else if let releaseTime = lastCGModifierReleaseTime[trigger] {
+                        runtimeLog("[Hotkey] \(trigger) NOT matched: gap \(Int((now - releaseTime) * 1000))ms > \(Int(Self.doubleTapGap * 1000))ms limit")
+                        lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                        lastCGModifierPressTime.removeValue(forKey: trigger)
+                    } else {
+                        runtimeLog("[Hotkey] \(trigger) press #1 (candidate start)")
                     }
                 }
             } else if relevantFlags.isEmpty && !prevFlags.isEmpty {
@@ -319,14 +330,23 @@ public final class HotkeyManager {
                 if trigger != .none {
                     if !isModifierTainted {
                         let pressTime = lastCGModifierPressTime[trigger] ?? 0
-                        let pressDuration = now - pressTime
-                        if pressDuration < 0.25 {
-                            lastCGModifierReleaseTime[trigger] = now
+                        if pressTime > 0 {
+                            let pressDuration = now - pressTime
+                            if pressDuration < Self.doubleTapPress {
+                                lastCGModifierReleaseTime[trigger] = now
+                                runtimeLog("[Hotkey] \(trigger) release: candidate OK (press \(Int(pressDuration * 1000))ms)")
+                            } else {
+                                lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                                runtimeLog("[Hotkey] \(trigger) release: candidate DROPPED, held \(Int(pressDuration * 1000))ms ≥ \(Int(Self.doubleTapPress * 1000))ms limit")
+                            }
                         } else {
-                            lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                            // 触发成功后状态已清空：这是双击后半段的松开，忽略即可
+                            //（否则会算出 now-0 的天文数字时长）。
+                            runtimeLog("[Hotkey] \(trigger) release after fire, state already reset")
                         }
                     } else {
                         lastCGModifierReleaseTime.removeValue(forKey: trigger)
+                        runtimeLog("[Hotkey] \(trigger) release: candidate DROPPED (tainted by intervening key)")
                     }
                 }
                 isModifierTainted = false
@@ -347,6 +367,37 @@ public final class HotkeyManager {
     private func handleLocalKeyDown(event: NSEvent) {
         lastModifierReleaseTime.removeAll()
         lastModifierPressTime.removeAll()
+        // CG 兑底检测器的状态也必须一并清理，否则两条路径的候选状态会不同步。
+        lastCGModifierReleaseTime.removeAll()
+        lastCGModifierPressTime.removeAll()
+        isModifierTainted = true
+    }
+
+    // MARK: - 双击修饰键触发（统一出口）
+
+    /// 双击判定参数（两套检测器统一，避免一条路径松一条紧）。
+    /// press: 单次按住时长上限；gap: 两次松开-按下间隔上限。
+    private static let doubleTapPress: TimeInterval = 0.30
+    private static let doubleTapGap: TimeInterval = 0.50
+    /// 同一次物理双击可能被两套检测器各报一次（监视器切换瞬间/事件重复投递）：
+    /// 250ms 内的重复触发直接吞掉，否则会出现“开了一下又立刻自己关了”。
+    private static let duplicateFireWindow: TimeInterval = 0.25
+
+    private var lastSpecialFireTime: [HotkeySpecialTrigger: TimeInterval] = [:]
+
+    private func fireSpecialTrigger(_ trigger: HotkeySpecialTrigger, source: String) {
+        let now = Date().timeIntervalSinceReferenceDate
+        if let last = lastSpecialFireTime[trigger], now - last < Self.duplicateFireWindow {
+            runtimeLog("[HotkeyManager] duplicate \(trigger) from \(source) suppressed (\(Int((now - last) * 1000))ms after previous)")
+            return
+        }
+        lastSpecialFireTime[trigger] = now
+        runtimeLog("[HotkeyManager] fireSpecial \(trigger) source=\(source) t=\(String(format: "%.3f", now))")
+        for (id, spec) in specialBindings where spec == trigger {
+            DispatchQueue.main.async { [weak self] in
+                self?.onHotKeyTriggered?(id)
+            }
+        }
     }
 
     private var lastModifierPressTime: [HotkeySpecialTrigger: TimeInterval] = [:]
@@ -366,13 +417,9 @@ public final class HotkeyManager {
 
             if trigger != .none {
                 lastModifierPressTime[trigger] = now
-                if let releaseTime = lastModifierReleaseTime[trigger], (now - releaseTime) < 0.38 {
+                if let releaseTime = lastModifierReleaseTime[trigger], (now - releaseTime) < Self.doubleTapGap {
                     // Double tap matched!
-                    for (id, spec) in specialBindings where spec == trigger {
-                        DispatchQueue.main.async { [weak self] in
-                            self?.onHotKeyTriggered?(id)
-                        }
-                    }
+                    fireSpecialTrigger(trigger, source: "nsevent")
                     lastModifierReleaseTime.removeValue(forKey: trigger)
                     lastModifierPressTime.removeValue(forKey: trigger)
                 }
@@ -389,9 +436,9 @@ public final class HotkeyManager {
             if trigger != .none {
                 let pressTime = lastModifierPressTime[trigger] ?? 0
                 let pressDuration = now - pressTime
-                // Only register as candidate tap if it was a quick light tap (< 220ms)
+                // Only register as candidate tap if it was a quick light tap
                 // This cleanly filters out Cmd+C, Cmd+V, Cmd+Tab where Command is held
-                if pressDuration < 0.22 {
+                if pressDuration < Self.doubleTapPress {
                     lastModifierReleaseTime[trigger] = now
                 } else {
                     lastModifierReleaseTime.removeValue(forKey: trigger)

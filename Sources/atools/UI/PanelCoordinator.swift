@@ -172,9 +172,12 @@ public final class PanelCoordinator {
             // Another ATools-owned window, menu or sheet temporarily taking key
             // status is not an external focus loss. App/workspace notifications
             // cover actual switches to another application.
-            if SettingsWindowController.isSettingsWindowKey || NSApp.keyWindow != nil { return }
+            if SettingsWindowController.isSettingsWindowKey || NSApp.keyWindow != nil {
+                runtimeLog("[Panel] autoDismiss(\(reason)) skipped: settings/keyWindow still key")
+                return
+            }
         }
-        guard PanelDismissPolicy.shouldDismiss(
+        let decision = PanelDismissPolicy.shouldDismiss(
             activePanel: active,
             isShelfPinned: isShelfPinned,
             autoCloseOnDeactivate: ConfigManager.shared.config.autoCloseOnDeactivate,
@@ -182,7 +185,9 @@ public final class PanelCoordinator {
             hasModalWindow: NSApp.modalWindow != nil,
             isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
             isRightClickMenuOpen: isRightClickMenuOpen
-        ) else { return }
+        )
+        runtimeLog("[Panel] autoDismiss reason=\(reason) panel=\(active) decision=\(decision)")
+        guard decision else { return }
         hideAllPanels(restoreFocus: false)
     }
 
@@ -196,6 +201,8 @@ public final class PanelCoordinator {
         if kind == .shelf && !ConfigManager.shared.config.enableShelfPanel { return }
         if kind == .search && !ConfigManager.shared.config.enableSearchPanel { return }
 
+        let action = (activePanel == kind) ? "hide" : "show"
+        runtimeLog("[Panel] toggle \(kind): active=\(activePanel.map { String(describing: $0) } ?? "nil") -> \(action)")
         if activePanel == kind {
             hideAllPanels()
         } else {
@@ -298,6 +305,7 @@ public final class PanelCoordinator {
         panelPresentationGeneration &+= 1
         let generation = panelPresentationGeneration
         let wasShowingPanel = activePanel != nil
+        runtimeLog("[Panel] hideAllPanels wasShowing=\(wasShowingPanel) gen=\(panelPresentationGeneration + 1) restoreFocus=\(restoreFocus)")
         isDraggingActive = false
         stopGlobalOutsideClickMonitor()
 
@@ -341,9 +349,14 @@ public final class PanelCoordinator {
                 panel.animator().alphaValue = 0.0
             },
             completionHandler: { [weak self, weak panel] in
-                guard let self = self, let panel = panel, self.panelPresentationGeneration == generation else { return }
+                guard let self = self, let panel = panel else { return }
+                guard self.panelPresentationGeneration == generation else {
+                    runtimeLog("[Panel] dismiss completion SKIPPED (gen changed \(generation)→\(self.panelPresentationGeneration)) panel=\(panel) visible=\(panel.isVisible)")
+                    return
+                }
                 panel.orderOut(nil)
                 self.resetPanelEntrance(panel)
+                runtimeLog("[Panel] orderOut done panel=\(panel) visibleAfter=\(panel.isVisible) alpha=\(panel.alphaValue)")
             }
         )
     }
