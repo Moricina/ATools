@@ -95,7 +95,6 @@ public final class MetadataFileSearchBackend: NSObject {
     }
 
     private func execute(predicateText text: String, limit: Int, scope: ScopeTarget) -> [SearchResult] {
-        let lower = text.lowercased()
         let predicate = Self.predicateText(matching: text)
 
         guard let query = MDQueryCreate(kCFAllocatorDefault, predicate as CFString,
@@ -133,7 +132,7 @@ public final class MetadataFileSearchBackend: NSObject {
 
             let name = (path as NSString).lastPathComponent
             candidates.append(Candidate(
-                baseScore: Self.baseScore(name: name, path: path, query: lower),
+                baseScore: Self.baseScore(name: name, path: path, query: text),
                 name: name, path: path, item: item))
         }
 
@@ -147,9 +146,7 @@ public final class MetadataFileSearchBackend: NSObject {
             let contentType = MDItemCopyAttribute(c.item, kMDItemContentType) as? String
             let isFolder = contentType.map { UTType($0)?.conforms(to: .folder) ?? false } ?? false
 
-            var score = c.baseScore
-            if let lastUsed { score += min(12, max(0, 12 - Int(Date().timeIntervalSince(lastUsed) / 86_400))) }
-            if let modified { score += min(8, max(0, 8 - Int(Date().timeIntervalSince(modified) / 86_400))) }
+            let score = c.baseScore + SearchRanking.freshnessScore(modified: modified, lastUsed: lastUsed)
             finalized.append((score, c.name, c.path, isFolder))
         }
 
@@ -172,11 +169,10 @@ public final class MetadataFileSearchBackend: NSObject {
     }
 
     private static func baseScore(name: String, path: String, query: String) -> Int {
-        let lower = name.lowercased()
-        var score = lower == query ? 120 : (lower.hasPrefix(query) ? 105 : (lower.contains(query) ? 90 : 60))
-        // NSString pathComponents avoids allocating an NSURL per item.
-        score -= min(10, (path as NSString).pathComponents.count)
-        return score
+        // 与热目录共用同一套档位（方案 A 归并排序）。MDQuery 的 [cd] 谓词已保证
+        // 文件名实际命中；本地比较失败（变音符差异等）时兑底按“包含”档计。
+        let tier = SearchRanking.nameTier(name: name, query: query) ?? SearchRanking.tierContains
+        return tier - SearchRanking.depthPenalty(path: path)
     }
 
     private static func isExcluded(_ path: String) -> Bool {

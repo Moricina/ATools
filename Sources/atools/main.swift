@@ -370,6 +370,46 @@ if CommandLine.arguments.contains("--test") {
             TestAssertions.expect(single.contains(where: { $0.path == homeFixture.path }),
                                   "单个中文字必须放行到全盘检索并命中")
             print("      ✓ 中文全盘检索（多字 + 单字）端到端回归通过.")
+
+            // (c) 方案 A 归并排序回归：档位 > 新鲜度；同档内新者优先；全盘可排到热目录之前
+            // 档位链（同查询“全盘检索中文”）：
+            //   精确(旧) ≈1591 > 前缀(新) ≈1310 > 前缀(旧) ≈1191 > 全盘包含(新) ≈920 > 热目录包含(旧) ≈791
+            let fm = FileManager.default
+            let now = Date()
+            let old = now.addingTimeInterval(-60 * 86_400)
+            let exactOld = downloadsURL.appendingPathComponent("全盘检索中文")
+            let prefixNew = downloadsURL.appendingPathComponent("全盘检索中文zzz新.txt")
+            let prefixOld = downloadsURL.appendingPathComponent("全盘检索中文aaa旧.txt")
+            let hotContainsOld = downloadsURL.appendingPathComponent("atools旧的全盘检索中文文件.txt")
+            for (url, date) in [(exactOld, old), (prefixNew, now), (prefixOld, old), (hotContainsOld, old)] {
+                try? "rank".data(using: .utf8)?.write(to: url)
+                try? fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+            }
+            SpotlightBridge.shared.warmHotFolderCache(maxAge: 0)
+
+            let ranked = fullDiskSearch("全盘检索中文")
+            let rankedPaths = ranked.map(\.path)
+            for u in [exactOld, prefixNew, prefixOld, hotContainsOld] {
+                TestAssertions.expect(rankedPaths.contains(u.path),
+                                      "排序夹具必须出现在结果中: \(u.lastPathComponent)")
+            }
+            func idx(_ u: URL) -> Int? { ranked.firstIndex { $0.path == u.path } }
+            if let iExact = idx(exactOld), let iPrefixNew = idx(prefixNew),
+               let iPrefixOld = idx(prefixOld), let iHome = idx(homeFixture),
+               let iHotOld = idx(hotContainsOld) {
+                TestAssertions.expect(iExact < iPrefixNew,
+                                      "精确匹配（旧）必须排在新鲜的前缀匹配之前：档位优先于新鲜度")
+                TestAssertions.expect(iPrefixNew < iPrefixOld,
+                                      "同档位内新文件必须排在旧文件之前")
+                TestAssertions.expect(iHome < iHotOld,
+                                      "全盘结果必须能排到热目录弱命中之前（归并排序，非拼接）")
+                print("      ✓ 方案 A 归并排序（档位>新鲜度、同档新者优先、全局归并）通过.")
+            } else {
+                TestAssertions.expect(false, "排序断言所需的 5 个夹具必须全部出现在结果中")
+            }
+            for u in [exactOld, prefixNew, prefixOld, hotContainsOld] {
+                try? fm.removeItem(at: u)
+            }
         }
         try? FileManager.default.removeItem(at: homeFixture)
     }
