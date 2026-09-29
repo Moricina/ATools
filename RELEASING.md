@@ -1,6 +1,6 @@
 # ATools 发布流程
 
-当前发布版本：**1.2.6 (build 13)**
+当前发布版本：**1.2.7 (build 14)**
 
 ## 一次完整构建
 
@@ -38,9 +38,9 @@ ATOOLS_UPDATE_SIGNING_KEY=/secure/path/update-signing.key ./Scripts/package_app.
 ## 发布前核对
 
 1. `./Scripts/build.sh --test` 全部通过。
-2. `plutil -p ATools.app/Contents/Info.plist` 中版本为 `1.2.6`，构建号为 `13`。
+2. `plutil -p ATools.app/Contents/Info.plist` 中版本为 `1.2.7`，构建号为 `14`。
 3. `./Scripts/update_signature.swift verify <公钥 Base64> ATools.dmg ATools.dmg.sig` 输出 `OK`。
-4. GitHub Release 的标签为 `v1.2.6`。
+4. GitHub Release 的标签为 `v1.2.7`。
 5. Release 同时包含 `ATools.dmg`、`ATools.zip` 及各自的 `.sig`。
 
 ## 签名策略
