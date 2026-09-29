@@ -46,10 +46,18 @@ ATOOLS_UPDATE_SIGNING_KEY=/secure/path/update-signing.key ./Scripts/package_app.
 ## 签名策略
 
 - 更新器会拒绝没有 `.sig` 的安装包，并校验包版本、Bundle ID、可执行文件和代码签名。
-- 更新器在结构校验之外校验 `codesign` designated requirement；使用 Developer ID 时还要求新旧包的 Team ID 一致。ad-hoc 构建只能更新同为 ad-hoc 的包。
+- 更新器在结构校验之外校验 `codesign` designated requirement；使用 Developer ID 时还要求新旧包的 Team ID 一致。ad-hoc 构建只接受 ad-hoc 包或指纹命中 `UpdateManager.expectedSigningLeafHashes` 的证书包。
 - 自动更新不再清除 `com.apple.quarantine`，不会绕过 Gatekeeper。
-- 当前打包默认仍使用 ad-hoc App 签名。配置 `ATOOLS_SIGNING_IDENTITY` 为 Apple Developer ID 后可生成正式签名应用：
+- **当前签名体系：自签名证书 `ATools Sign`（有效期至 2036-09-26）**
+  - `package_app.sh` 默认自动使用钥匙串里的 `ATools Sign`（不存在则回退 ad-hoc）
+  - 指纹 pinning：`e27bee7aa3e27e544d365c8042723d2c6624fbdb`（已入 `expectedSigningLeafHashes`）
+  - 换证书流程：新版同时 pin [旧, 新] 双指纹 → 下一版收敛为 [新]
+- ⚠️ **迁移提醒（1.2.7）**：存量用户是 ad-hoc 构建、尚无指纹 pinning，
+  **1.2.7 必须用 `ATOOLS_SIGNING_IDENTITY="-"` 以 ad-hoc 发布**（作为迁移版），
+  1.2.8 起才能用证书签名自动更新。
+- 如需使用其他身份：
 
 ```bash
 ATOOLS_SIGNING_IDENTITY="Developer ID Application: Example (TEAMID)" ./Scripts/package_app.sh
+ATOOLS_SIGNING_IDENTITY="-" ./Scripts/package_app.sh   # 强制 ad-hoc
 ```

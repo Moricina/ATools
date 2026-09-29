@@ -7,7 +7,19 @@ cd "$DIR"
 VERSION="${ATOOLS_VERSION:-1.2.6}"
 BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-13}"
 SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
-SIGNING_IDENTITY="${ATOOLS_SIGNING_IDENTITY:--}"
+# 签名身份解析：
+# ① 显式指定（ATOOLS_SIGNING_IDENTITY="-" 可强制 ad-hoc，见 RELEASING.md 迁移说明）
+# ② 未指定 → 钥匙串里存在 "ATools Sign" 就自动使用（避免误用 ad-hoc 重签
+#    导致辅助功能授权失效）
+# ③ 都没有 → ad-hoc
+SIGNING_IDENTITY="${ATOOLS_SIGNING_IDENTITY-}"
+if [ -z "$SIGNING_IDENTITY" ]; then
+    if security find-certificate -c "ATools Sign" >/dev/null 2>&1; then
+        SIGNING_IDENTITY="ATools Sign"
+    else
+        SIGNING_IDENTITY="-"
+    fi
+fi
 UPDATE_SIGNING_KEY="${ATOOLS_UPDATE_SIGNING_KEY:-$HOME/.config/atools/update-signing.key}"
 UPDATE_SIGNATURE_TOOL="$DIR/Scripts/update_signature.swift"
 
