@@ -104,6 +104,22 @@ public enum AppTheme: String, Codable, CaseIterable {
     }
 }
 
+public enum ShelfTrackpadGesture: String, Codable, CaseIterable {
+    case none = "none"
+    case fourFingerTap = "fourFingerTap"
+    case threeFingerTap = "threeFingerTap"
+    case threeFingerSwipeDown = "threeFingerSwipeDown"
+
+    public var title: String {
+        switch self {
+        case .none: return "关闭"
+        case .fourFingerTap: return "四指轻点 (推荐零冲突)"
+        case .threeFingerTap: return "三指轻点"
+        case .threeFingerSwipeDown: return "三指下滑"
+        }
+    }
+}
+
 public enum CategoryOrientation: String, Codable {
     case horizontal
     case vertical
@@ -224,6 +240,7 @@ public struct AtoolsConfig: Codable {
     public var autoCloseOnLaunch: Bool
     public var autoCloseOnMouseExit: Bool
     public var autoCloseOnDeactivate: Bool
+    public var shelfTrackpadGesture: ShelfTrackpadGesture
 
     // Modern Settings & Performance extensions
     public var webSearchEngine: WebSearchEngine
@@ -260,6 +277,7 @@ public struct AtoolsConfig: Codable {
         autoCloseOnLaunch: Bool = true,
         autoCloseOnMouseExit: Bool = false,
         autoCloseOnDeactivate: Bool = true,
+        shelfTrackpadGesture: ShelfTrackpadGesture = .none,
         webSearchEngine: WebSearchEngine = .google,
         enableWebSearch: Bool = true,
         customWebSearchURL: String = "https://www.google.com/search?q={query}",
@@ -291,6 +309,7 @@ public struct AtoolsConfig: Codable {
         self.autoCloseOnLaunch = autoCloseOnLaunch
         self.autoCloseOnMouseExit = autoCloseOnMouseExit
         self.autoCloseOnDeactivate = autoCloseOnDeactivate
+        self.shelfTrackpadGesture = shelfTrackpadGesture
         self.webSearchEngine = webSearchEngine
         self.enableWebSearch = enableWebSearch
         self.customWebSearchURL = customWebSearchURL
@@ -307,7 +326,7 @@ public struct AtoolsConfig: Codable {
         case theme, shelfIconScale, themeOpacity
         case enableShelfPanel, enableSearchPanel, enableFavoritesCategory
         case isShelfPinned
-        case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate
+        case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
         case extraHotFolders
         // v1 legacy keys
@@ -342,6 +361,7 @@ public struct AtoolsConfig: Codable {
         self.autoCloseOnLaunch = (try? container.decode(Bool.self, forKey: .autoCloseOnLaunch)) ?? true
         self.autoCloseOnMouseExit = (try? container.decode(Bool.self, forKey: .autoCloseOnMouseExit)) ?? false
         self.autoCloseOnDeactivate = (try? container.decode(Bool.self, forKey: .autoCloseOnDeactivate)) ?? true
+        self.shelfTrackpadGesture = (try? container.decode(ShelfTrackpadGesture.self, forKey: .shelfTrackpadGesture)) ?? .none
 
         self.webSearchEngine = (try? container.decode(WebSearchEngine.self, forKey: .webSearchEngine)) ?? .google
         self.enableWebSearch = (try? container.decode(Bool.self, forKey: .enableWebSearch)) ?? true
@@ -393,6 +413,7 @@ public struct AtoolsConfig: Codable {
         try container.encode(autoCloseOnLaunch, forKey: .autoCloseOnLaunch)
         try container.encode(autoCloseOnMouseExit, forKey: .autoCloseOnMouseExit)
         try container.encode(autoCloseOnDeactivate, forKey: .autoCloseOnDeactivate)
+        try container.encode(shelfTrackpadGesture, forKey: .shelfTrackpadGesture)
         try container.encode(webSearchEngine, forKey: .webSearchEngine)
         try container.encode(enableWebSearch, forKey: .enableWebSearch)
         try container.encode(customWebSearchURL, forKey: .customWebSearchURL)

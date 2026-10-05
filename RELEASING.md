@@ -1,6 +1,6 @@
 # ATools 发布流程
 
-当前发布版本：**1.2.7 (build 14)**
+当前发布版本：**1.2.8 (build 15)**
 
 ## 一次完整构建
 
@@ -40,7 +40,7 @@ ATOOLS_UPDATE_SIGNING_KEY=/secure/path/update-signing.key ./Scripts/package_app.
 1. `./Scripts/build.sh --test` 全部通过。
 2. `plutil -p ATools.app/Contents/Info.plist` 中版本为 `1.2.7`，构建号为 `14`。
 3. `./Scripts/update_signature.swift verify <公钥 Base64> ATools.dmg ATools.dmg.sig` 输出 `OK`。
-4. GitHub Release 的标签为 `v1.2.7`。
+4. GitHub Release 的标签为 `v1.2.8`。
 5. Release 同时包含 `ATools.dmg`、`ATools.zip` 及各自的 `.sig`。
 
 ## 签名策略
@@ -52,9 +52,8 @@ ATOOLS_UPDATE_SIGNING_KEY=/secure/path/update-signing.key ./Scripts/package_app.
   - `package_app.sh` 默认自动使用钥匙串里的 `ATools Sign`（不存在则回退 ad-hoc）
   - 指纹 pinning：`e27bee7aa3e27e544d365c8042723d2c6624fbdb`（已入 `expectedSigningLeafHashes`）
   - 换证书流程：新版同时 pin [旧, 新] 双指纹 → 下一版收敛为 [新]
-- ⚠️ **迁移提醒（1.2.7）**：存量用户是 ad-hoc 构建、尚无指纹 pinning，
-  **1.2.7 必须用 `ATOOLS_SIGNING_IDENTITY="-"` 以 ad-hoc 发布**（作为迁移版），
-  1.2.8 起才能用证书签名自动更新。
+- ✅ **签名迁移已完成（1.2.7→1.2.8）**：1.2.7 已作为 ad-hoc 迁移版发布，
+  1.2.8 起可使用 `ATools Sign` 证书签名发布并支持自动更新。
 - 如需使用其他身份：
 
 ```bash

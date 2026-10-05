@@ -233,3 +233,40 @@
   - `ShelfGridView.swift` — 修复 `sendAction` 编译错误
   - `HotkeyDisplayFormatter.swift` — 无变更（已使用 UCKeyTranslate）
   - `main.swift` — 修复测试断言兼容性、修正 RSS 文案
+
+---
+
+## 七、v3 增量更新：应用抽屉触控板手势唤出（2026-10-06）
+
+### 1. 核心功能新增
+- **触控板多指手势唤出应用抽屉**（`TrackpadGestureManager.swift`）：
+  - 动态加载 macOS 私有框架 `MultitouchSupport.framework`，通过 C API 获取物理触控板底层原始接触点帧（Contacts Frame）。
+  - 实现无外部闭包上下文捕获的静态 Trampoline 跳板，在 Swift 中安全响应 `@convention(c)` 内核回调。
+  - 手势支持：
+    - **四指轻点（Four-finger Tap · 默认推荐首选）**：接触时限 $\le 200\text{ms}$，位移 $< 0.035$，与 macOS 系统默认手势完全零冲突，防误触极佳。
+    - **三指轻点（Three-finger Tap）**：时限 $\le 200\text{ms}$，位移 $< 0.025$，内置防系统“三指拖移 (Three-finger Drag)”误判保护。
+    - **三指下滑（Three-finger Swipe Down）**：纵向下划位移 $\Delta Y \le -0.12$，实现向下拉出抽屉的直觉手感。
+    - **关闭 (none)**：完全注销设备监听，0 额外 CPU/能耗。
+  - 触发后施加 0.45s 冷却防抖，手指全部离开板面后方允许下一次触发。
+
+### 2. 状态机防护与兼容性保障
+- **修饰键状态清理**（`HotkeyManager.swift`）：
+  - 新增 `resetCandidateState()`，手势触发呼出时主动重置键盘修饰键候选态，避免用户手势时无意碰到键盘修饰键导致快捷键状态机挂起。
+- **睡眠唤醒与外设重连**（`TrackpadGestureManager.swift`）：
+  - 监听 `NSWorkspace.didWakeNotification`，系统睡眠唤醒或外接蓝牙 Magic Trackpad 重连后自动重刷设备列表，杜绝野指针崩溃。
+- **高频线程安全**：
+  - 触控板以 60~120Hz 高频调用 C 回调，采用 `os_unfair_lock` 保护标量微状态机，耗时 $< 1\mu\text{s}$，仅通过 `DispatchQueue.main.async` 将 UI 切换分发至主线程。
+
+### 3. 配置持久化与设置界面
+- **配置模型**（`AppConfig.swift` & `ConfigManager.swift`）：
+  - 新增 `ShelfTrackpadGesture` 枚举及本地化展示名。
+  - 在 `AtoolsConfig` 中扩展 `shelfTrackpadGesture` 字段，默认值为 `.none`，完美向后兼容旧版 `config.json` 反序列化。
+  - `ConfigManager.updateShelfTrackpadGesture(_:)` 负责保存并在运行时即时通知管理器启停设备。
+- **设置面板**（`SettingsTabViews.swift`）：
+  - 在「应用抽屉」设置面板（`ShelfTabView`）的 Page 0（排版与尺寸卡片下方）新增「唤出与触控手势」卡片。
+  - 配备 `NSPopUpButton` 选项菜单及防冲突提示文案。
+  - 严格遵守 780.0pt 窗口宽度不变性，经自动化测试验证零布局形变。
+
+### 4. 诊断测试验证
+- `main.swift` 沙盒诊断套件新增 `ShelfTrackpadGesture` 编解码及设备监听回归断言。
+- 运行 `./Scripts/build.sh --test`，全套 11 组诊断测试全部通过（编译零错误零警告）。

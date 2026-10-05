@@ -461,6 +461,15 @@ public final class HotkeyManager {
         registerDefaultHotkeys()
     }
 
+    /// 清空修饰键候选态与临时时序，防止外部手势或点击造成双击修饰键判定残留半态
+    public func resetCandidateState() {
+        lastCGModifierPressTime.removeAll()
+        lastCGModifierReleaseTime.removeAll()
+        lastModifierPressTime.removeAll()
+        lastModifierReleaseTime.removeAll()
+        isModifierTainted = false
+    }
+
     /// Checks whether macOS native Spotlight shortcut (Cmd+Space) is currently enabled in system preferences
     public func isSpotlightShortcutEnabled() -> Bool {
         let plistPath = ("~/Library/Preferences/com.apple.symbolichotkeys.plist" as NSString).expandingTildeInPath

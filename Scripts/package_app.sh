@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.2.7}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-14}"
+VERSION="${ATOOLS_VERSION:-1.2.8}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-15}"
 SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
 # 签名身份解析：
 # ① 显式指定（ATOOLS_SIGNING_IDENTITY="-" 可强制 ad-hoc，见 RELEASING.md 迁移说明）

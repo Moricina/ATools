@@ -10,6 +10,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         setupMainMenu()
         setupStatusItem()
         setupHotkeys()
+        TrackpadGestureManager.shared.startListeningIfEnabled()
 
         // Warm up in-memory app index (its initializer performs the first scan)
         _ = AppHotspotIndex.shared

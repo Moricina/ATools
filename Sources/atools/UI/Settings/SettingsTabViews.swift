@@ -521,6 +521,7 @@ public final class ShelfTabView: NSView {
     private var orientationControl: NSSegmentedControl!
     private var iconSizeSlider: NSSlider!
     private var iconSizeBadge: NSTextField!
+    private var trackpadGesturePopUp: NSPopUpButton!
     private var favoritesSwitch: NSSwitch!
     private var pageContainer: NSView!
     private var pages: [NSView] = []
@@ -631,6 +632,39 @@ public final class ShelfTabView: NSView {
         )
         card1.addRow(rowScale, isLast: true)
 
+        let secGestureTitle = makeSectionHeader(title: "唤出与触控手势")
+        layoutScrollContent.addSubview(secGestureTitle)
+
+        let cardGesture = SettingsCardView()
+        cardGesture.translatesAutoresizingMaskIntoConstraints = false
+        layoutScrollContent.addSubview(cardGesture)
+
+        trackpadGesturePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        trackpadGesturePopUp.translatesAutoresizingMaskIntoConstraints = false
+        trackpadGesturePopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        for gesture in ShelfTrackpadGesture.allCases {
+            trackpadGesturePopUp.addItem(withTitle: gesture.title)
+        }
+        trackpadGesturePopUp.target = self
+        trackpadGesturePopUp.action = #selector(trackpadGestureChanged(_:))
+
+        let rowGesture = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.point.up.left"),
+            title: "触控板手势唤出",
+            subtitle: "在触控板上触发手势即可直接呼出或收回抽屉面板",
+            accessory: trackpadGesturePopUp
+        )
+        cardGesture.addRow(rowGesture, isLast: true)
+
+        let gestureTipLabel = NSTextField(labelWithString: "💡 提示：四指轻点与系统快捷手势完全不冲突（推荐首选）；若选用三指轻点，请确保系统「三指轻点查询」已调整或关闭。")
+        gestureTipLabel.translatesAutoresizingMaskIntoConstraints = false
+        gestureTipLabel.font = NSFont.systemFont(ofSize: 11)
+        gestureTipLabel.textColor = .secondaryLabelColor
+        gestureTipLabel.cell?.wraps = true
+        gestureTipLabel.maximumNumberOfLines = 2
+        gestureTipLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        layoutScrollContent.addSubview(gestureTipLabel)
+
         NSLayoutConstraint.activate([
             sec1Title.topAnchor.constraint(equalTo: layoutScrollContent.topAnchor, constant: 14),
             sec1Title.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
@@ -638,7 +672,18 @@ public final class ShelfTabView: NSView {
             card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
             card1.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
-            card1.bottomAnchor.constraint(equalTo: layoutScrollContent.bottomAnchor, constant: -28)
+
+            secGestureTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 18),
+            secGestureTitle.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
+
+            cardGesture.topAnchor.constraint(equalTo: secGestureTitle.bottomAnchor, constant: 8),
+            cardGesture.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
+            cardGesture.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
+
+            gestureTipLabel.topAnchor.constraint(equalTo: cardGesture.bottomAnchor, constant: 6),
+            gestureTipLabel.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 32),
+            gestureTipLabel.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
+            gestureTipLabel.bottomAnchor.constraint(equalTo: layoutScrollContent.bottomAnchor, constant: -28)
         ])
 
         // Page 1: 分类管理
@@ -715,6 +760,18 @@ public final class ShelfTabView: NSView {
         let pct = Int(round(cfg.shelfIconScale * 100.0))
         iconSizeBadge.stringValue = (pct == 100) ? "100%（默认）" : "\(pct)%"
         favoritesSwitch.state = cfg.enableFavoritesCategory ? .on : .off
+        if let idx = ShelfTrackpadGesture.allCases.firstIndex(of: cfg.shelfTrackpadGesture) {
+            trackpadGesturePopUp.selectItem(at: idx)
+        }
+        trackpadGesturePopUp.isEnabled = cfg.enableShelfPanel
+    }
+
+    @objc private func trackpadGestureChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        let all = ShelfTrackpadGesture.allCases
+        guard all.indices.contains(index) else { return }
+        let selected = all[index]
+        ConfigManager.shared.updateShelfTrackpadGesture(selected)
     }
 
     private func showPage(_ index: Int) {

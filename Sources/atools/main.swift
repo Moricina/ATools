@@ -145,9 +145,20 @@ if CommandLine.arguments.contains("--test") {
     ConfigManager.shared.updateThemeOpacity(0.90) // reset to default
     TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.90, "themeOpacity reset to 0.90")
 
+    // Test ShelfTrackpadGesture configuration & persistence
+    TestAssertions.expect(ConfigManager.shared.config.shelfTrackpadGesture == .none, "shelfTrackpadGesture default should be .none")
+    ConfigManager.shared.updateShelfTrackpadGesture(.fourFingerTap)
+    TestAssertions.expect(ConfigManager.shared.config.shelfTrackpadGesture == .fourFingerTap, "shelfTrackpadGesture should update to .fourFingerTap")
+    let encodedData = try JSONEncoder().encode(ConfigManager.shared.config)
+    let decodedConfig = try JSONDecoder().decode(AtoolsConfig.self, from: encodedData)
+    TestAssertions.expect(decodedConfig.shelfTrackpadGesture == .fourFingerTap, "shelfTrackpadGesture JSON roundtrip verified")
+    ConfigManager.shared.updateShelfTrackpadGesture(.none)
+    TestAssertions.expect(ConfigManager.shared.config.shelfTrackpadGesture == .none, "shelfTrackpadGesture should reset to .none")
+
     print("      ✓ ConfigManager loaded \(config.categories.count) categories successfully.")
     print("        - Shelf Hotkey:  [\(config.shelfHotkey.displayString)] (ID 1)")
     print("        - Search Hotkey: [\(config.searchHotkey.displayString)] (ID 2)")
+    print("        - Shelf Trackpad Gesture: [\(ConfigManager.shared.config.shelfTrackpadGesture.title)]")
     print("        - Shelf Dimensions: \(ConfigManager.shared.config.shelfWidth) x \(ConfigManager.shared.config.shelfHeight)")
     print("        - Sidebar Width: \(ConfigManager.shared.config.sidebarWidth)")
     print("        - App Theme: \(ConfigManager.shared.config.theme.title)")

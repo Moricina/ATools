@@ -400,6 +400,12 @@ public final class ConfigManager {
         save()
     }
 
+    public func updateShelfTrackpadGesture(_ gesture: ShelfTrackpadGesture) {
+        self.config.shelfTrackpadGesture = gesture
+        save()
+        TrackpadGestureManager.shared.updateConfiguration(gesture)
+    }
+
     @discardableResult
     public func addItem(_ item: LauncherItem, to categoryId: UUID) -> Bool {
         addItems([item], to: categoryId).count == 1
