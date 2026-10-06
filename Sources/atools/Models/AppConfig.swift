@@ -125,6 +125,20 @@ public enum CategoryOrientation: String, Codable {
     case vertical
 }
 
+/// 关窗即退的作用范围。名单 (`autoQuitAppRules`) 存 bundleID：
+/// allApps 模式下为排除项，onlyListed 模式下为包含项。
+public enum AutoQuitMode: String, Codable, CaseIterable {
+    case allApps
+    case onlyListed
+
+    public var title: String {
+        switch self {
+        case .allApps: return "全部应用 (名单为排除项)"
+        case .onlyListed: return "仅名单内应用"
+        }
+    }
+}
+
 public enum ShelfIconSize: String, Codable {
     case small
     case medium
@@ -253,6 +267,12 @@ public struct AtoolsConfig: Codable {
     /// 不影响全盘检索范围；卸载的卷会保留在配置里，重新挂载后自动生效。
     public var extraHotFolders: [String]
 
+    // 关窗即退 (AutoQuit)：最后一个窗口关闭后延迟退出应用
+    public var enableAutoQuit: Bool
+    public var autoQuitMode: AutoQuitMode
+    public var autoQuitAppRules: [String]
+    public var autoQuitDelaySeconds: Int
+
     public init(
         version: Int = 4,
         shelfHotkey: HotkeyBinding = .defaultShelf,
@@ -284,7 +304,11 @@ public struct AtoolsConfig: Codable {
         memoryAnnealDelay: Double = 3.0,
         searchDebounceMs: Int = 150,
         thumbnailCacheLimitMB: Int = 6,
-        extraHotFolders: [String] = []
+        extraHotFolders: [String] = [],
+        enableAutoQuit: Bool = false,
+        autoQuitMode: AutoQuitMode = .allApps,
+        autoQuitAppRules: [String] = [],
+        autoQuitDelaySeconds: Int = 2
     ) {
         self.version = version
         self.shelfHotkey = shelfHotkey
@@ -317,6 +341,10 @@ public struct AtoolsConfig: Codable {
         self.searchDebounceMs = searchDebounceMs
         self.thumbnailCacheLimitMB = thumbnailCacheLimitMB
         self.extraHotFolders = extraHotFolders
+        self.enableAutoQuit = enableAutoQuit
+        self.autoQuitMode = autoQuitMode
+        self.autoQuitAppRules = autoQuitAppRules
+        self.autoQuitDelaySeconds = autoQuitDelaySeconds
     }
 
     enum CodingKeys: String, CodingKey {
@@ -329,6 +357,7 @@ public struct AtoolsConfig: Codable {
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
         case extraHotFolders
+        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitDelaySeconds
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
     }
@@ -370,6 +399,13 @@ public struct AtoolsConfig: Codable {
         self.searchDebounceMs = (try? container.decode(Int.self, forKey: .searchDebounceMs)) ?? 150
         self.thumbnailCacheLimitMB = (try? container.decode(Int.self, forKey: .thumbnailCacheLimitMB)) ?? 6
         self.extraHotFolders = (try? container.decode([String].self, forKey: .extraHotFolders)) ?? []
+
+        // AutoQuit: 缺字段落到安全默认（总开关关闭）
+        self.enableAutoQuit = (try? container.decode(Bool.self, forKey: .enableAutoQuit)) ?? false
+        self.autoQuitMode = (try? container.decode(AutoQuitMode.self, forKey: .autoQuitMode)) ?? .allApps
+        self.autoQuitAppRules = (try? container.decode([String].self, forKey: .autoQuitAppRules)) ?? []
+        let rawAutoQuitDelay = (try? container.decode(Int.self, forKey: .autoQuitDelaySeconds)) ?? 2
+        self.autoQuitDelaySeconds = max(0, min(10, rawAutoQuitDelay))
 
         if let shelf = try? container.decode(HotkeyBinding.self, forKey: .shelfHotkey) {
             self.shelfHotkey = shelf
@@ -421,5 +457,9 @@ public struct AtoolsConfig: Codable {
         try container.encode(searchDebounceMs, forKey: .searchDebounceMs)
         try container.encode(thumbnailCacheLimitMB, forKey: .thumbnailCacheLimitMB)
         try container.encode(extraHotFolders, forKey: .extraHotFolders)
+        try container.encode(enableAutoQuit, forKey: .enableAutoQuit)
+        try container.encode(autoQuitMode, forKey: .autoQuitMode)
+        try container.encode(autoQuitAppRules, forKey: .autoQuitAppRules)
+        try container.encode(autoQuitDelaySeconds, forKey: .autoQuitDelaySeconds)
     }
 }

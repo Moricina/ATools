@@ -342,3 +342,83 @@
 - 运行 `./Scripts/key_manager.sh verify` 确认密钥与代码一致
 - 运行 `./Scripts/key_manager.sh backup` 创建初始备份
 - 编译零错误零警告。
+---
+
+## 十、v1.3.0 新增 AutoQuitManager：关闭最后一个窗口即退出应用（2026-10-06）
+
+### 1. 功能定位
+- 对标开源项目 SwiftQuit：点击应用窗口红色关闭按钮且该应用再无其他窗口时，延迟自动退出该应用，杜绝"关了窗口应用还常驻"的困扰。
+- **总开关默认关闭**。首次启用需「辅助功能」授权（macOS 要求）；未授权时模块静默保持空闲，绝不主动弹系统授权弹窗，授权引导只在用户于设置页/状态栏显式开启时出现。
+- 两种作用范围：`全部应用`（名单为排除项，开箱即用）与 `仅名单内应用`（名单为退出项）；退出延迟可选 0/1/2/3/5 秒（默认 2 秒，延迟内重开窗口自动取消退出）。
+- 状态栏菜单新增「关闭窗口即退出」勾选项，与设置页双向同步。
+
+### 2. 核心架构与安全边界
+- **AX 事件驱动 + 兜底轮询**（`AutoQuitManager.swift`）：
+  - `AXObserverCreate` 按 PID 挂载，观察应用级 `kAXWindowCreatedNotification` 并为每个窗口注册 `kAXUIElementDestroyedNotification`；RunLoop 挂主线程 `commonModes`（菜单追踪/模态期间事件不丢）。
+  - 主线程 4 秒兜底轮询重取 `kAXWindowsAttribute` 计数，捕获不吐 AX 销毁事件的应用（部分 Electron/Java）。
+  - **零窗判定铁律**：仅 `AXUIElementCopyAttributeValue` 返回 `.success` 且数组为空才算"确认零窗"；AX 查询失败（AX 树失效等）一律跳过本轮判定，绝不误杀。
+  - **转变式触发**：挂载时记录初始窗口数，零窗口应用（登录项、后台 utility）永不直接退出，只响应「有窗 → 确认零窗」的转变。
+  - **pid 复用防护**：延迟到期复查时用持有的 `NSRunningApplication` 对象验证 `isTerminated == false`，不信裸 pid 数值；复查条件含窗口仍为零、开关仍开、名单仍匹配。
+  - 系统应用硬排除（Finder/Spotlight/通知中心/Dock，按 bundleID）+ ATools 自身排除 + `.regular` 策略过滤 + 未完成启动跳过；无 bundleID 进程保守跳过。
+  - 监听 `didLaunchApplicationNotification` 增量挂载、`didTerminateApplicationNotification` 清理、`didWakeNotification` 全量重建（睡眠唤醒后 AX 树失效自愈）。
+  - 配置变更（开关/模式/名单/延迟）经 `.atoolsAutoQuitDidChange` 通知驱动监视集合全量重建；`reloadIfTrusted()` 在应用重新激活时感知授权完成并热启动。
+- **容错配置**（`AppConfig.swift`）：`AutoQuitMode` 枚举 + 4 个新字段（`enableAutoQuit=false`、`autoQuitMode=.allApps`、`autoQuitAppRules=[bundleID]`、`autoQuitDelaySeconds=2`）全部容错解码，旧 config.json 零影响；解码期对延迟做 0–10 clamp；version 保持 4。
+- **设置页第 4 分页「窗口退出」**（`SettingsTabViews.swift`，追加在 pages 末尾不影响欢迎横幅硬编码跳转）：总开关（未授权时仅显式点击弹授权引导）、授权状态行（refresh 只读 `AXIsProcessTrusted()` 无副作用）、作用范围/延迟/名单行随总开关联动禁用；GeneralTabView 监听 `.atoolsAutoQuitDidChange` 修复"页内分段切换不触发 refresh"死角。
+- **名单编辑器**（`AutoQuitRulesEditorView.swift`）：独立小视图（只读写 ConfigManager，不持有宿主视图防悬垂），复用 `AppHotspotIndex.allApps` 全量快照 + 拼音/别名搜索过滤，图标走 `NSWorkspace.icon(forFile:)`；无 bundleID 应用禁选并提示；`SettingsWindowController.windowWillClose` 先 `endSheet` 再释放缓存的 tab 视图。
+- **应用索引快照**（`AppHotspotIndex.swift`）：新增只读 `allApps` 访问器（锁内拷贝），供名单编辑器枚举全部已安装应用。
+
+### 3. 修改文件清单
+- `Sources/atools/System/AutoQuitManager.swift` — 新增：AX 监听引擎单例（挂载/摘除、零窗判定、延迟退出、兜底轮询、睡眠唤醒重建、`shouldWatch`/`isConfirmedZeroWindowCount` 纯函数供自测断言）
+- `Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift` — 新增：应用名单编辑 sheet（搜索过滤、勾选草稿、无 bundleID 禁选）
+- `Sources/atools/Models/AppConfig.swift` — `AutoQuitMode` 枚举与 4 个新配置字段（容错解码 + clamp + encode）
+- `Sources/atools/Storage/ConfigManager.swift` — 新增 `updateEnableAutoQuit/Mode/Rules/DelaySeconds` 四个更新方法（save + 广播）
+- `Sources/atools/UI/SettingsWindowController.swift` — `.atoolsAutoQuitDidChange` 通知名；`windowWillClose` 先收起 sheet 防悬垂
+- `Sources/atools/UI/Settings/SettingsTabViews.swift` — GeneralTabView 追加「窗口退出」第 4 分页与全部处理器/刷新逻辑
+- `Sources/atools/Search/AppHotspotIndex.swift` — 新增 `allApps` 只读快照访问器
+- `Sources/atools/App/AppDelegate.swift` — 启动 `startIfEnabled()`、`didBecomeActive` 授权热启动、状态栏勾选项、`applicationWillTerminate` 清理
+- `Sources/atools/main.swift` — `[12/12]` 配置往返/旧版默认/越界 clamp/监视资格与零窗判定纯函数断言
+
+### 4. 诊断测试验证
+- 运行 `./Scripts/build.sh --test`：
+  - `[12/12]` AutoQuit 配置往返、旧版配置缺字段安全默认、延迟越界 clamp、监视资格（系统排除/自身/后台策略/未启动/无 bundleID/两种模式名单语义）与零窗判定（查询失败≠零窗）纯函数断言全部通过；
+  - 现有 11 组诊断测试零破坏；设置窗口 780pt 宽度不变性、全部 tab 布局回归通过。
+  - 附注：`[6.x]` Spotlight 夹具索引断言（main.swift:359/508）存在与本更新无关的既有环境性偶发（依赖 mds 对临时目录的索引时序），经 `git stash` 基线三次对照复现确认与本次改动无关；其余多次整跑全绿。
+  - 真机启动冒烟：开启 debugLog 后运行，`[App] ATools launched` 正常、默认关闭时无任何 [AutoQuit] 行（静默空闲），退出无残留。
+
+### 5. 发布后修复：名单编辑 sheet 主线程冻结（2026-10-06, build 18）
+
+- **现象**：真机点击「编辑名单」后设置窗卡死（等待光标），sheet 迟迟不出现。
+- **定位过程**：事后 `sample` 主线程已空闲、无 hang 报告；编写最小诊断 harness（全量源码 + 自定义 main）复现完整生产路径（设置窗 → 分页切换 → 程序化 `performClick`），在双击场景复现 3 秒级冻结；随后逐段计时打点锁定根因。
+- **根因**：
+  1. 编辑器 init 在视图**尚无窗口尺寸**时同步设置 `tableView.dataSource`，NSTableView 立即全量构建全部行视图（272 应用 × 每行 2-7ms ≈ 650ms 主线程冻结；0 应用时该段实测 0ms，完全吻合）；`beginSheet` 呈现时又花约 760ms 重建可见行，合计约 1.5 秒冻结。
+  2. 按钮无防重入：连点两次触发两次 `beginSheet`，第二个 sheet 排队后冻结加倍至 3 秒以上。
+  3. 冷启动边缘：应用刚启动、索引首扫未完成时打开名单会显示 0 个应用且不再重试。
+- **修复**（`AutoQuitRulesEditorView.swift` + `SettingsTabViews.swift`）：
+  - init 只构建空 UI；数据装填延后到 `viewDidMoveToWindow` 后的下一个 runloop 周期（`loadDataIfNeeded`），此时 sheet 已在屏幕、表格已有最终尺寸，NSTableView 只构建可见的十几行（约 30-60ms）。
+  - 索引首扫未完成时（`apps.isEmpty`）通过 `refreshIndex(completion:)` 在扫描结束后自动重载一次。
+  - `openAutoQuitRulesEditor` 增加防重入：已有 attached sheet 时忽略重复打开。
+- **验证**（debugLog 实测）：修复前 construct=766ms + present=763ms ≈ 1.5s；修复后 **construct=14ms + present=290ms，双击被防护拦截（总 301ms）**，2 秒后主循环存活、sheet 正常附着；冷启动 0 应用场景自动重载为 272 个应用；`./Scripts/build.sh --test` 全组回归通过（exit=0、零失败）。
+
+### 6. 发布后修复：名单编辑 Sheet 尺寸坍缩（18x32 白核）与模态假死（2026-10-06, build 19）
+
+- **现象**：在设置页点击「编辑名单」后，设置窗口变暗，中央出现一个极微小的白色椭圆胶囊体（白核），整个界面失去响应（呈现为卡死/假死状态）。
+- **定位过程**：
+  - 探查真实运行进程 PID 59685，`sample` 显示主线程并未死锁，正在 RunLoop `nextEventMatchingMask` 正常轮询；
+  - 调用 macOS 底层 Quartz `CGWindowListCopyWindowInfo` 探查窗口树，捕获到关键现场证据：
+    - 宿主窗口：`WID 4429, Name: 'ATools 偏好设置', Bounds: {Width = 780, Height = 648}`；
+    - 弹出 Sheet：`WID 4430, Name: 'AutoQuit 应用名单', Bounds: {Width = 18, Height = 32, X = 747, Y = 398}`。
+  - **根因锁定**：现代 macOS (macOS 11+) 的 `hostWindow.beginSheet(sheet)` 会根据 `sheet.contentView` 的 Auto Layout 约束和 `fittingSize` 动态协商窗口尺寸。`AutoQuitRulesEditorView` 中 `hintLabel`、`searchField`、`countLabel` 的 `translatesAutoresizingMaskIntoConstraints` 遗漏置 `false`（默认为 `true`），默认零尺寸的 autoresizing mask 约束与显式激活的布局锚点严重冲突；叠加 `NSScrollView` 缺乏最小高度且固有尺寸为 `(-1, -1)`，求解器将 Sheet 目标尺寸压缩为 `18 × 32` pt，渲染为中心白色胶囊体；`beginSheet` 启动模态拦截导致宿主变暗屏蔽事件，而 18x32 的 Sheet 无法显示任何控件、按钮或关闭键且缺少 `Esc` 退出机制，造成表象上的死锁。
+  - **子代理架构审查**（`AppKit Architecture Reviewer`）：审查确认根因定位准确，并提出双重尺寸刚性约束、`keyEquivalent` 键位规范、`AutoQuitAppTableCellView` 单元格标准化复用、`closeSheet` 解挂健壮性兜底以及放开总开关关闭时编辑权限的建议。
+- **修复**（`AutoQuitRulesEditorView.swift` + `SettingsTabViews.swift`）：
+  1. `AutoQuitRulesEditorView.swift`：
+     - 所有子视图补齐 `translatesAutoresizingMaskIntoConstraints = false`；
+     - 覆写 `intrinsicContentSize = NSSize(width: 470, height: 430)`，为 `scrollView` 补充底线高度约束 `greaterThanOrEqualToConstant: 240`，彻底阻断任何求解折叠；
+     - 抽取独立轻量类 `AutoQuitAppTableCellView: NSTableCellView`，在 `tableView(_:viewFor:row:)` 中通过 `makeView(withIdentifier:owner:)` 标准化复用，杜绝滚动时的重复对象分配与约束爆炸；
+     - 为 `cancelButton` 添加 `keyEquivalent = "\u{1b}"`（Esc），为 `saveButton` 添加 `keyEquivalent = "\r"`（Return），并在视图层覆写 `cancelOperation(_:)` 支持按键无障碍秒退；
+     - 健壮化 `closeSheet()`，在 `sheet.sheetParent == nil` 时自动回退至 `orderOut/close`。
+  2. `SettingsTabViews.swift`：
+     - `openAutoQuitRulesEditor()` 中设置 `sheet.contentMinSize = NSSize(width: 470, height: 430)`、`sheet.contentMaxSize = NSSize(width: 470, height: 430)` 与 `sheet.setContentSize` 双重尺寸物理防御；
+     - `refreshAutoQuitPage()` 中设置 `autoQuitRulesButton.isEnabled = true`，允许用户在开启总开关前预设名单。
+- **验证**：
+  - Standalone AppKit Sheet Harness 验证：Sheet 弹出后稳定维持 `Width = 470, Height = 430`，零折叠、零冲突；
+  - 运行 `./Scripts/build.sh --test`：全组 12 大项诊断测试全部通过（exit=0，零失败），设置窗口不变性完全保持。

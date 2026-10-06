@@ -7,6 +7,7 @@ public extension Notification.Name {
     static let atoolsFavoritesToggleDidChange = Notification.Name("atoolsFavoritesToggleDidChange")
     static let atoolsPanelTogglesDidChange = Notification.Name("atoolsPanelTogglesDidChange")
     static let atoolsThemeDidChange = Notification.Name("atoolsThemeDidChange")
+    static let atoolsAutoQuitDidChange = Notification.Name("atoolsAutoQuitDidChange")
 }
 
 public extension NSAlert {
@@ -97,6 +98,12 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         hotkeysView?.shelfRecorder.stopRecording()
         hotkeysView?.searchRecorder.stopRecording()
         performanceView?.stopMonitor()
+
+        // AutoQuit 名单编辑 sheet 挂在本窗口；先把 sheet 收起，避免其数据源
+        // 随下方 generalView 一起释放后出现悬垂回调。
+        if let sheet = window?.attachedSheet {
+            window?.endSheet(sheet)
+        }
 
         // Release every cached tab view. They are plain config-driven forms that
         // are rebuilt lazily by switchToTab on the next open; keeping all seven

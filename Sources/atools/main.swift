@@ -930,6 +930,59 @@ if CommandLine.arguments.contains("--test") {
         print("      ✓ About Tab with update manager maintains strictly 780.0pt width.")
     }
 
+    // 12. Test AutoQuitManager: Config Round-trip & Watch Rules (Pure Functions)
+    print("[12/12] Testing AutoQuit config persistence & watch rules...")
+    do {
+        // 4 个新字段 encode/decode 往返
+        var autoQuitCfg = ConfigManager.shared.config
+        autoQuitCfg.enableAutoQuit = true
+        autoQuitCfg.autoQuitMode = .onlyListed
+        autoQuitCfg.autoQuitAppRules = ["com.apple.TextEdit", "com.google.Chrome"]
+        autoQuitCfg.autoQuitDelaySeconds = 5
+        let autoQuitRoundtrip = try JSONDecoder().decode(AtoolsConfig.self, from: JSONEncoder().encode(autoQuitCfg))
+        TestAssertions.expect(autoQuitRoundtrip.enableAutoQuit == true, "enableAutoQuit should round-trip")
+        TestAssertions.expect(autoQuitRoundtrip.autoQuitMode == .onlyListed, "autoQuitMode should round-trip")
+        TestAssertions.expect(autoQuitRoundtrip.autoQuitAppRules == ["com.apple.TextEdit", "com.google.Chrome"], "autoQuitAppRules should round-trip")
+        TestAssertions.expect(autoQuitRoundtrip.autoQuitDelaySeconds == 5, "autoQuitDelaySeconds should round-trip")
+
+        // 旧版配置（缺字段）必须落到安全默认：总开关关闭
+        let autoQuitLegacy = try JSONDecoder().decode(AtoolsConfig.self, from: "{\"version\":4,\"categories\":[]}".data(using: .utf8)!)
+        TestAssertions.expect(autoQuitLegacy.enableAutoQuit == false, "missing enableAutoQuit must default to OFF")
+        TestAssertions.expect(autoQuitLegacy.autoQuitMode == .allApps, "missing autoQuitMode must default to .allApps")
+        TestAssertions.expect(autoQuitLegacy.autoQuitAppRules.isEmpty, "missing autoQuitAppRules must default to []")
+        TestAssertions.expect(autoQuitLegacy.autoQuitDelaySeconds == 2, "missing autoQuitDelaySeconds must default to 2s")
+
+        // 解码期 clamp 越界延迟
+        autoQuitCfg.autoQuitDelaySeconds = 999
+        let clamped = try JSONDecoder().decode(AtoolsConfig.self, from: JSONEncoder().encode(autoQuitCfg))
+        TestAssertions.expect(clamped.autoQuitDelaySeconds == 10, "autoQuitDelaySeconds must clamp to 10 on decode")
+
+        // 监视资格纯函数：系统排除 / 自身 / 后台策略 / 未启动 / 无 bundleID
+        let watch: (String?, NSApplication.ActivationPolicy, Bool, Bool, AutoQuitMode, [String]) -> Bool = {
+            AutoQuitManager.shouldWatch(bundleID: $0, activationPolicy: $1, isFinishedLaunching: $2, isSelf: $3, mode: $4, rules: $5)
+        }
+        TestAssertions.expect(watch("com.apple.finder", .regular, true, false, .allApps, []) == false, "Finder must be system-excluded")
+        TestAssertions.expect(watch("com.apple.Spotlight", .regular, true, false, .allApps, []) == false, "Spotlight must be system-excluded")
+        TestAssertions.expect(watch("com.apple.notificationcenterui", .regular, true, false, .allApps, []) == false, "NotificationCenter must be system-excluded")
+        TestAssertions.expect(watch("com.apple.dock", .regular, true, false, .allApps, []) == false, "Dock must be system-excluded")
+        TestAssertions.expect(watch("cc.atools.app", .regular, true, true, .allApps, []) == false, "ATools itself must never be watched")
+        TestAssertions.expect(watch("com.apple.TextEdit", .accessory, true, false, .allApps, []) == false, "Non-regular policy apps must not be watched")
+        TestAssertions.expect(watch("com.apple.TextEdit", .regular, false, false, .allApps, []) == false, "Not-finished-launching apps must not be watched")
+        TestAssertions.expect(watch(nil, .regular, true, false, .allApps, []) == false, "Processes without bundleID must not be watched")
+        TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .allApps, []) == true, "allApps mode watches unlisted regular apps")
+        TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .allApps, ["com.apple.TextEdit"]) == false, "allApps mode treats rules as exclusions")
+        TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, ["com.apple.TextEdit"]) == true, "onlyListed mode treats rules as inclusions")
+        TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, []) == false, "onlyListed mode ignores unlisted apps")
+
+        // 零窗判定：AX 查询失败（nil）绝不能视为零窗，否则误杀
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(0) == true, "0 windows confirmed must schedule quit")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(nil) == false, "AX query failure must never count as zero windows")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(2) == false, "2 windows must not schedule quit")
+        print("      ✓ AutoQuit config round-trip, legacy defaults & watch rules verified.")
+    } catch {
+        TestAssertions.expect(false, "AutoQuit diagnostics threw: \(error)")
+    }
+
     if TestAssertions.failures > 0 {
         print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")
         try? FileManager.default.removeItem(at: testFixtureURL)

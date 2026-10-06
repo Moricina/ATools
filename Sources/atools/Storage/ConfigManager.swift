@@ -406,6 +406,35 @@ public final class ConfigManager {
         TrackpadGestureManager.shared.updateConfiguration(gesture)
     }
 
+    // MARK: - 关窗即退 (AutoQuit)
+    // 每次变更后广播 .atoolsAutoQuitDidChange：AutoQuitManager 据此全量重建监视集合，
+    // 状态栏菜单与设置页据此同步勾选态。
+
+    public func updateEnableAutoQuit(_ enabled: Bool) {
+        self.config.enableAutoQuit = enabled
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+    }
+
+    public func updateAutoQuitMode(_ mode: AutoQuitMode) {
+        self.config.autoQuitMode = mode
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+    }
+
+    public func updateAutoQuitRules(_ rules: [String]) {
+        self.config.autoQuitAppRules = rules
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+    }
+
+    public func updateAutoQuitDelaySeconds(_ seconds: Int) {
+        let clamped = max(0, min(10, seconds))
+        self.config.autoQuitDelaySeconds = clamped
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+    }
+
     @discardableResult
     public func addItem(_ item: LauncherItem, to categoryId: UUID) -> Bool {
         addItems([item], to: categoryId).count == 1

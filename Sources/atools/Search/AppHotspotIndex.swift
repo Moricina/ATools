@@ -210,6 +210,14 @@ public final class AppHotspotIndex {
         "NeteaseMusic": ["网易云音乐"]
     ]
 
+    /// 已安装应用的全量快照（锁内拷贝）。供设置页「关窗即退」名单编辑器等
+    /// 需要枚举全部应用的 UI 复用；刷新索引后需重新获取。
+    public var allApps: [IndexedApp] {
+        appsLock.lock()
+        defer { appsLock.unlock() }
+        return apps
+    }
+
     public func search(_ query: String) -> [IndexedApp] {
         let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }

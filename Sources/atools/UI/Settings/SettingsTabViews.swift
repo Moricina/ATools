@@ -56,10 +56,36 @@ public final class GeneralTabView: NSView {
     private var headerView: SettingsHeaderView!
     private var sec1TitleTopConstraint: NSLayoutConstraint?
 
+    // 「窗口退出」页控件
+    private var autoQuitSwitch: NSSwitch!
+    private var autoQuitModePopUp: NSPopUpButton!
+    private var autoQuitDelayPopUp: NSPopUpButton!
+    private var autoQuitRulesButton: SettingsPillButton!
+    private var autoQuitPermissionLabel: NSTextField!
+    private var autoQuitChangeObserver: NSObjectProtocol?
+    private let autoQuitDelayOptions: [(title: String, seconds: Int)] = [
+        ("立即退出", 0), ("1 秒", 1), ("2 秒 (推荐)", 2), ("3 秒", 3), ("5 秒", 5)
+    ]
+
     public init() {
         super.init(frame: .zero)
         setupUI()
         refresh()
+        // 状态栏菜单或名单 sheet 改配置时同步本页控件（页内分段切换不触发 refresh，
+        // 所以必须自己监听配置变更）。
+        autoQuitChangeObserver = NotificationCenter.default.addObserver(
+            forName: .atoolsAutoQuitDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refresh()
+        }
+    }
+
+    deinit {
+        if let token = autoQuitChangeObserver {
+            NotificationCenter.default.removeObserver(token)
+        }
     }
 
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -67,7 +93,7 @@ public final class GeneralTabView: NSView {
     private func setupUI() {
         translatesAutoresizingMaskIntoConstraints = false
 
-        headerView = SettingsHeaderView(title: "常规", iconName: "gearshape", tabs: ["通用与启动", "面板开关", "系统权限"])
+        headerView = SettingsHeaderView(title: "常规", iconName: "gearshape", tabs: ["通用与启动", "面板开关", "系统权限", "窗口退出"])
         addSubview(headerView)
 
         pageContainer = NSView()
@@ -374,7 +400,114 @@ public final class GeneralTabView: NSView {
             spotlightTip.bottomAnchor.constraint(equalTo: permScrollContent.bottomAnchor, constant: -28)
         ])
 
-        pages = [launchPage, panelPage, permPage]
+        // Page 3: 窗口退出 (AutoQuit) —— 必须追加在 pages 末尾，欢迎横幅硬编码跳转 showPage(2)
+        let autoQuitPage = NSView()
+        let autoQuitScrollContent = NSView()
+        let autoQuitScroll = makeTabScrollView(contentView: autoQuitScrollContent)
+        autoQuitPage.addSubview(autoQuitScroll)
+        NSLayoutConstraint.activate([
+            autoQuitScroll.topAnchor.constraint(equalTo: autoQuitPage.topAnchor),
+            autoQuitScroll.leadingAnchor.constraint(equalTo: autoQuitPage.leadingAnchor),
+            autoQuitScroll.trailingAnchor.constraint(equalTo: autoQuitPage.trailingAnchor),
+            autoQuitScroll.bottomAnchor.constraint(equalTo: autoQuitPage.bottomAnchor)
+        ])
+
+        let sec4Title = makeSectionHeader(title: "关闭窗口即退出应用")
+        autoQuitScrollContent.addSubview(sec4Title)
+
+        let card4 = SettingsCardView()
+        card4.translatesAutoresizingMaskIntoConstraints = false
+        autoQuitScrollContent.addSubview(card4)
+
+        autoQuitSwitch = NSSwitch()
+        autoQuitSwitch.target = self
+        autoQuitSwitch.action = #selector(toggleAutoQuit(_:))
+        let rowAutoQuit = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "xmark.circle"),
+            title: "最后一个窗口关闭后退出应用",
+            subtitle: "点击窗口红色关闭按钮且应用再无其他窗口时，延迟自动退出该应用（对标 SwiftQuit）",
+            accessory: autoQuitSwitch
+        )
+        card4.addRow(rowAutoQuit)
+
+        autoQuitPermissionLabel = NSTextField(labelWithString: "")
+        autoQuitPermissionLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let autoQuitPermissionBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openAutoQuitAccessibility))
+        let permissionStack = NSStackView(views: [autoQuitPermissionLabel, autoQuitPermissionBtn])
+        permissionStack.orientation = .horizontal
+        permissionStack.spacing = 8
+        permissionStack.alignment = .centerY
+        let rowAutoQuitPermission = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "accessibility"),
+            title: "辅助功能授权状态",
+            subtitle: "监听窗口关闭事件需在系统设置中允许「辅助功能」；ATools 仅感知窗口数量变化，不读取任何窗口内容",
+            accessory: permissionStack
+        )
+        card4.addRow(rowAutoQuitPermission)
+
+        autoQuitModePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        for mode in AutoQuitMode.allCases {
+            autoQuitModePopUp.addItem(withTitle: mode.title)
+        }
+        autoQuitModePopUp.target = self
+        autoQuitModePopUp.action = #selector(autoQuitModeChanged(_:))
+        autoQuitModePopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        let rowAutoQuitMode = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "scope"),
+            title: "作用范围",
+            subtitle: "「全部应用」开箱即用；追求可控可选「仅名单内」，只自动退出勾选的应用",
+            accessory: autoQuitModePopUp
+        )
+        card4.addRow(rowAutoQuitMode)
+
+        autoQuitDelayPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        for option in autoQuitDelayOptions {
+            autoQuitDelayPopUp.addItem(withTitle: option.title)
+        }
+        autoQuitDelayPopUp.target = self
+        autoQuitDelayPopUp.action = #selector(autoQuitDelayChanged(_:))
+        autoQuitDelayPopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        let rowAutoQuitDelay = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "timer"),
+            title: "退出延迟",
+            subtitle: "确认窗口关闭后的等待时间；延迟内重开窗口会自动取消退出",
+            accessory: autoQuitDelayPopUp
+        )
+        card4.addRow(rowAutoQuitDelay)
+
+        autoQuitRulesButton = SettingsPillButton(title: "编辑名单...", target: self, action: #selector(openAutoQuitRulesEditor))
+        let rowAutoQuitRules = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "list.bullet.rectangle"),
+            title: "应用名单",
+            subtitle: "勾选的应用构成名单：随上方「作用范围」作为排除项或退出项生效",
+            accessory: autoQuitRulesButton
+        )
+        card4.addRow(rowAutoQuitRules, isLast: true)
+
+        let autoQuitTip = NSTextField(labelWithString: "💡 边界保护：未保存文档会先弹保存框（窗口未真正关闭不退出）；最小化、⌘H 隐藏或位于其他空间的窗口不误判；访达等系统应用与应用本身永远排除。")
+        autoQuitTip.translatesAutoresizingMaskIntoConstraints = false
+        autoQuitTip.font = NSFont.systemFont(ofSize: 11)
+        autoQuitTip.textColor = .secondaryLabelColor
+        autoQuitTip.cell?.wraps = true
+        autoQuitTip.maximumNumberOfLines = 3
+        autoQuitTip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        autoQuitScrollContent.addSubview(autoQuitTip)
+
+        NSLayoutConstraint.activate([
+            sec4Title.topAnchor.constraint(equalTo: autoQuitScrollContent.topAnchor, constant: 14),
+            sec4Title.leadingAnchor.constraint(equalTo: autoQuitScrollContent.leadingAnchor, constant: 28),
+
+            card4.topAnchor.constraint(equalTo: sec4Title.bottomAnchor, constant: 8),
+            card4.leadingAnchor.constraint(equalTo: autoQuitScrollContent.leadingAnchor, constant: 28),
+            card4.trailingAnchor.constraint(equalTo: autoQuitScrollContent.trailingAnchor, constant: -28),
+
+            autoQuitTip.topAnchor.constraint(equalTo: card4.bottomAnchor, constant: 10),
+            autoQuitTip.leadingAnchor.constraint(equalTo: autoQuitScrollContent.leadingAnchor, constant: 32),
+            autoQuitTip.trailingAnchor.constraint(equalTo: autoQuitScrollContent.trailingAnchor, constant: -28),
+            autoQuitTip.bottomAnchor.constraint(equalTo: autoQuitScrollContent.bottomAnchor, constant: -28)
+        ])
+
+        pages = [launchPage, panelPage, permPage, autoQuitPage]
         for (idx, page) in pages.enumerated() {
             page.translatesAutoresizingMaskIntoConstraints = false
             pageContainer.addSubview(page)
@@ -400,6 +533,104 @@ public final class GeneralTabView: NSView {
         searchSwitch.isEnabled = cfg.enableShelfPanel
         pinSwitch.state = cfg.isShelfPinned ? .on : .off
         refreshLaunchOnLogin()
+        refreshAutoQuitPage()
+    }
+
+    private func refreshAutoQuitPage() {
+        guard autoQuitSwitch != nil else { return }
+        let cfg = ConfigManager.shared.config
+        autoQuitSwitch.state = cfg.enableAutoQuit ? .on : .off
+        autoQuitModePopUp.isEnabled = cfg.enableAutoQuit
+        autoQuitDelayPopUp.isEnabled = cfg.enableAutoQuit
+        autoQuitRulesButton.isEnabled = true
+
+        if let modeIdx = AutoQuitMode.allCases.firstIndex(of: cfg.autoQuitMode) {
+            autoQuitModePopUp.selectItem(at: modeIdx)
+        }
+        if let delayIdx = autoQuitDelayOptions.firstIndex(where: { $0.seconds == cfg.autoQuitDelaySeconds }) {
+            autoQuitDelayPopUp.selectItem(at: delayIdx)
+        } else {
+            // 手改配置出现的非预设值：选最接近的预设，避免显示过期选项
+            let nearest = autoQuitDelayOptions.enumerated().min {
+                abs($0.element.seconds - cfg.autoQuitDelaySeconds) < abs($1.element.seconds - cfg.autoQuitDelaySeconds)
+            }?.offset ?? 2
+            autoQuitDelayPopUp.selectItem(at: nearest)
+        }
+        autoQuitRulesButton.title = "编辑名单 (\(cfg.autoQuitAppRules.count))..."
+
+        let trusted = HotkeyManager.isAccessibilityTrusted()
+        autoQuitPermissionLabel.stringValue = trusted ? "已授权" : "未授权"
+        autoQuitPermissionLabel.textColor = trusted ? .systemGreen : .systemOrange
+    }
+
+    @objc private func toggleAutoQuit(_ sender: NSSwitch) {
+        let desired = (sender.state == .on)
+        guard desired else {
+            ConfigManager.shared.updateEnableAutoQuit(false)
+            return
+        }
+        if HotkeyManager.isAccessibilityTrusted() {
+            ConfigManager.shared.updateEnableAutoQuit(true)
+            return
+        }
+        // 授权引导只在用户显式点击开关时出现；refresh() 绝不触发系统弹窗（--test 环境安全）
+        let alert = NSAlert()
+        alert.messageText = "「窗口退出」需要辅助功能授权"
+        alert.informativeText = "监听其他应用窗口的关闭事件，需要 macOS「系统设置」->「隐私与安全性」->「辅助功能」中允许 ATools。\n\nATools 仅感知窗口数量变化，绝不读取任何窗口内容或键入信息。是否前往授权？"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "前往系统设置")
+        alert.addButton(withTitle: "暂不开启")
+        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+            HotkeyManager.openAccessibilitySettings()
+            // 保存开关；在授权完成前 AutoQuitManager 保持空闲，授权后切回应用即热启动
+            ConfigManager.shared.updateEnableAutoQuit(true)
+        } else {
+            sender.state = .off
+        }
+    }
+
+    @objc private func autoQuitModeChanged(_ sender: NSPopUpButton) {
+        let modes = AutoQuitMode.allCases
+        guard modes.indices.contains(sender.indexOfSelectedItem) else { return }
+        ConfigManager.shared.updateAutoQuitMode(modes[sender.indexOfSelectedItem])
+    }
+
+    @objc private func autoQuitDelayChanged(_ sender: NSPopUpButton) {
+        guard autoQuitDelayOptions.indices.contains(sender.indexOfSelectedItem) else { return }
+        ConfigManager.shared.updateAutoQuitDelaySeconds(autoQuitDelayOptions[sender.indexOfSelectedItem].seconds)
+    }
+
+    @objc private func openAutoQuitAccessibility() {
+        HotkeyManager.openAccessibilitySettings()
+    }
+
+    @objc private func openAutoQuitRulesEditor() {
+        guard let hostWindow = window else { return }
+        // 防重入：连点两次会让第二个 beginSheet 排队，叠加上一次的呈现耗时
+        // 造成可感知的卡顿（见 CHANGELOG 十-修复记录）。
+        guard hostWindow.attachedSheet == nil else {
+            runtimeLog("[AutoQuit] rules sheet already attached; ignoring re-entrant open")
+            return
+        }
+        let t0 = Date()
+        let sheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 470, height: 430),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        sheet.title = "AutoQuit 应用名单"
+        sheet.isReleasedWhenClosed = false
+        sheet.contentMinSize = NSSize(width: 470, height: 430)
+        sheet.contentMaxSize = NSSize(width: 470, height: 430)
+        sheet.setContentSize(NSSize(width: 470, height: 430))
+        sheet.contentView = AutoQuitRulesEditorView(frame: NSRect(x: 0, y: 0, width: 470, height: 430))
+        let constructDone = Date()
+        // 在 completion 闭包里强持有 sheet，endSheet 关闭后由 ARC 安全释放（不泄漏不悬垂）
+        hostWindow.beginSheet(sheet) { _ in
+            _ = sheet
+        }
+        runtimeLog("[AutoQuit] rules sheet: construct=\(String(format: "%.0f", constructDone.timeIntervalSince(t0) * 1000))ms present=\(String(format: "%.0f", Date().timeIntervalSince(constructDone) * 1000))ms")
     }
 
     @objc private func toggleLaunchOnLogin(_ sender: NSSwitch) {

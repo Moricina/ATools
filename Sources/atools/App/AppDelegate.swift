@@ -11,6 +11,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         setupHotkeys()
         TrackpadGestureManager.shared.startListeningIfEnabled()
+        AutoQuitManager.shared.startIfEnabled()
 
         // Warm up in-memory app index (its initializer performs the first scan)
         _ = AppHotspotIndex.shared
@@ -33,6 +34,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             queue: .main
         ) { _ in
             HotkeyManager.shared.reloadFlagsMonitorsIfTrusted()
+            AutoQuitManager.shared.reloadIfTrusted()
         }
 
         let config = ConfigManager.shared.config
@@ -98,6 +100,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var shelfMenuItem: NSMenuItem?
     private var searchMenuItem: NSMenuItem?
+    private var autoQuitMenuItem: NSMenuItem?
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -120,6 +123,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         searchItem.target = self
         menu.addItem(searchItem)
         self.searchMenuItem = searchItem
+
+        let autoQuitItem = NSMenuItem(title: "关闭窗口即退出", action: #selector(toggleAutoQuitFromMenu), keyEquivalent: "")
+        autoQuitItem.target = self
+        menu.addItem(autoQuitItem)
+        self.autoQuitMenuItem = autoQuitItem
 
         menu.addItem(NSMenuItem.separator())
 
@@ -146,11 +154,45 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleAutoQuitConfigChanged),
+            name: .atoolsAutoQuitDidChange,
+            object: nil
+        )
+
         updateMenuPanelStates()
+        updateAutoQuitMenuItem()
     }
 
     @objc private func handlePanelTogglesChanged() {
         updateMenuPanelStates()
+    }
+
+    @objc private func handleAutoQuitConfigChanged() {
+        updateAutoQuitMenuItem()
+    }
+
+    private func updateAutoQuitMenuItem() {
+        autoQuitMenuItem?.state = ConfigManager.shared.config.enableAutoQuit ? .on : .off
+    }
+
+    /// 状态栏快捷开关。开启但未授权时同样走授权引导（与设置页一致）；
+    /// AutoQuitManager 在授权前保持空闲，授权后应用被激活即热启动。
+    @objc private func toggleAutoQuitFromMenu() {
+        let enabling = !ConfigManager.shared.config.enableAutoQuit
+        ConfigManager.shared.updateEnableAutoQuit(enabling)
+        if enabling && !HotkeyManager.isAccessibilityTrusted() {
+            let alert = NSAlert()
+            alert.messageText = "「关闭窗口即退出」需要辅助功能授权"
+            alert.informativeText = "监听其他应用窗口的关闭事件，需要 macOS「系统设置」->「隐私与安全性」->「辅助功能」中允许 ATools。\n\nATools 仅感知窗口数量变化，绝不读取任何窗口内容或键入信息。是否前往授权？"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "前往系统设置")
+            alert.addButton(withTitle: "稍后开启")
+            if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+                HotkeyManager.openAccessibilitySettings()
+            }
+        }
     }
 
     private func updateMenuPanelStates() {
@@ -232,6 +274,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        AutoQuitManager.shared.stop()
         ConfigManager.shared.flushPendingSave()
         HotkeyManager.shared.unregisterAll()
     }
