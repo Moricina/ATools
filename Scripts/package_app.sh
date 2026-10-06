@@ -4,6 +4,13 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
+# 颜色输出
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
+error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
 VERSION="${ATOOLS_VERSION:-1.2.9}"
 BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-16}"
 SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
@@ -26,8 +33,25 @@ UPDATE_SIGNATURE_TOOL="$DIR/Scripts/update_signature.swift"
 if [ ! -f "$UPDATE_SIGNING_KEY" ]; then
     echo "错误: 未找到更新签名私钥: $UPDATE_SIGNING_KEY" >&2
     echo "请先备份现有私钥，或使用 update_signature.swift keygen 生成新的密钥对。" >&2
+    echo "提示: 运行 ./Scripts/key_manager.sh status 查看密钥状态" >&2
     exit 1
 fi
+
+# 预检：验证签名密钥是否在 UpdateManager.swift 中注册
+CURRENT_PUBKEY=$(swift "$UPDATE_SIGNATURE_TOOL" public-key "$UPDATE_SIGNING_KEY" 2>/dev/null)
+REGISTERED_KEYS=$(grep -oE '"[A-Za-z0-9+/]{43}="' "$DIR/Sources/atools/System/UpdateManager.swift" | tr -d '"')
+if ! echo "$REGISTERED_KEYS" | grep -qF "$CURRENT_PUBKEY"; then
+    echo "错误: 签名密钥公钥未在 UpdateManager.swift 中注册" >&2
+    echo "  当前密钥公钥: $CURRENT_PUBKEY" >&2
+    echo "  已注册公钥:" >&2
+    echo "$REGISTERED_KEYS" | sed 's/^/    /' >&2
+    echo "" >&2
+    echo "请执行以下操作之一:" >&2
+    echo "  1. 恢复已注册的密钥: ./Scripts/key_manager.sh restore" >&2
+    echo "  2. 将当前公钥添加到 UpdateManager.swift 的 updateSigningPublicKeys 数组" >&2
+    exit 1
+fi
+info "签名密钥验证通过 ✓ (公钥: ${CURRENT_PUBKEY:0:12}...)"
 
 echo "==> Building ATools $VERSION ($BUILD_NUMBER) in Release mode..."
 swift build -c release --disable-sandbox --scratch-path "$SCRATCH_PATH" -debug-info-format none

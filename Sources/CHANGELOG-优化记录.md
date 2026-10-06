@@ -305,3 +305,40 @@
   - 现有全套 11 组诊断测试（含 5 夹具归并排序链、单字符限定作用域等）100% 保持零破坏全部通过；
   - `[6.1](d)` 本地化目录端到端命中与档位回归测试通过，确认 `~/Virtual Machines.localized` 搜“虚拟机”端到端命中且评分为 `tierExact (1600)`。
   - 编译零警告零错误。
+
+---
+
+## 九、v1.2.9 密钥管理防护体系（2026-10-06）
+
+### 1. 背景
+- v1.2.8 发布时 Ed25519 签名密钥意外丢失，导致无法为 v1.2.8 用户提供无缝自动更新。
+- 为防止类似问题再次发生，建立了完整的密钥管理防护体系。
+
+### 2. 新增工具与流程
+- **密钥管理脚本**（`Scripts/key_manager.sh`）：
+  - `status`：显示当前密钥状态、公钥、备份情况
+  - `backup`：自动备份密钥到 `~/.config/atools/key-backups/`（保留最近 10 个）
+  - `verify`：验证当前密钥是否在 `UpdateManager.swift` 中注册
+  - `restore`：从备份恢复密钥（交互式选择）
+  - `rotate`：轮换密钥（生成新密钥 + 引导更新代码）
+
+- **发布脚本预检**（`Scripts/package_app.sh`）：
+  - 签名前自动验证密钥公钥是否在 `UpdateManager.swift` 的 `updateSigningPublicKeys` 数组中注册
+  - 验证失败时阻止打包并输出详细修复指引
+
+- **双公钥迁移机制**（`UpdateManager.swift`）：
+  - `updateSigningPublicKeys` 数组支持多密钥并存
+  - 验证时遍历所有公钥，任一通过即为合法
+  - 支持平滑密钥轮换，无需用户手动干预
+
+### 3. 文档完善
+- `RELEASING.md` 新增「Ed25519 更新签名密钥管理」专章
+- 详细的密钥丢失预防措施、备份策略、轮换流程
+- 发布前核对清单增加密钥验证和备份步骤
+- 常见问题解答（FAQ）
+
+### 4. 验证
+- 运行 `./Scripts/key_manager.sh status` 确认密钥状态正常
+- 运行 `./Scripts/key_manager.sh verify` 确认密钥与代码一致
+- 运行 `./Scripts/key_manager.sh backup` 创建初始备份
+- 编译零错误零警告。
