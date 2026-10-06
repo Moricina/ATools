@@ -423,6 +423,20 @@ if CommandLine.arguments.contains("--test") {
             }
         }
         try? FileManager.default.removeItem(at: homeFixture)
+
+        // (d) 本地化目录（.localized）全盘检索与显示名回归
+        let vmPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Virtual Machines.localized").path
+        if FileManager.default.fileExists(atPath: vmPath) {
+            let vmResults = fullDiskSearch("虚拟机")
+            let hit = vmResults.first { $0.path == vmPath }
+            TestAssertions.expect(hit != nil, "全盘检索'虚拟机'必须能命中本地化目录 '~/Virtual Machines.localized'")
+            if let hit = hit {
+                TestAssertions.expect(hit.title == "虚拟机", "检索结果 Title 必须为本地化名称'虚拟机'而非'Virtual Machines.localized'")
+                TestAssertions.expect(hit.score >= SearchRanking.tierExact - 100, "精确匹配的本地化目录必须处于 tierExact (1600) 档位梯队")
+            }
+            print("      ✓ 本地化目录（Virtual Machines.localized -> 虚拟机）端到端命中与档位回归通过.")
+        }
     }
 
     // 6.2 热目录拼音匹配 + 单 ASCII 字符限定作用域（快照覆盖不到的深层文件）

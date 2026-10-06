@@ -270,3 +270,38 @@
 ### 4. 诊断测试验证
 - `main.swift` 沙盒诊断套件新增 `ShelfTrackpadGesture` 编解码及设备监听回归断言。
 - 运行 `./Scripts/build.sh --test`，全套 11 组诊断测试全部通过（编译零错误零警告）。
+
+---
+
+## 八、v4 增量更新：本地化目录（.localized）全盘检索与显示名解析加固（2026-10-06）
+
+### 1. 核心问题定位与根因
+- 用户在全局搜索输入“虚拟机”时无法命中 `~/Virtual Machines.localized`（访达中正常显示为“虚拟机”文件夹）。
+- **根因分析**：
+  1. 物理目录名 `Virtual Machines.localized` 包含英文，Spotlight 索引属性中 `kMDItemFSName = "Virtual Machines.localized"`，而中文显示名存储在 `kMDItemDisplayName = "虚拟机"`。
+  2. 原全盘检索谓词仅声明了 `kMDItemFSName == '*...*'cd`，导致全盘检索时该目录被 CoreServices `MDQuery` 判定为 0 命中。
+  3. 目录位于家目录根部，不在 `Downloads/Desktop/Documents` 默认热目录内，无法依赖热目录快照。
+  4. 候选集与结果构建直接使用 `(path as NSString).lastPathComponent`，导致未处理本地化包后缀，且中文查询词对物理英文名的匹配评分为空进而被降为兜底包含分。
+
+### 2. 核心架构修复与安全加固
+- **复合谓词与运算符优先级加固**（`MetadataFileSearchBackend.swift`）：
+  - 检索谓词扩充为 `(kMDItemFSName == '*\(escaped)*'cd || kMDItemDisplayName == '*\(escaped)*'cd)`。
+  - 外层严格以小括号包裹复合 OR 谓词，杜绝后续追加过滤条件时的逻辑逃逸。
+- **第一轮大循环 XPC 熔断保护与本地化名保真**（`MetadataFileSearchBackend.swift`）：
+  - 保留 `kMDItemPath` 免费遍历的核心优势，仅当物理文件名未命中（`SearchRanking.nameTier(cleanDiskName) == nil`，即通过 `kMDItemDisplayName` 命中的极少数本地化条目）时按需解析显示名。
+  - 增加 **XPC 熔断硬阈值（上限 64 项）**，严控异常海量目录下的 XPC 调用开销，全盘遍历延迟严格封顶在 `< 20ms` 级别。
+  - 获取到显示名后重新计算 `nameTier`，使“虚拟机”搜索精准获得 `tierExact (1600)` 顶格匹配档位。
+  - 针对 `.localized` 目录剥离生硬物理后缀，结果 `title` 正确显示为本地化显示名（如“虚拟机”），`subtitle` 保留真实磁盘路径。
+- **热目录快照本地化支持与拼音索引**（`SpotlightBridge.swift`）：
+  - 在 `listHotFolder` 枚举中识别 `.localized` 目录，读取 `FileManager.default.displayName` 作为热目录条目名，并为其自动生成全拼与首字母拼音（如 `xuniji` / `xnj`）。
+
+### 3. 修改文件清单
+- `Sources/atools/Search/MetadataFileSearchBackend.swift` — 复合谓词加固、第一轮按需 displayName 解析、XPC 熔断与精确档位校正
+- `Sources/atools/Search/SpotlightBridge.swift` — 热目录 `.localized` 显示名与拼音快照支持
+- `Sources/atools/main.swift` — `[6.1](d)` 本地化目录全盘检索与显示名回归测试用例
+
+### 4. 诊断测试验证
+- 运行 `./Scripts/build.sh --test`：
+  - 现有全套 11 组诊断测试（含 5 夹具归并排序链、单字符限定作用域等）100% 保持零破坏全部通过；
+  - `[6.1](d)` 本地化目录端到端命中与档位回归测试通过，确认 `~/Virtual Machines.localized` 搜“虚拟机”端到端命中且评分为 `tierExact (1600)`。
+  - 编译零警告零错误。

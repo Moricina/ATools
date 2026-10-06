@@ -58,7 +58,7 @@ public final class MetadataFileSearchBackend: NSObject {
             default:   escaped.append(ch)
             }
         }
-        return "kMDItemFSName == '*\(escaped)*'cd"
+        return "(kMDItemFSName == '*\(escaped)*'cd || kMDItemDisplayName == '*\(escaped)*'cd)"
     }
 
     public func search(matching text: String, limit: Int,
@@ -121,6 +121,9 @@ public final class MetadataFileSearchBackend: NSObject {
         var candidates: [Candidate] = []
         candidates.reserveCapacity(min(Int(count), limit * 8))
 
+        var localizedResolutionsCount = 0
+        let maxLocalizedResolutions = 64 // XPC 熔断上限
+
         for index in 0..<count {
             guard let raw = MDQueryGetResultAtIndex(query, index) else { continue }
             let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
@@ -130,10 +133,41 @@ public final class MetadataFileSearchBackend: NSObject {
                   !path.hasSuffix(".app"),
                   !Self.isExcluded(path) else { continue }
 
-            let name = (path as NSString).lastPathComponent
+            let rawName = (path as NSString).lastPathComponent
+            var resolvedName = rawName
+
+            // 针对 .localized 目录，去除末尾生硬物理后缀参与比对
+            let cleanDiskName = rawName.hasSuffix(".localized")
+                ? String(rawName.dropLast(".localized".count))
+                : rawName
+
+            var tier = SearchRanking.nameTier(name: cleanDiskName, query: text)
+
+            // 物理文件名未命中，说明是由 kMDItemDisplayName 命中的本地化条目
+            if tier == nil && localizedResolutionsCount < maxLocalizedResolutions {
+                localizedResolutionsCount += 1
+                let dn = (MDItemCopyAttribute(item, kMDItemDisplayName) as? String)
+                    ?? FileManager.default.displayName(atPath: path)
+                if !dn.isEmpty {
+                    resolvedName = dn
+                    tier = SearchRanking.nameTier(name: dn, query: text)
+                }
+            } else if rawName.hasSuffix(".localized") {
+                // 物理文件名命中，但为了界面美观，尝试获取 display name
+                let dn = FileManager.default.displayName(atPath: path)
+                if !dn.isEmpty && !dn.hasSuffix(".localized") {
+                    resolvedName = dn
+                } else {
+                    resolvedName = cleanDiskName
+                }
+            }
+
+            let baseTier = tier ?? SearchRanking.tierContains
+            let baseScore = baseTier - SearchRanking.depthPenalty(path: path)
+
             candidates.append(Candidate(
-                baseScore: Self.baseScore(name: name, path: path, query: text),
-                name: name, path: path, item: item))
+                baseScore: baseScore,
+                name: resolvedName, path: path, item: item))
         }
 
         // 第二轮：只为 Top-N 补读 ContentType/日期（N×0.28ms ≈ 17ms），细化打分。

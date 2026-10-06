@@ -290,9 +290,18 @@ public final class SpotlightBridge {
             let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
             let isDir = values?.isDirectory ?? false
             let modified = values?.contentModificationDate
+
+            var displayOrCleanName = filename
+            if filename.hasSuffix(".localized") {
+                let dn = FileManager.default.displayName(atPath: fileURL.path)
+                displayOrCleanName = (!dn.isEmpty && !dn.hasSuffix(".localized"))
+                    ? dn
+                    : String(filename.dropLast(".localized".count))
+            }
+
             // 拼音形态按文件名缓存，重建快照时只有新文件名会真正转换。
-            let pinyin = Self.pinyinForms(for: filename)
-            files.append(HotFile(name: filename, path: fileURL.path, isDirectory: isDir,
+            let pinyin = Self.pinyinForms(for: displayOrCleanName)
+            files.append(HotFile(name: displayOrCleanName, path: fileURL.path, isDirectory: isDir,
                                  modified: modified,
                                  pinyinFull: pinyin.full, pinyinAbbr: pinyin.abbr))
         }
