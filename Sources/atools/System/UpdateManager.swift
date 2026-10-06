@@ -322,7 +322,13 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return nil
     }
 
-    static let updateSigningPublicKeyBase64 = "HbGQoLgpZ8MVghAQOJIR79JC7YvkRQmzimfO2OuFE34="
+    /// Ed25519 更新签名公钥列表（支持多密钥过渡迁移）
+    /// - 第一个为主密钥（当前活跃），后续为历史密钥（兼容旧版签名）
+    /// - 迁移完成后可移除旧密钥
+    static let updateSigningPublicKeys: [String] = [
+        "V+7AgVQr03TBI8wWe9OUB0wrypIj6CrsfLK8xPuNUxU=",  // 2026-10-06 新密钥
+        "HbGQoLgpZ8MVghAQOJIR79JC7YvkRQmzimfO2OuFE34=",  // 旧密钥（v1.2.8 及之前）
+    ]
 
     static func verifyUpdateSignature(assetURL: URL, signatureURL: URL) throws {
         let signatureData = try Data(contentsOf: signatureURL)
@@ -334,9 +340,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             )
         }
 
-        guard let rawPublicKey = Data(base64Encoded: updateSigningPublicKeyBase64),
-              let signature = Data(base64Encoded: signatureText.trimmingCharacters(in: .whitespacesAndNewlines)),
-              let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: rawPublicKey) else {
+        guard let signature = Data(base64Encoded: signatureText.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             throw NSError(
                 domain: "UpdateManager",
                 code: 8,
@@ -345,13 +349,23 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         let digest = try UpdateManager.sha256(ofFileAt: assetURL)
-        guard publicKey.isValidSignature(signature, for: digest) else {
-            throw NSError(
-                domain: "UpdateManager",
-                code: 8,
-                userInfo: [NSLocalizedDescriptionKey: "Ed25519 更新签名校验失败，安装包可能已被篡改"]
-            )
+
+        // 遍历所有公钥，任一通过即为合法
+        for publicKeyBase64 in updateSigningPublicKeys {
+            guard let rawPublicKey = Data(base64Encoded: publicKeyBase64),
+                  let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: rawPublicKey) else {
+                continue
+            }
+            if publicKey.isValidSignature(signature, for: digest) {
+                return  // 签名校验通过
+            }
         }
+
+        throw NSError(
+            domain: "UpdateManager",
+            code: 8,
+            userInfo: [NSLocalizedDescriptionKey: "Ed25519 更新签名校验失败，安装包可能已被篡改"]
+        )
     }
 
     private static func sha256(ofFileAt url: URL) throws -> Data {
