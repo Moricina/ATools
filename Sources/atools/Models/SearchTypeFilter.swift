@@ -156,14 +156,14 @@ public enum SearchTypeFilter: String, CaseIterable, Identifiable, Codable {
         guard !trimmed.isEmpty else { return nil }
 
         let prefixes: [(prefix: String, filter: SearchTypeFilter)] = [
-            ("all:", .all), ("全部:", .all), ("#all", .all),
-            ("app:", .application), ("应用:", .application), ("#app", .application),
-            ("doc:", .document), ("文档:", .document), ("#doc", .document),
-            ("img:", .image), ("pic:", .image), ("图片:", .image), ("#img", .image), ("#pic", .image),
-            ("media:", .media), ("video:", .media), ("audio:", .media), ("媒体:", .media), ("#media", .media),
-            ("code:", .code), ("代码:", .code), ("#code", .code),
-            ("archive:", .archive), ("zip:", .archive), ("压缩包:", .archive), ("#zip", .archive),
-            ("folder:", .folder), ("dir:", .folder), ("文件夹:", .folder), ("#folder", .folder), ("#dir", .folder)
+            ("all:", .all), ("全部:", .all), ("#all", .all), ("/all ", .all), ("/all:", .all),
+            ("app:", .application), ("应用:", .application), ("#app", .application), ("/app ", .application), ("/app:", .application),
+            ("doc:", .document), ("文档:", .document), ("#doc", .document), ("/doc ", .document), ("/doc:", .document),
+            ("img:", .image), ("pic:", .image), ("图片:", .image), ("#img", .image), ("#pic", .image), ("/img ", .image), ("/img:", .image), ("/pic ", .image), ("/pic:", .image),
+            ("media:", .media), ("video:", .media), ("audio:", .media), ("媒体:", .media), ("#media", .media), ("/media ", .media), ("/media:", .media), ("/video ", .media), ("/video:", .media),
+            ("code:", .code), ("代码:", .code), ("#code", .code), ("/code ", .code), ("/code:", .code),
+            ("archive:", .archive), ("zip:", .archive), ("压缩包:", .archive), ("#zip", .archive), ("/zip ", .archive), ("/zip:", .archive), ("/archive ", .archive), ("/archive:", .archive),
+            ("folder:", .folder), ("dir:", .folder), ("文件夹:", .folder), ("#folder", .folder), ("#dir", .folder), ("/folder ", .folder), ("/folder:", .folder), ("/dir ", .folder), ("/dir:", .folder)
         ]
 
         let lower = trimmed.lowercased()

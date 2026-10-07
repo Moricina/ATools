@@ -119,6 +119,8 @@ public final class SearchResultCellView: NSTableCellView {
             badgeLabel.stringValue = "系统"
         case .webSearch:
             badgeLabel.stringValue = "网络"
+        case .syntaxCommand:
+            badgeLabel.stringValue = "指令"
         }
 
         representedIconPath = result.path

@@ -3,6 +3,118 @@ import AppKit
 
 public protocol SearchFilterBarDelegate: AnyObject {
     func searchFilterBar(_ bar: SearchFilterBarView, didSelectFilter filter: SearchTypeFilter)
+    func searchFilterBar(_ bar: SearchFilterBarView, didSelectSyntaxCommand command: SearchSyntaxCommand)
+}
+
+public final class SearchSyntaxPillButton: NSButton {
+    public weak var barView: SearchFilterBarView?
+    public let command: SearchSyntaxCommand
+    public var isHighlightedPill: Bool = false {
+        didSet {
+            updateAppearance()
+        }
+    }
+    private var isHovered: Bool = false {
+        didSet {
+            updateAppearance()
+        }
+    }
+    private var trackingArea: NSTrackingArea?
+
+    public init(command: SearchSyntaxCommand) {
+        self.command = command
+        super.init(frame: .zero)
+        setupViews()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupViews() {
+        refusesFirstResponder = true
+        isBordered = false
+        bezelStyle = .inline
+        wantsLayer = true
+        layer?.cornerRadius = 13
+        layer?.masksToBounds = true
+        title = ""
+        toolTip = "\(command.trigger) \(command.name) - \(command.description) (按 Tab 补全)"
+
+        let icon = ThumbnailPipeline.shared.symbolIcon(name: command.iconSymbolName, pointSize: 11, weight: .medium)
+        image = icon
+        imagePosition = .imageLeading
+        imageHugsTitle = true
+
+        updateAppearance()
+    }
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea { removeTrackingArea(existing) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override public func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovered = true
+    }
+
+    override public func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovered = false
+    }
+
+    public func updateAppearance() {
+        let isDark = glassIsDark
+        let font = NSFont.systemFont(ofSize: 11.5, weight: isHighlightedPill ? .semibold : .medium)
+        let textColor: NSColor
+
+        if isHighlightedPill {
+            textColor = isDark ? NSColor(red: 0.45, green: 0.75, blue: 1.0, alpha: 1.0) : NSColor(red: 0.05, green: 0.4, blue: 0.9, alpha: 1.0)
+            layer?.backgroundColor = isDark
+                ? NSColor(red: 0.15, green: 0.45, blue: 0.95, alpha: 0.28).cgColor
+                : NSColor(red: 0.05, green: 0.35, blue: 0.85, alpha: 0.12).cgColor
+            layer?.borderWidth = 0.85
+            layer?.borderColor = isDark
+                ? NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.45).cgColor
+                : NSColor(red: 0.1, green: 0.45, blue: 0.95, alpha: 0.30).cgColor
+        } else if isHovered {
+            textColor = GlassPalette.textPrimary(isDark: isDark)
+            layer?.backgroundColor = isDark
+                ? NSColor(white: 1.0, alpha: 0.08).cgColor
+                : NSColor(white: 0.0, alpha: 0.04).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = isDark
+                ? NSColor(white: 1.0, alpha: 0.12).cgColor
+                : NSColor(white: 0.0, alpha: 0.06).cgColor
+        } else {
+            textColor = GlassPalette.textSecondary(isDark: isDark)
+            layer?.backgroundColor = isDark
+                ? NSColor(white: 1.0, alpha: 0.05).cgColor
+                : NSColor(white: 0.0, alpha: 0.03).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = isDark
+                ? NSColor(white: 1.0, alpha: 0.08).cgColor
+                : NSColor(white: 0.0, alpha: 0.04).cgColor
+        }
+
+        contentTintColor = textColor
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        attributedTitle = NSAttributedString(string: " \(command.trigger) \(command.name)", attributes: [
+            .font: font,
+            .foregroundColor: textColor,
+            .paragraphStyle: style
+        ])
+    }
 }
 
 public final class SearchFilterPillButton: NSButton, NSDraggingSource {
@@ -196,6 +308,11 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
     }
 }
 
+public enum SearchFilterBarMode: Equatable {
+    case typeFilters
+    case syntaxCommands
+}
+
 public final class SearchFilterBarView: NSView {
     public static let pillDragType = NSPasteboard.PasteboardType("cc.atools.filterPillReorder")
 
@@ -205,8 +322,19 @@ public final class SearchFilterBarView: NSView {
     private var initialFiltersBeforeDrag: [SearchTypeFilter] = []
     private weak var currentDraggedPill: SearchFilterPillButton?
 
+    public private(set) var currentMode: SearchFilterBarMode = .typeFilters
+    private var currentSyntaxCommands: [SearchSyntaxCommand] = []
+
     public var pillButtons: [SearchFilterPillButton] {
         return stackView.arrangedSubviews.compactMap { $0 as? SearchFilterPillButton }
+    }
+
+    public var syntaxButtons: [SearchSyntaxPillButton] {
+        return stackView.arrangedSubviews.compactMap { $0 as? SearchSyntaxPillButton }
+    }
+
+    public var activeSyntaxCommandForAutocomplete: SearchSyntaxCommand? {
+        return currentSyntaxCommands.first
     }
 
     public var orderedFilters: [SearchTypeFilter] {
@@ -243,6 +371,9 @@ public final class SearchFilterBarView: NSView {
         for btn in pillButtons {
             btn.updateAppearance()
         }
+        for btn in syntaxButtons {
+            btn.updateAppearance()
+        }
     }
 
     private func setupViews() {
@@ -268,6 +399,9 @@ public final class SearchFilterBarView: NSView {
     }
 
     public func loadPills(from orderStrings: [String]) {
+        currentMode = .typeFilters
+        currentSyntaxCommands = []
+
         for subview in stackView.arrangedSubviews {
             stackView.removeArrangedSubview(subview)
             subview.removeFromSuperview()
@@ -288,6 +422,47 @@ public final class SearchFilterBarView: NSView {
         }
     }
 
+    // MARK: - Syntax Commands Mode
+    public func showSyntaxCommands(_ commands: [SearchSyntaxCommand]) {
+        currentMode = .syntaxCommands
+        currentSyntaxCommands = commands
+
+        for subview in stackView.arrangedSubviews {
+            stackView.removeArrangedSubview(subview)
+            subview.removeFromSuperview()
+        }
+
+        guard !commands.isEmpty else {
+            let label = NSTextField(labelWithString: "无匹配的语法指令")
+            label.font = NSFont.systemFont(ofSize: 11.5, weight: .regular)
+            label.textColor = GlassPalette.textTertiary(isDark: glassIsDark)
+            stackView.addArrangedSubview(label)
+            return
+        }
+
+        // Display up to 7 commands that fit comfortably in the capsule bar
+        for (index, cmd) in commands.prefix(7).enumerated() {
+            let btn = SearchSyntaxPillButton(command: cmd)
+            btn.barView = self
+            btn.isHighlightedPill = (index == 0) // First is primed for Tab
+            btn.target = self
+            btn.action = #selector(syntaxPillClicked(_:))
+            btn.setContentHuggingPriority(.required, for: .horizontal)
+            btn.setContentCompressionResistancePriority(.required, for: .horizontal)
+            stackView.addArrangedSubview(btn)
+            btn.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        }
+    }
+
+    public func showTypeFilters() {
+        guard currentMode != .typeFilters else { return }
+        loadPills(from: ConfigManager.shared.config.searchFilterOrder)
+    }
+
+    @objc private func syntaxPillClicked(_ sender: SearchSyntaxPillButton) {
+        delegate?.searchFilterBar(self, didSelectSyntaxCommand: sender.command)
+    }
+
     @objc private func pillClicked(_ sender: SearchFilterPillButton) {
         let newFilter = sender.filter
         guard selectedFilter != newFilter else { return }
@@ -301,14 +476,16 @@ public final class SearchFilterBarView: NSView {
         }
     }
 
-    // MARK: - Drag and Drop Handling
+    // MARK: - Drag and Drop Handling (Active only in typeFilters mode)
     internal func pillDidBeginDragging(_ pill: SearchFilterPillButton) {
+        guard currentMode == .typeFilters else { return }
         initialFiltersBeforeDrag = orderedFilters
         currentDraggedPill = pill
         pill.alphaValue = 0.35
     }
 
     internal func pillDidEndDragging(_ pill: SearchFilterPillButton, operation: NSDragOperation) {
+        guard currentMode == .typeFilters else { return }
         pill.alphaValue = 1.0
         currentDraggedPill = nil
         if operation == [] {
@@ -341,11 +518,13 @@ public final class SearchFilterBarView: NSView {
     }
 
     override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard currentMode == .typeFilters else { return [] }
         guard sender.draggingPasteboard.types?.contains(Self.pillDragType) == true else { return [] }
         return .move
     }
 
     override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard currentMode == .typeFilters else { return [] }
         guard sender.draggingPasteboard.types?.contains(Self.pillDragType) == true else { return [] }
         guard let dragged = currentDraggedPill else { return [] }
 
@@ -377,6 +556,7 @@ public final class SearchFilterBarView: NSView {
     }
 
     override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard currentMode == .typeFilters else { return false }
         guard let dragged = currentDraggedPill else { return false }
         dragged.alphaValue = 1.0
         currentDraggedPill = nil
@@ -387,6 +567,7 @@ public final class SearchFilterBarView: NSView {
     // MARK: - Shortcut & Navigation Support
     /// 顺时针或逆时针循环切换分类（按当前视觉胶囊顺序支持 Tab / Shift+Tab）
     public func cycleFilter(forward: Bool = true) {
+        guard currentMode == .typeFilters else { return }
         let currentOrder = orderedFilters
         guard !currentOrder.isEmpty else { return }
         guard let idx = currentOrder.firstIndex(of: selectedFilter) else {
@@ -405,6 +586,7 @@ public final class SearchFilterBarView: NSView {
 
     /// 通过 ⌘1~8 快捷跳转（按照当前视觉呈现的前后顺序）
     public func selectFilter(number: Int) {
+        guard currentMode == .typeFilters else { return }
         let currentOrder = orderedFilters
         let index = number - 1
         guard index >= 0 && index < currentOrder.count else { return }

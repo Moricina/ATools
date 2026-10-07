@@ -68,6 +68,13 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         ) { [weak self] _ in
             self?.updateHintsColor()
         }
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleSyntaxCommandNotification(_:)),
+            name: .atoolsDidSelectSyntaxCommand,
+            object: nil
+        )
     }
 
     private func updateHintsColor() {
@@ -151,6 +158,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         SearchCoordinator.shared.cancelPendingSearches()
         SpotlightBridge.shared.warmHotFolderCache(maxAge: 5)
         searchBar.text = ""
+        filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
@@ -407,13 +415,22 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         runtimeLog("[SearchVC] didChangeQuery: '\(query)'")
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
+            filterBar.showTypeFilters()
             // 文字删空立即执行主线程平滑折叠，无需等待后台异步队列回传
             SearchCoordinator.shared.search(query: "", filter: filterBar.selectedFilter) { _ in }
             setPanelExpanded(false, animated: true)
             return
         }
 
-        // 若输入了前缀语法（如 "doc: report"），自动高亮并切换到对应分类
+        // 侦测斜杠语法（如 "/" 或 "/d" 等未敲空格的指令阶段）
+        if trimmed.hasPrefix("/") && !trimmed.contains(" ") {
+            let matched = SearchSyntaxCommand.matching(prefix: trimmed)
+            filterBar.showSyntaxCommands(matched)
+        } else {
+            filterBar.showTypeFilters()
+        }
+
+        // 若输入了前缀语法（如 "doc: report" 或 "/doc report"），自动高亮并切换到对应分类
         var effectiveFilter = filterBar.selectedFilter
         var effectiveQuery = query
         if let extracted = SearchTypeFilter.extractPrefix(from: trimmed) {
@@ -435,6 +452,12 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         }
     }
 
+    public func searchBarDidRequestAutocompleteSyntax(_ searchBar: SearchBarView) {
+        if let cmd = filterBar.activeSyntaxCommandForAutocomplete {
+            applySyntaxCommand(cmd)
+        }
+    }
+
     public func searchBarDidRequestCycleFilter(_ searchBar: SearchBarView, forward: Bool) {
         filterBar.cycleFilter(forward: forward)
     }
@@ -449,6 +472,46 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         // 维持输入框第一响应者
         view.window?.makeFirstResponder(searchBar.textField)
         performCurrentSearch()
+    }
+
+    public func searchFilterBar(_ bar: SearchFilterBarView, didSelectSyntaxCommand command: SearchSyntaxCommand) {
+        applySyntaxCommand(command)
+    }
+
+    private func applySyntaxCommand(_ command: SearchSyntaxCommand) {
+        if let filter = command.filter {
+            searchBar.text = "\(command.trigger) "
+            filterBar.selectedFilter = filter
+            filterBar.showTypeFilters()
+            view.window?.makeFirstResponder(searchBar.textField)
+            if let editor = searchBar.textField.currentEditor() {
+                editor.selectedRange = NSRange(location: searchBar.text.count, length: 0)
+            }
+            performCurrentSearch()
+        } else {
+            switch command.actionType {
+            case .webSearch, .calculator:
+                searchBar.text = "\(command.trigger) "
+                filterBar.showTypeFilters()
+                view.window?.makeFirstResponder(searchBar.textField)
+                if let editor = searchBar.textField.currentEditor() {
+                    editor.selectedRange = NSRange(location: searchBar.text.count, length: 0)
+                }
+                performCurrentSearch()
+            case .systemAction(let id):
+                if let act = SystemActions.shared.actions.first(where: { $0.id == id }) {
+                    dismissSearchPanel()
+                    act.execute()
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    @objc private func handleSyntaxCommandNotification(_ notif: Notification) {
+        guard let cmd = notif.object as? SearchSyntaxCommand else { return }
+        applySyntaxCommand(cmd)
     }
 
     private func performCurrentSearch() {
@@ -510,6 +573,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     private func dismissSearchPanel() {
         PanelCoordinator.shared.hideSearchPanel()
         searchBar.text = ""
+        filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
@@ -517,6 +581,11 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
 
     // MARK: - SearchResultsTableDelegate
     public func searchResultsTable(_ table: SearchResultsTableView, didSelectResult result: SearchResult, isCommandPressed: Bool) {
+        if result.type == .syntaxCommand {
+            result.action?()
+            return
+        }
+
         dismissSearchPanel()
 
         if isCommandPressed, let path = result.path {

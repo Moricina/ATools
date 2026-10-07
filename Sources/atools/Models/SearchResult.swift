@@ -9,6 +9,7 @@ public enum SearchResultType: String, Codable {
     case dictionary
     case systemAction
     case webSearch
+    case syntaxCommand
 }
 
 public struct SearchResult: Identifiable {
@@ -61,7 +62,7 @@ extension SearchResult {
             let query = String(id.dropFirst(4))
             let config = ConfigManager.shared.config
             return config.webSearchEngine.searchURL(for: query, customTemplate: config.customWebSearchURL) as NSURL?
-        case .systemAction:
+        case .systemAction, .syntaxCommand:
             return nil
         }
     }

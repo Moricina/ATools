@@ -11,6 +11,7 @@ public protocol SearchBarDelegate: AnyObject {
     func searchBarDidPressRevealInFinder(_ searchBar: SearchBarView)
     func searchBarDidRequestCycleFilter(_ searchBar: SearchBarView, forward: Bool)
     func searchBar(_ searchBar: SearchBarView, didRequestSelectFilterNumber number: Int)
+    func searchBarDidRequestAutocompleteSyntax(_ searchBar: SearchBarView)
 }
 
 public final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
@@ -85,9 +86,14 @@ public final class SearchTextField: NSTextField {
             return true
         }
 
-        // 3. Tab / Shift + Tab (切换文件类型筛选)
+        // 3. Tab / Shift + Tab (切换文件类型筛选 或 斜杠语法自动补全)
         if event.keyCode == 48 { // Tab
             let isShift = event.modifierFlags.contains(.shift)
+            let currentText = parent.text.trimmingCharacters(in: .whitespaces)
+            if !isShift && currentText.hasPrefix("/") && !currentText.contains(" ") {
+                customDelegate?.searchBarDidRequestAutocompleteSyntax(parent)
+                return true
+            }
             customDelegate?.searchBarDidRequestCycleFilter(parent, forward: !isShift)
             return true
         }

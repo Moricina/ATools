@@ -8,6 +8,7 @@ public extension Notification.Name {
     static let atoolsPanelTogglesDidChange = Notification.Name("atoolsPanelTogglesDidChange")
     static let atoolsThemeDidChange = Notification.Name("atoolsThemeDidChange")
     static let atoolsAutoQuitDidChange = Notification.Name("atoolsAutoQuitDidChange")
+    static let atoolsDidSelectSyntaxCommand = Notification.Name("atoolsDidSelectSyntaxCommand")
 }
 
 public extension NSAlert {

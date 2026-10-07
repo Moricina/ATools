@@ -727,3 +727,40 @@
 - **验证与测试**：
   - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试与诊断套件全部 PASS（exit=0，零失败）；
   - 执行 `./Scripts/package_app.sh`：签名及 release 构建通过；已成功部署并替换至 `/Applications/ATools.app`（PID 65871）。
+
+### 16. 搜索栏支持斜杠语法提示胶囊群、指令卡片直出与 Tab 智能补全 (2026-10-07, build 29)
+
+- **背景与需求目标**：
+  - 用户反馈：“看一下搜索栏能否做出语法提示胶囊，例如用户输入“/”后出现语法胶囊”；
+  - 需求目标：当用户在搜索框输入 `/` 时，动态弹出高频语法提示胶囊（如 `/doc`、`/code`、`/app`、`/img`、`/web`、`/calc`、`/lock` 等），支持模糊实时过滤，按下 `Tab` 或点击胶囊直接自动补全语法并准备输入关键词；同时在结果列表中直出指令卡片与功能说明，并拦截无效的根目录磁盘扫描，兼顾极客体验与极致性能。
+
+- **实施细节与涉及文件**：
+  1. **新建语法指令数据模型**（`Sources/atools/Models/SearchSyntaxCommand.swift`）：
+     - 定义 `SearchSyntaxCommand` 结构体，囊括文件分类（`/doc`, `/code`, `/app`, `/img`, `/media`, `/zip`, `/folder`）、工具扩展（`/web`, `/calc`）及系统控制（`/lock`, `/sleep`, `/empty`, `/restart`）共 13 大指令体系；
+     - 赋予触发词、中文名称、SF Symbol 图标、多别名（如 `/dir` -> `/folder`）与功能释义；
+     - 提供 `SearchSyntaxCommand.matching(prefix:)` 纯内存 \(O(1)\) 实时过滤算法。
+  2. **扩展前缀语法提取**（`Sources/atools/Models/SearchTypeFilter.swift`）：
+     - `extractPrefix(from:)` 扩展支持斜杠语法（如 `"/doc 财报"`, `"/code: main.swift"`）；
+     - 严格要求空格或冒号边界，彻底消除 `/docker` 等包含 `doc` 词根普通词汇被误伤判定为语法的风险。
+  3. **筛选栏双模式自适应切换与液态玻璃语法胶囊**（`Sources/atools/UI/SearchFilterBarView.swift`）：
+     - 引入 `SearchFilterBarMode`（`.typeFilters` 与 `.syntaxCommands`）；
+     - 新增 `SearchSyntaxPillButton`：首项候选高亮微光显示，悬浮与点击带有丝滑视觉反馈；
+     - 点击胶囊直接触发 `delegate?.searchFilterBar(_:didSelectSyntaxCommand:)`；
+     - 在语法模式下安全锁闭拖拽手势，维持输入框第一响应者身份。
+  4. **输入框 Tab 键斜杠语法智能补全**（`Sources/atools/UI/SearchBarView.swift`）：
+     - 在 `SearchTextField.performKeyEquivalent` 中捕获 `Tab` 键：当输入内容以 `/` 开头且未含空格时，优先分发 `searchBarDidRequestAutocompleteSyntax` 事件，一键补全当前候选语法并移动光标至末尾。
+  5. **检索协调器拦截与直出**（`Sources/atools/Search/SearchCoordinator.swift` & `SearchResultsTableView.swift`）：
+     - 在用户输入未敲空格的斜杠前缀（如 `/`、`/d`、`/c`）时，拦截底层 Spotlight 磁盘扫描，0ms 秒级直出语法指令结果卡片（标识为 `.syntaxCommand`，徽章为「指令」）；
+     - 针对 `/web <关键词>` 与 `/calc <算式>` 实施精准直出，免除额外干扰。
+  6. **面板中枢联动**（`Sources/atools/UI/SearchPanel.swift`）：
+     - `didChangeQuery` 侦测 `/` 实时切换胶囊栏展示形态，输入删空或非斜杠时自动恢复 8 大文件分类胶囊；
+     - 结果列表点击或回车选中语法指令卡片时，保持面板开启并自动填入对应前缀；
+     - 针对系统类指令（如 `/lock`）确认后一键执行并收拢面板。
+  7. **回归诊断测试扩展**（`Sources/atools/main.swift`）：
+     - 新增 `[6.6] Testing slash syntax commands`：包含指令前缀匹配、别名映射、边界校验、胶囊栏动态双模式切换、Tab 补全候选以及 Coordinator 极速直出全流程断言。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试与诊断套件全部 PASS（exit=0，零失败）；
+  - 执行 `./Scripts/package_app.sh`：签名及 release 构建通过；
+  - 成功部署并替换至 `/Applications/ATools.app`（PID 71712）。
+

@@ -51,6 +51,88 @@ public final class SearchCoordinator {
             return
         }
 
+        // 0. Slash Syntax Commands (用户输入 "/" 或 "/d" 等未敲空格的指令语法)
+        if effectiveText.hasPrefix("/") && !effectiveText.contains(" ") {
+            var instantSyntaxResults: [SearchResult] = []
+            let matched = SearchSyntaxCommand.matching(prefix: effectiveText)
+            for (index, cmd) in matched.enumerated() {
+                let isSystem: Bool
+                switch cmd.actionType {
+                case .systemAction: isSystem = true
+                default: isSystem = false
+                }
+                let hint = isSystem ? "按下回车执行指令" : "按下 Tab 键自动补全语法"
+                instantSyntaxResults.append(SearchResult(
+                    id: "syntax_\(cmd.id)",
+                    title: "\(cmd.trigger) \(cmd.name)",
+                    subtitle: "\(cmd.description)  •  \(hint)",
+                    type: .syntaxCommand,
+                    score: 1000 - index * 10,
+                    icon: ThumbnailPipeline.shared.symbolIcon(name: cmd.iconSymbolName, pointSize: 16, weight: .medium),
+                    action: {
+                        NotificationCenter.default.post(
+                            name: .atoolsDidSelectSyntaxCommand,
+                            object: cmd
+                        )
+                    }
+                ))
+            }
+            SpotlightBridge.shared.stop()
+            DispatchQueue.main.async {
+                onResults(instantSyntaxResults)
+            }
+            return
+        }
+
+        // 0.1 显式斜杠工具语法：/web 与 /calc
+        if effectiveText.hasPrefix("/web ") || effectiveText.hasPrefix("/g ") {
+            let query = String(effectiveText.dropFirst(effectiveText.hasPrefix("/web ") ? 5 : 3)).trimmingCharacters(in: .whitespaces)
+            if !query.isEmpty {
+                let engine = ConfigManager.shared.config.webSearchEngine
+                let result = SearchResult(
+                    id: "web_\(query)",
+                    title: "在 \(engine.title) 中搜索 \"\(query)\"",
+                    subtitle: "按下回车键在默认浏览器中打开搜索",
+                    type: .webSearch,
+                    score: 1000,
+                    icon: ThumbnailPipeline.shared.symbolIcon(name: "globe", pointSize: 16, weight: .medium),
+                    action: {
+                        if let url = engine.searchURL(for: query, customTemplate: ConfigManager.shared.config.customWebSearchURL) {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                )
+                SpotlightBridge.shared.stop()
+                DispatchQueue.main.async {
+                    onResults([result])
+                }
+                return
+            }
+        }
+
+        if effectiveText.hasPrefix("/calc ") {
+            let expr = String(effectiveText.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            if !expr.isEmpty, let mathResult = CalculatorEngine.shared.evaluate(expr) {
+                let result = SearchResult(
+                    id: "calc_\(expr)",
+                    title: "= \(mathResult)",
+                    subtitle: "按下回车键复制计算结果到剪贴板",
+                    type: .calculator,
+                    score: 1000,
+                    icon: ThumbnailPipeline.shared.symbolIcon(name: "equal", pointSize: 16, weight: .medium),
+                    action: {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(mathResult, forType: .string)
+                    }
+                )
+                SpotlightBridge.shared.stop()
+                DispatchQueue.main.async {
+                    onResults([result])
+                }
+                return
+            }
+        }
+
         // Layer 1: Instant In-Memory Synchronous Results (<1ms)
         var instantResults: [SearchResult] = []
 

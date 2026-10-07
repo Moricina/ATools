@@ -683,6 +683,90 @@ if CommandLine.arguments.contains("--test") {
         print("      ✓ 分类胶囊排序（容错补齐/持久化往返/快捷键动态对齐）通过.")
     }
 
+    // 6.6 斜杠语法提示胶囊与快捷指令联动：前缀匹配、分类条动态模式切换、Tab 补全与 Coordinator 拦截
+    print("[6.6] Testing slash syntax commands (matching, capsule bar mode, Tab autocompletion & coordinator dispatch)...")
+    do {
+        // (a) 斜杠指令前缀匹配与别名检索
+        let allSlash = SearchSyntaxCommand.matching(prefix: "/")
+        TestAssertions.expect(allSlash.count >= 12, "输入 '/' 必须匹配全部语法指令")
+        
+        let dMatches = SearchSyntaxCommand.matching(prefix: "/d")
+        TestAssertions.expect(dMatches.contains { $0.trigger == "/doc" }, "/d 必须命中 /doc")
+        TestAssertions.expect(dMatches.contains { $0.trigger == "/folder" }, "/d 必须通过 /dir 别名命中 /folder")
+
+        let cMatches = SearchSyntaxCommand.matching(prefix: "/c")
+        TestAssertions.expect(cMatches.contains { $0.trigger == "/code" } && cMatches.contains { $0.trigger == "/calc" },
+                              "/c 必须命中 /code 与 /calc")
+
+        // (b) SearchTypeFilter 对斜杠前缀语法的提取
+        let ext1 = SearchTypeFilter.extractPrefix(from: "/doc 2026财报")
+        TestAssertions.expect(ext1?.filter == .document && ext1?.query == "2026财报",
+                              "'/doc 2026财报' 必须解析为 document 和 '2026财报'")
+        let ext2 = SearchTypeFilter.extractPrefix(from: "/code: main.swift")
+        TestAssertions.expect(ext2?.filter == .code && ext2?.query == "main.swift",
+                              "'/code: main.swift' 必须解析为 code 和 'main.swift'")
+        let extNonSlash = SearchTypeFilter.extractPrefix(from: "/docker ps")
+        TestAssertions.expect(extNonSlash == nil, "'/docker ps' 不得误触发 /doc 语法")
+
+        // (c) SearchFilterBarView 动态模式切换（typeFilters <-> syntaxCommands）
+        let bar = SearchFilterBarView()
+        TestAssertions.expect(bar.currentMode == .typeFilters, "初始状态必须为 .typeFilters")
+        TestAssertions.expect(bar.pillButtons.count == 8, "初始状态必须展示 8 大文件分类胶囊")
+
+        bar.showSyntaxCommands(dMatches)
+        TestAssertions.expect(bar.currentMode == .syntaxCommands, "展示指令后状态必须为 .syntaxCommands")
+        TestAssertions.expect(bar.syntaxButtons.count == dMatches.count, "胶囊数量必须与匹配指令数一致")
+        TestAssertions.expect(bar.activeSyntaxCommandForAutocomplete?.trigger == "/doc", "首个补全候选必须为 /doc")
+        TestAssertions.expect(bar.syntaxButtons.first?.isHighlightedPill == true, "首个指令胶囊必须呈高亮待补全态")
+
+        bar.showTypeFilters()
+        TestAssertions.expect(bar.currentMode == .typeFilters, "复位后必须恢复为 .typeFilters")
+        TestAssertions.expect(bar.pillButtons.count == 8, "复位后必须重新展示 8 大分类胶囊")
+
+        // (d) SearchCoordinator 斜杠语法拦截验证
+        var slashResults: [SearchResult] = []
+        var slashDone = false
+        SearchCoordinator.shared.search(query: "/") { r in
+            slashResults = r
+            slashDone = true
+        }
+        let dlSlash = Date().addingTimeInterval(0.2)
+        while !slashDone && Date() < dlSlash {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        TestAssertions.expect(!slashResults.isEmpty, "输入 '/' 必须秒级直出语法指令卡片")
+        TestAssertions.expect(slashResults.allSatisfy { $0.type == .syntaxCommand }, "所有卡片类型必须为 syntaxCommand")
+
+        // 验证 /calc 快速计算直出
+        var calcResults: [SearchResult] = []
+        var calcDone = false
+        SearchCoordinator.shared.search(query: "/calc 128*8") { r in
+            calcResults = r
+            calcDone = true
+        }
+        let dlCalc = Date().addingTimeInterval(0.2)
+        while !calcDone && Date() < dlCalc {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        TestAssertions.expect(calcResults.first?.title == "= 1024", "/calc 128*8 必须即时输出 '= 1024'")
+
+        // 验证 /web 网页检索直出
+        var webResults: [SearchResult] = []
+        var webDone = false
+        SearchCoordinator.shared.search(query: "/web Swift") { r in
+            webResults = r
+            webDone = true
+        }
+        let dlWeb = Date().addingTimeInterval(0.2)
+        while !webDone && Date() < dlWeb {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        TestAssertions.expect(webResults.first?.type == .webSearch, "/web Swift 必须即时输出 webSearch 卡片")
+
+        print("      ✓ 斜杠语法胶囊（指令匹配/模式动态切换/Tab补全候选/极速直出）通过.")
+    }
+
+
 
     var coordinatorResults: [SearchResult] = []
     var isCoordDone = false
