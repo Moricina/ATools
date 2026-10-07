@@ -588,7 +588,38 @@
   - 更新至 `/Applications/ATools.app` 运行验证；
   - 实测验证：Safari、Chrome、钉钉、微信、QQ、Otty、Antigravity 之间随意切换窗口、点击其他应用、按 ⌘Tab、切换虚拟桌面 Spaces、按 ⌘H 隐藏，所有后台应用稳固常驻绝不退出；点击红叉关闭最后一个窗口时，在所设延迟下精准退出（立即退出档位毫秒级关闭）。
 
+### 12. 修复 AutoQuitManager 递归锁崩溃缺陷与 ATools 守护宿主防退出保护 (2026-10-07, build 24)
 
+- **背景与根因剖析**：
+  - 用户反馈：“应用名单中怎么没有ATools，点开ATools设置后切换应用后，ATools自动退出了，bug仍然存在”；
+  - 核心排查与诊断（提取系统故障日志 `~/Library/Logs/DiagnosticReports/ATools-2026-10-07-145756.ips`）：
+    1. **为什么名单中没有 ATools**：
+       - ATools 是常驻后台的宿主服务守护程序（负责全局热键监听、状态栏托盘、应用抽屉及 AutoQuit 管理服务自身）；
+       - 若将 ATools 加入自动退出名单，当用户关闭“偏好设置”窗口、“应用抽屉”或搜索胶囊时，ATools 将立即强杀自身进程，导致托盘图标和所有全局服务永久下线；
+       - 因此在架构设计上，`AutoQuitManager.shouldWatch` 与 `AppHotspotIndex.allRegularApps` 严密排除了宿主自身 bundle ID（`cc.atools.app`），作为绝对安全的守护边界。
+    2. **点开设置并切换应用后闪退的真正根因**：
+       - 崩溃日志明确显示：`BUG IN CLIENT OF LIBPLATFORM: Trying to recursively lock an os_unfair_lock, Abort Cause 259`；
+       - 栈轨迹指向：
+         `0 _os_unfair_lock_recursive_abort`
+         `1 _os_unfair_lock_lock_slow`
+         `2 AutoQuitManager.evaluateAppWindows(pid:)`
+         `3 AutoQuitManager.handleAXNotification(pid:element:notificationName:)`
+       - 在 `handleAXNotification` 处理窗口销毁通知时已持有 `os_unfair_lock_lock(&lock)`，随后内部直接同步调用了 `evaluateAppWindows(pid:)`，而该方法内部再次尝试对同一不可重入锁执行 `os_unfair_lock_lock(&lock)`，直接触发内核保护将进程强制中止（SIGABRT）。此现象并非“自动退出应用”误杀，而是重复加锁引发的进程瞬时崩溃。
 
+- **实施细节与修改文件**（`AutoQuitManager.swift`）：
+  1. **解耦锁内与锁外窗口求值逻辑**：
+     - 将原窗口求值逻辑剥离为私有锁内安全方法 `evaluateAppWindowsLocked(pid:)`（调用前必须已持有 `lock`）；
+     - 将公开接口 `evaluateAppWindows(pid:)`（由异步调度回调 `asyncAfter` 或无锁上下文调用）明确收敛为获取锁后代理至 `evaluateAppWindowsLocked(pid:)`；
+  2. **消除已持有锁上下文的二次加锁**：
+     - `handleAXNotification` 中收到 `kAXWindowClosedNotification` 或 `kAXUIElementDestroyedNotification` 时，直接调用 `evaluateAppWindowsLocked(pid:)`；
+     - 兜底轮询 `fallbackPoll` 遍历监听列表时，在同一把锁的作用域内直接调用 `evaluateAppWindowsLocked(pid:)`，消除锁竞争与重入隐患。
 
+- **兼容性与边界防护策略**：
+  - 严格保持并发线程安全性与主线程 UI 断言；
+  - 维持对被监听应用的毫秒级窗口销毁感知与定时杀进程逻辑不变；
+  - ATools 宿主守护进程自身绝对免疫任何退出判定，无论设置窗口开启/关闭/切换应用均平稳常驻。
 
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 12 大项自动化回归套件全部通过（exit=0，零失败）；
+  - 执行 `./Scripts/package_app.sh` 编译并签名打包，重新部署至 `/Applications/ATools.app` 运行（PID: 32017）；
+  - 实测验证：打开 ATools 偏好设置窗口，在不同应用之间频繁切换焦点、打开关闭其他软件、点击设置窗口红叉关闭，ATools 稳定常驻于状态栏与后台，无任何崩溃与退出，问题得到彻底根除。

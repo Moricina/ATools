@@ -415,7 +415,7 @@ public final class AutoQuitManager {
         } else if notificationName == (kAXWindowClosedNotification as String)
                     || notificationName == (kAXUIElementDestroyedNotification as String) {
             guard entry.hadWindows else { return }
-            evaluateAppWindows(pid: pid)
+            evaluateAppWindowsLocked(pid: pid)
         }
     }
 
@@ -423,7 +423,10 @@ public final class AutoQuitManager {
         assert(Thread.isMainThread)
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
+        evaluateAppWindowsLocked(pid: pid)
+    }
 
+    private func evaluateAppWindowsLocked(pid: pid_t) {
         guard isRunning, var entry = watched[pid] else { return }
         let app = entry.app
         guard !app.isTerminated else { return }
@@ -468,13 +471,10 @@ public final class AutoQuitManager {
     @objc private func fallbackPoll() {
         assert(Thread.isMainThread)
         guard isRunning else { return }
-        let pids: [pid_t] = {
-            os_unfair_lock_lock(&lock)
-            defer { os_unfair_lock_unlock(&lock) }
-            return Array(watched.keys)
-        }()
-        for pid in pids {
-            evaluateAppWindows(pid: pid)
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        for pid in Array(watched.keys) {
+            evaluateAppWindowsLocked(pid: pid)
         }
     }
 
