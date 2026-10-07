@@ -623,3 +623,41 @@
   - 执行 `./Scripts/build.sh --test`：全套 12 大项自动化回归套件全部通过（exit=0，零失败）；
   - 执行 `./Scripts/package_app.sh` 编译并签名打包，重新部署至 `/Applications/ATools.app` 运行（PID: 32017）；
   - 实测验证：打开 ATools 偏好设置窗口，在不同应用之间频繁切换焦点、打开关闭其他软件、点击设置窗口红叉关闭，ATools 稳定常驻于状态栏与后台，无任何崩溃与退出，问题得到彻底根除。
+
+### 13. 根治 ATools 偶发卡死与单窗口应用关窗不退出缺陷 (2026-10-07, build 26)
+
+- **背景与根因剖析**：
+  - 用户反馈：“有用户反馈ATools在他的电脑上卡死，也没退出想要关闭的软件，请检查原因”；
+  - 核心排查与诊断：
+    1. **为什么想要关闭的软件（如微信、钉钉、QQ 等）关窗后不退出**：
+       - macOS 中大量应用（微信、钉钉、QQ、各类 Electron/Webview 应用等）在用户点击红叉时，并非真正 `destroy` 窗口，而是执行 `[NSWindow orderOut:]` 将窗口隐藏保留于后台；
+       - 此前 `windowServerStandardWindowCount` 改用了 `[.optionAll]`，但**未校验 `kCGWindowIsOnscreen`**，导致 WindowServer 依然扫描到了那些已 orderedOut 隐藏的后台窗口（名称为 "微信"、"钉钉"、"QQ"）；
+       - 进而导致 `isConfirmedZeroWindowCount` 始终认为 `wsCount > 0`，即使 AX 确证窗口已关闭（`axCount == 0`），也永久拒绝执行退出，导致软件关窗不退出。
+    2. **为什么 ATools 会发生卡死 (Freeze/Beachball)**：
+       - **根因一：100ms 无上限递归轮询死循环**：在 `evaluateAppWindowsLocked` 中，若 `axCount == 0 && wsCount > 0`，原代码每 0.1 秒无条件 `DispatchQueue.main.asyncAfter(0.1)` 重新调用自身。由于上述隐藏窗口导致 `wsCount > 0` 永真，每秒在主线程触发 10 次密集的 IPC 查询与加锁，持续拖垮主 RunLoop；
+       - **根因二：未设 AX 消息超时（AXUIElement Messaging Timeout）**：macOS 默认 AX 消息超时高达 6 秒，若系统中有任意被监视应用处于忙碌、编译、高负载或卡死状态，ATools 在主线程调用 `AXUIElementCopyAttributeValue` 会同步阻塞 6 秒，导致 ATools 自身被拉入卡死状态；
+       - **根因三：兜底轮询主线程高频全量 IPC 震荡**：原 `fallbackPoll` 每 1.2 秒对所有被监视应用无差别调用 `windowServerStandardWindowCount`，单次轮询重复几十次昂贵的 `CGWindowListCopyWindowInfo` IPC 序列化。
+
+- **实施细节与修改文件**（`AutoQuitManager.swift`）：
+  1. **WindowServer 严格引入 `isOnScreen` 在屏校验**：
+     - 在 `windowServerStandardWindowCount` 中增加 `guard let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, isOnScreen else { continue }`；
+     - 彻底过滤已关闭/orderedOut 隐藏的后台常驻窗口，微信、钉钉、QQ 等关窗即刻双重确证为零窗并退出。
+  2. **全面设置 AX 150ms 超时保护（防拖死）**：
+     - 在 `attachLocked` 以及 `axWindows(of:)` 内部全部注入 `AXUIElementSetMessagingTimeout(element, 0.15)`；
+     - 任何第三方应用无响应时，150ms 立即超时熔断返回，绝不挂起或卡死 ATools 主线程。
+  3. **AX 优先快路径（AX-First Fast Path）与消除无意义 WindowServer 扫描**：
+     - 若 `axCount > 0`，代表应用正有活跃窗口正常使用，直接清空重试计数并取消挂起退出，**直接返回，跳过昂贵的 WindowServer IPC 扫描**；
+     - 仅在 AX 为 0 或不可用时才查询 WindowServer。
+  4. **引入 `recheckCounts` 封顶防护（彻底终结 0.1s 恶性循环）**：
+     - 新增 `recheckCounts: [pid_t: Int]` 追踪微复查次数，上限严格限制为 2 次（覆盖 50ms GPU 关窗动画）；
+     - 超过 2 次重试上限立即确认为零窗调度退出，杜绝无限调度泄露。
+  5. **轮询器减负优化**：
+     - 兜底轮询周期平滑为 2.0s；
+     - 仅扫描曾有窗口且不在退出流程中的候选应用。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 12 大项自动化测试与诊断套件全部通过（exit=0，零失败）；
+  - 实测验证：
+    - 微信、钉钉、QQ 等已关窗单窗口应用在屏标准窗口数由 2/1/3 精准归零（`on-screen standard window count: 0`）；
+    - 活跃应用（如 Chrome、Antigravity）标准窗口数精准识别为 1；
+    - 内存与 CPU 负载极度平稳，彻底根除主线程挂起与无限重试卡死隐患。
