@@ -983,6 +983,7 @@ if CommandLine.arguments.contains("--test") {
         // 双重权威校验（WindowServer 交叉保护）：
         // 即使 AX 偶发报 0（如失焦、多虚拟桌面切换、临时浮层销毁），只要 WindowServer 确认有标准窗口，绝对不能退出！
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: 1) == false, "WindowServer has 1 window must protect app on focus loss")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: 3) == false, "WindowServer has 3 windows must protect background app")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: 0) == true, "Both AX and WindowServer 0 confirms window close")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: nil, windowServerCount: 0) == false, "AX failure must never quit even if WindowServer 0")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 1, windowServerCount: 1) == false, "Active running window must not quit")

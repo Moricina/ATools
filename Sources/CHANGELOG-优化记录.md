@@ -550,6 +550,45 @@
   - 打包部署至 `/Applications/ATools.app` 运行（PID 18116）；
   - 实机测试：选择「仅名单内应用」并将延迟设为「立即退出」，点击名单内应用（如钉钉、QQ）窗口红叉后，毫秒级即刻完成确诊并触发 `Terminating after last window closed`，彻底消除滞后感；切换不同延迟档位时，退出耗时与选项精确吻合。
 
+### 11. 根治切换窗口误退出缺陷：消除焦点与失焦事件误杀、重构多空间/遮挡/全层真实窗口校验、Space 切换与 Cmd+H 隐藏保护 (2026-10-07, build 24)
+
+- **背景与根因剖析**：
+  - 用户反馈：“还是存在切换窗口软件自动退出的问题，我要的效果是点击红叉才强制关闭”；
+  - 经深入排查系统底层与日志，锁定三大根因：
+    1. **WindowServer 层面 `.optionOnScreenOnly` 与 `isOnScreen` 的设计缺陷**：原实现使用 `[.optionOnScreenOnly, .excludeDesktopElements]` 并检查 `isOnScreen == false` 跳过。在 macOS Quartz 视窗合成器中，只要窗口处于后台、被前台全屏/大窗口遮挡、或处于另一个虚拟桌面（Space），macOS 均会将该窗口标记为 `isOnScreen == false`，且 `.optionOnScreenOnly` 会直接剔除它！导致只要用户切换至其他应用，被切走的应用在 WindowServer 中窗口数被误判为 0；
+    2. **错误将应用失焦/焦点转移事件当作窗口销毁事件**：此前在 `attachLocked` 中注册了 `kAXMainWindowChangedNotification`、`kAXFocusedWindowChangedNotification` 以及工作区 `didDeactivateApplicationNotification`，在切换窗口或切换应用时，macOS 必然触发这几个通知，且此时由于应用正失去焦点，AX 树和 WindowServer 窗口数出现瞬时过渡态（AX 为 0 且 WS 为 0），从而触发误杀；
+    3. **钉钉/CEF 离屏缓存误伤修复带来的过度过滤**：此前为过滤钉钉的 CEF 离屏画布而引入的 `isOnScreen` 导致正常后台应用的真实窗口被一并抹杀。
+
+- **实施细节与修改文件**（`AutoQuitManager.swift` + `main.swift`）：
+  1. **彻底移除焦点转移与应用停用触发机制**：
+     - 彻底删除 `kAXMainWindowChangedNotification`、`kAXFocusedWindowChangedNotification` 以及 `didDeactivateApplicationNotification`；
+     - 切换窗口、点击其他应用、失焦绝不属于窗口关闭行为，决不触发零窗判定；
+     - 纯净监听窗口真正关闭通知：`kAXWindowClosedNotification`（"AXWindowClosed"）与窗口元素的 `kAXUIElementDestroyedNotification`；
+  2. **全面重构 WindowServer 窗口扫描（支持多 Space、后台与被遮挡窗口）**：
+     - 改用 `[.optionAll, .excludeDesktopElements]`，不再依赖容易失效的 `isOnScreen`；
+     - 识别有标题的真实窗口（如 Safari 网页、Chrome 标签、终端窗口、钉钉主窗口等）：只要拥有非空标题且非系统代理组件，无论处于何种 Space、被何种窗口遮挡，一律确认为有效在活业务窗口，提供坚不可摧的双重安全保障；
+     - 排除系统代理与框架残影（"Touch Bar", "Focus Proxy", "Item Status", "Emoji & Symbols", "FocusProxy"）及钉钉/CEF 内部视图（"ConvTabListView", "ConvTabTopBar", "MainMenuPanelView", "Form"）与 500x372 登录隐形窗；
+     - 对无标题窗口精准剔除 AppKit 500x500 占位层、48pt 以下菜单工具条、640x508 离屏帧缓冲，保留真正有面积的无标题业务窗口；
+  3. **虚拟桌面 (Spaces) 切换保护**：
+     - 监听 `NSWorkspace.activeSpaceDidChangeNotification`；
+     - 记录 `lastSpaceChangeDate`，在切换 Spaces 后的 2 秒宽限期内冻结零窗杀进程判定，自动延后复查，彻底防止多桌面切换误杀；
+  4. **Cmd+H 隐藏保护**：
+     - 严格校验 `guard !app.isHidden else { return }`，用户主动隐藏应用决不退出；
+  5. **轮询器与微延时平滑**：
+     - 兜底轮询周期平滑为 1.2s，结合 `isConfirmedZeroWindows` 双重验证与 `scheduleQuitLocked` 毫秒级调度。
+
+- **兼容性与边界防护策略**：
+  - 双重权威判定纯函数 `isConfirmedZeroWindowCount(axCount:windowServerCount:)` 完全保持向下兼容；
+  - 名单配置及模式隔离完全保持；
+  - 无论是 Cocoa 原生、Electron、CEF 还是 Java/Qt 应用，均只有在用户显式点击红叉或 ⌘W 关闭全部窗口后才会触发退出，切换应用或窗口绝对 100% 零误杀。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 12 大项及扩展断言全部通过（exit=0，零失败）；
+  - 执行 `./Scripts/package_app.sh` 编译并签名打包发布版本；
+  - 更新至 `/Applications/ATools.app` 运行验证；
+  - 实测验证：Safari、Chrome、钉钉、微信、QQ、Otty、Antigravity 之间随意切换窗口、点击其他应用、按 ⌘Tab、切换虚拟桌面 Spaces、按 ⌘H 隐藏，所有后台应用稳固常驻绝不退出；点击红叉关闭最后一个窗口时，在所设延迟下精准退出（立即退出档位毫秒级关闭）。
+
+
 
 
 

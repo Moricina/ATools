@@ -2,6 +2,9 @@ import Foundation
 import AppKit
 import ApplicationServices
 
+/// macOS 辅助功能私有/标准常量补全
+private let kAXWindowClosedNotification = "AXWindowClosed" as CFString
+
 /// AXObserver 的 C 回调跳板：C 函数指针无法捕获上下文，单例又永不释放，因此直接转发
 /// 给 shared；归属进程用 AXUIElementGetPid 从被观察元素反查，不依赖 refcon。
 private let autoQuitObserverCallback: AXObserverCallback = { _, element, notification, _ in
@@ -51,6 +54,7 @@ public final class AutoQuitManager {
     private var fallbackTimer: Timer?
     private var isRunning = false
     private var lock = os_unfair_lock()
+    private var lastSpaceChangeDate: Date = .distantPast
 
     private var defaultCenterObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -84,14 +88,13 @@ public final class AutoQuitManager {
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self.detach(pid: app.processIdentifier)
         })
+        // 监听虚拟桌面 (Spaces) 切换：Space 切换时 WindowServer 与 AX 处于过渡态，设立保护宽限期防止误杀
         workspaceObservers.append(workspaceCenter.addObserver(
-            forName: NSWorkspace.didDeactivateApplicationNotification,
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil,
             queue: .main
-        ) { [weak self] note in
-            guard let self = self, self.isRunning,
-                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-            self.checkAppWindowsOnDeactivate(app)
+        ) { [weak self] _ in
+            self?.lastSpaceChangeDate = Date()
         })
         // 睡眠唤醒后其他应用的 AX 树可能整体失效，与 TrackpadGestureManager 一致地重建
         workspaceObservers.append(workspaceCenter.addObserver(
@@ -205,25 +208,60 @@ public final class AutoQuitManager {
         return false
     }
 
-    /// WindowServer 层面标准应用窗口计数（Layer 0，屏幕可见，有效尺寸，排除离屏缓存与极小隐形辅助窗口）
+    /// WindowServer 层面标准应用窗口计数（Layer 0...150，有效尺寸，排除离屏缓存与极小隐形辅助窗口）
     public static func windowServerStandardWindowCount(for pid: pid_t) -> Int? {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
+        let systemProxies: Set<String> = [
+            "Touch Bar", "Focus Proxy", "Item Status", "Emoji & Symbols", "FocusProxy"
+        ]
+        let internalCefViews: Set<String> = [
+            "ConvTabListView", "ConvTabTopBar", "MainMenuPanelView", "Form"
+        ]
+
         var count = 0
         for w in list {
             guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            guard let layer = w[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+            guard let layer = w[kCGWindowLayer as String] as? Int, (0...150).contains(layer) else { continue }
             guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
                   let width = bounds["Width"] as? Double,
                   let height = bounds["Height"] as? Double,
-                  width >= 80, height >= 60 else { continue }
-            if let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, !isOnScreen {
+                  width > 40, height > 40 else { continue }
+
+            let rawName = (w[kCGWindowName as String] as? String) ?? ""
+            let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if systemProxies.contains(trimmedName) { continue }
+            if internalCefViews.contains(trimmedName) { continue }
+
+            // 钉钉特定的常驻后台/隐形登录弹窗 (500x372)
+            if abs(width - 500) < 15 && abs(height - 372) < 15 { continue }
+
+            if !trimmedName.isEmpty {
+                // 有标题的标准窗口（Safari 页面、Chrome 标签页、终端窗口、钉钉主窗口等）：
+                // 无论是否失焦、是否在其他 Space、是否被遮挡，一律确认为有效窗口！
+                count += 1
                 continue
             }
-            count += 1
+
+            // 无标题窗口过滤（系统常驻残影、离屏缓冲、AppKit 占位层）
+            // 1. AppKit 500x500 占位层
+            if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
+            // 2. 菜单栏/工具栏横条 (height <= 48)
+            if height <= 48 { continue }
+            // 3. 小型代理/光标/状态图标
+            if width <= 80 && height <= 60 { continue }
+            // 4. CEF 离屏缓冲画布 (640x508, 600x600)
+            if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
+            if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
+
+            // 具有合理尺寸的无标题真实窗口（如部分 Electron/Flutter/Java 无标题主窗体）
+            if width > 120 && height > 90 {
+                count += 1
+            }
         }
         return count
     }
@@ -261,8 +299,8 @@ public final class AutoQuitManager {
         }
 
         // 兜底轮询：捕获不吐 AX 销毁事件的应用（部分 Electron/Java/CEF）。
-        // 仅扫 hadWindows 的应用，每 0.8s 一次轻量查询，代价可忽略，大幅削减轮询延时。
-        let timer = Timer(timeInterval: 0.8, target: self, selector: #selector(fallbackPoll), userInfo: nil, repeats: true)
+        // 仅扫 hadWindows 的应用，每 1.2s 一次轻量查询，代价可忽略。
+        let timer = Timer(timeInterval: 1.2, target: self, selector: #selector(fallbackPoll), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         fallbackTimer = timer
         runtimeLog("[AutoQuit] Started; watching \(watched.count) regular app(s).")
@@ -324,8 +362,8 @@ public final class AutoQuitManager {
         if addErr != .success {
             runtimeLog("[AutoQuit] AddNotification(WindowCreated) failed for pid \(pid): error \(addErr.rawValue)")
         }
-        _ = AXObserverAddNotification(obs, axApp, kAXMainWindowChangedNotification as CFString, nil)
-        _ = AXObserverAddNotification(obs, axApp, kAXFocusedWindowChangedNotification as CFString, nil)
+        _ = AXObserverAddNotification(obs, axApp, kAXWindowClosedNotification, nil)
+        _ = AXObserverAddNotification(obs, axApp, kAXUIElementDestroyedNotification as CFString, nil)
 
         var entry = WatchedApp(
             app: app,
@@ -374,33 +412,10 @@ public final class AutoQuitManager {
                 watched[pid] = entry
                 cancelPendingQuitLocked(pid)
             }
-        } else if notificationName == kAXUIElementDestroyedNotification as String
-                    || notificationName == kAXMainWindowChangedNotification as String
-                    || notificationName == kAXFocusedWindowChangedNotification as String {
+        } else if notificationName == (kAXWindowClosedNotification as String)
+                    || notificationName == (kAXUIElementDestroyedNotification as String) {
             guard entry.hadWindows else { return }
-            let axCount = axWindows(of: entry.axApp)?.count
-            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
-            if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) {
-                scheduleQuitLocked(pid, app: entry.app)
-            } else if axCount == 0 && (wsCount ?? 0) > 0 {
-                // AX 已确认无窗口，但 WindowServer 仍有标准窗口（处于淡出动画中）
-                if pendingQuits[pid] == nil && !terminatingPids.contains(pid) {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-                        self?.evaluateAppWindows(pid: pid)
-                    }
-                }
-            } else if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
-                cancelPendingQuitLocked(pid)
-            }
-        }
-    }
-
-    private func checkAppWindowsOnDeactivate(_ app: NSRunningApplication) {
-        let pid = app.processIdentifier
-        // 立即检测一次，同时延后 0.15s 再检测一次，兼顾即时响应与复杂应用状态落定
-        evaluateAppWindows(pid: pid)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            self?.evaluateAppWindows(pid: pid)
+            evaluateAppWindows(pid: pid)
         }
     }
 
@@ -410,6 +425,20 @@ public final class AutoQuitManager {
         defer { os_unfair_lock_unlock(&lock) }
 
         guard isRunning, var entry = watched[pid] else { return }
+        let app = entry.app
+        guard !app.isTerminated else { return }
+
+        // 安全防护 1：用户使用 Cmd+H 隐藏的应用绝不能自动退出
+        guard !app.isHidden else { return }
+
+        // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，延后复查
+        if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                self?.evaluateAppWindows(pid: pid)
+            }
+            return
+        }
+
         let axCount = axWindows(of: entry.axApp)?.count
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
 
@@ -425,8 +454,9 @@ public final class AutoQuitManager {
         if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) {
             scheduleQuitLocked(pid, app: entry.app)
         } else if axCount == 0 && (wsCount ?? 0) > 0 {
+            // AX 报告无窗但 WindowServer 仍有标准窗口（处于淡出动画或多桌面缓存中），延后 0.1s 再次确认
             if pendingQuits[pid] == nil && !terminatingPids.contains(pid) {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
                     self?.evaluateAppWindows(pid: pid)
                 }
             }
@@ -481,6 +511,11 @@ public final class AutoQuitManager {
         let app = entry.app
         // pid 槽位可能被新进程复用：必须用持有的 NSRunningApplication 对象做身份验证
         guard !app.isTerminated else { return }
+        guard !app.isHidden else { return }
+        if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): Space transition in progress.")
+            return
+        }
         let cfg = ConfigManager.shared.config
         guard cfg.enableAutoQuit else { return }
         guard AutoQuitManager.shouldWatch(
