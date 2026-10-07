@@ -426,7 +426,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             if NSApp.modalWindow != nil { return }
             let mouseLoc = NSEvent.mouseLocation
             if let window = self.view.window, !NSPointInRect(mouseLoc, window.frame) {
-                PanelCoordinator.shared.hideAllPanels()
+                PanelCoordinator.shared.hideShelfPanel()
             }
         }
         mouseExitWorkItem = work
@@ -654,7 +654,9 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     override public func cancelOperation(_ sender: Any?) {
         if !cancelKeyboardFilter() {
-            PanelCoordinator.shared.hideAllPanels()
+            if !PanelCoordinator.shared.isShelfPinned {
+                PanelCoordinator.shared.hideShelfPanel()
+            }
         }
     }
 
@@ -782,8 +784,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     // MARK: - ShelfGridDelegate
     public func shelfGrid(_ grid: ShelfGridView, didLaunchItem item: LauncherItem) {
-        if ConfigManager.shared.config.autoCloseOnLaunch {
-            PanelCoordinator.shared.hideAllPanels()
+        if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
+            PanelCoordinator.shared.hideShelfPanel()
         }
         executeLauncherItem(item)
     }
@@ -932,7 +934,11 @@ public final class ShelfPanel: NSPanel {
     override public var canBecomeMain: Bool { false }
 
     override public func cancelOperation(_ sender: Any?) {
-        PanelCoordinator.shared.hideAllPanels()
+        if !shelfViewController.cancelKeyboardFilter() {
+            if !PanelCoordinator.shared.isShelfPinned {
+                PanelCoordinator.shared.hideShelfPanel()
+            }
+        }
     }
 
     override public func keyDown(with event: NSEvent) {
@@ -941,7 +947,9 @@ public final class ShelfPanel: NSPanel {
         }
         if event.keyCode == 53 { // Esc
             if !shelfViewController.cancelKeyboardFilter() {
-                PanelCoordinator.shared.hideAllPanels()
+                if !PanelCoordinator.shared.isShelfPinned {
+                    PanelCoordinator.shared.hideShelfPanel()
+                }
             }
             return
         }

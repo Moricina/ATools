@@ -277,7 +277,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     }
 
     @objc private func contextCloseShelf() {
-        PanelCoordinator.shared.hideAllPanels()
+        PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
     }
 
     // MARK: - CategoryPillDelegate

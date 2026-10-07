@@ -270,8 +270,31 @@ public struct AtoolsConfig: Codable {
     // 关窗即退 (AutoQuit)：最后一个窗口关闭后延迟退出应用
     public var enableAutoQuit: Bool
     public var autoQuitMode: AutoQuitMode
-    public var autoQuitAppRules: [String]
+    public var autoQuitExcludeAppRules: [String]      // .allApps 排除名单
+    public var autoQuitOnlyListedAppRules: [String]   // .onlyListed 白名单退出名单
     public var autoQuitDelaySeconds: Int
+
+    public func rules(for mode: AutoQuitMode) -> [String] {
+        switch mode {
+        case .allApps: return autoQuitExcludeAppRules
+        case .onlyListed: return autoQuitOnlyListedAppRules
+        }
+    }
+
+    public var currentAutoQuitAppRules: [String] {
+        return rules(for: autoQuitMode)
+    }
+
+    /// 向下兼容旧调用与测试用例访问器
+    public var autoQuitAppRules: [String] {
+        get { currentAutoQuitAppRules }
+        set {
+            switch autoQuitMode {
+            case .allApps: autoQuitExcludeAppRules = newValue
+            case .onlyListed: autoQuitOnlyListedAppRules = newValue
+            }
+        }
+    }
 
     public init(
         version: Int = 4,
@@ -307,7 +330,9 @@ public struct AtoolsConfig: Codable {
         extraHotFolders: [String] = [],
         enableAutoQuit: Bool = false,
         autoQuitMode: AutoQuitMode = .allApps,
-        autoQuitAppRules: [String] = [],
+        autoQuitAppRules: [String]? = nil,
+        autoQuitExcludeAppRules: [String] = [],
+        autoQuitOnlyListedAppRules: [String] = [],
         autoQuitDelaySeconds: Int = 2
     ) {
         self.version = version
@@ -343,7 +368,18 @@ public struct AtoolsConfig: Codable {
         self.extraHotFolders = extraHotFolders
         self.enableAutoQuit = enableAutoQuit
         self.autoQuitMode = autoQuitMode
-        self.autoQuitAppRules = autoQuitAppRules
+        if let legacy = autoQuitAppRules {
+            if autoQuitMode == .onlyListed {
+                self.autoQuitOnlyListedAppRules = legacy
+                self.autoQuitExcludeAppRules = autoQuitExcludeAppRules
+            } else {
+                self.autoQuitExcludeAppRules = legacy
+                self.autoQuitOnlyListedAppRules = autoQuitOnlyListedAppRules
+            }
+        } else {
+            self.autoQuitExcludeAppRules = autoQuitExcludeAppRules
+            self.autoQuitOnlyListedAppRules = autoQuitOnlyListedAppRules
+        }
         self.autoQuitDelaySeconds = autoQuitDelaySeconds
     }
 
@@ -357,7 +393,7 @@ public struct AtoolsConfig: Codable {
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
         case extraHotFolders
-        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitDelaySeconds
+        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
     }
@@ -400,10 +436,30 @@ public struct AtoolsConfig: Codable {
         self.thumbnailCacheLimitMB = (try? container.decode(Int.self, forKey: .thumbnailCacheLimitMB)) ?? 6
         self.extraHotFolders = (try? container.decode([String].self, forKey: .extraHotFolders)) ?? []
 
-        // AutoQuit: 缺字段落到安全默认（总开关关闭）
+        // AutoQuit: 缺字段落到安全默认（总开关关闭）；老配置向下兼容迁移
         self.enableAutoQuit = (try? container.decode(Bool.self, forKey: .enableAutoQuit)) ?? false
         self.autoQuitMode = (try? container.decode(AutoQuitMode.self, forKey: .autoQuitMode)) ?? .allApps
-        self.autoQuitAppRules = (try? container.decode([String].self, forKey: .autoQuitAppRules)) ?? []
+
+        let decodedExclude = try? container.decode([String].self, forKey: .autoQuitExcludeAppRules)
+        let decodedOnlyListed = try? container.decode([String].self, forKey: .autoQuitOnlyListedAppRules)
+        let legacyRules = (try? container.decode([String].self, forKey: .autoQuitAppRules)) ?? []
+
+        if let ex = decodedExclude {
+            self.autoQuitExcludeAppRules = ex
+        } else if self.autoQuitMode == .allApps {
+            self.autoQuitExcludeAppRules = legacyRules
+        } else {
+            self.autoQuitExcludeAppRules = []
+        }
+
+        if let only = decodedOnlyListed {
+            self.autoQuitOnlyListedAppRules = only
+        } else if self.autoQuitMode == .onlyListed {
+            self.autoQuitOnlyListedAppRules = legacyRules
+        } else {
+            self.autoQuitOnlyListedAppRules = []
+        }
+
         let rawAutoQuitDelay = (try? container.decode(Int.self, forKey: .autoQuitDelaySeconds)) ?? 2
         self.autoQuitDelaySeconds = max(0, min(10, rawAutoQuitDelay))
 
@@ -459,7 +515,9 @@ public struct AtoolsConfig: Codable {
         try container.encode(extraHotFolders, forKey: .extraHotFolders)
         try container.encode(enableAutoQuit, forKey: .enableAutoQuit)
         try container.encode(autoQuitMode, forKey: .autoQuitMode)
-        try container.encode(autoQuitAppRules, forKey: .autoQuitAppRules)
+        try container.encode(autoQuitExcludeAppRules, forKey: .autoQuitExcludeAppRules)
+        try container.encode(autoQuitOnlyListedAppRules, forKey: .autoQuitOnlyListedAppRules)
+        try container.encode(currentAutoQuitAppRules, forKey: .autoQuitAppRules)
         try container.encode(autoQuitDelaySeconds, forKey: .autoQuitDelaySeconds)
     }
 }

@@ -7,6 +7,16 @@ public enum AppMetadataReader {
         public let displayName: String?
         public let bundleName: String?
         public let localizedNames: [String]
+        public let isUIElement: Bool
+        public let isBackgroundOnly: Bool
+    }
+
+    public static func readBool(from plist: [String: Any]?, key: String) -> Bool {
+        guard let val = plist?[key] else { return false }
+        if let b = val as? Bool { return b }
+        if let n = val as? NSNumber { return n.boolValue }
+        if let s = val as? String { return s == "1" || s.lowercased() == "true" }
+        return false
     }
 
     public static func read(appURL: URL) -> Metadata {
@@ -29,11 +39,16 @@ public enum AppMetadataReader {
 
         let displayName = plist?["CFBundleDisplayName"] as? String
         let bundleName = plist?["CFBundleName"] as? String
+        let isUIElement = readBool(from: plist, key: "LSUIElement")
+        let isBackgroundOnly = readBool(from: plist, key: "LSBackgroundOnly")
+
         return Metadata(
             bundleIdentifier: plist?["CFBundleIdentifier"] as? String,
             displayName: displayName,
             bundleName: bundleName,
-            localizedNames: localized
+            localizedNames: localized,
+            isUIElement: isUIElement,
+            isBackgroundOnly: isBackgroundOnly
         )
     }
 }

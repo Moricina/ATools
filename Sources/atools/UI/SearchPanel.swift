@@ -428,7 +428,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             resultsTable.updateResults([])
             setPanelExpanded(false, animated: true)
         } else {
-            PanelCoordinator.shared.hideAllPanels()
+            PanelCoordinator.shared.hideSearchPanel()
         }
     }
 
@@ -445,7 +445,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     }
 
     private func dismissSearchPanel() {
-        PanelCoordinator.shared.hideAllPanels()
+        PanelCoordinator.shared.hideSearchPanel()
         searchBar.text = ""
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)

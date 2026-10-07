@@ -972,15 +972,111 @@ if CommandLine.arguments.contains("--test") {
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .allApps, []) == true, "allApps mode watches unlisted regular apps")
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .allApps, ["com.apple.TextEdit"]) == false, "allApps mode treats rules as exclusions")
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, ["com.apple.TextEdit"]) == true, "onlyListed mode treats rules as inclusions")
+        TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, ["com.apple.textedit"]) == true, "onlyListed mode handles case-insensitive bundle IDs")
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, []) == false, "onlyListed mode ignores unlisted apps")
 
         // 零窗判定：AX 查询失败（nil）绝不能视为零窗，否则误杀
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(0) == true, "0 windows confirmed must schedule quit")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(nil) == false, "AX query failure must never count as zero windows")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(2) == false, "2 windows must not schedule quit")
+
+        // 双重权威校验（WindowServer 交叉保护）：
+        // 即使 AX 偶发报 0（如失焦、多虚拟桌面切换、临时浮层销毁），只要 WindowServer 确认有标准窗口，绝对不能退出！
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: 1) == false, "WindowServer has 1 window must protect app on focus loss")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: 0) == true, "Both AX and WindowServer 0 confirms window close")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: nil, windowServerCount: 0) == false, "AX failure must never quit even if WindowServer 0")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 1, windowServerCount: 1) == false, "Active running window must not quit")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: nil) == true, "AX 0 with unknown WindowServer falls back to quit")
         print("      ✓ AutoQuit config round-trip, legacy defaults & watch rules verified.")
     } catch {
         TestAssertions.expect(false, "AutoQuit diagnostics threw: \(error)")
+    }
+
+    // 12.1. Test Regular App Filtering & Dual AutoQuit Rules
+    print("[12.1] Testing allRegularApps UI filtering & dual AutoQuit rule lists...")
+    do {
+        // AppHotspotIndex regular apps filtering
+        let allApps = AppHotspotIndex.shared.allApps
+        let regularApps = AppHotspotIndex.shared.allRegularApps
+        TestAssertions.expect(!allApps.isEmpty, "allApps should not be empty")
+        TestAssertions.expect(!regularApps.isEmpty, "allRegularApps should not be empty")
+        TestAssertions.expect(regularApps.count <= allApps.count, "regularApps should be a subset of allApps")
+
+        // Exclusions verified: no prefPanes, no system-excluded daemons/Dock/Finder/Spotlight, no empty bundleIDs
+        for app in regularApps {
+            TestAssertions.expect(!app.path.hasSuffix(".prefPane"), "prefPanes must not be in regularApps: \(app.path)")
+            if let bid = app.bundleId {
+                TestAssertions.expect(!AutoQuitManager.systemExcludedBundleIDs.contains(bid), "System excluded app \(bid) must not be in regularApps")
+                TestAssertions.expect(bid != "cc.atools.app" && bid != "cc.atools.app.dev", "ATools itself must not be in regularApps")
+            } else {
+                TestAssertions.expect(false, "Regular app must have a valid bundleId: \(app.name)")
+            }
+        }
+
+        // Dual independent rules roundtrip & migration
+        var dualConfig = ConfigManager.shared.config
+        dualConfig.autoQuitExcludeAppRules = ["com.apple.Music"]
+        dualConfig.autoQuitOnlyListedAppRules = ["com.dingtalk.mac", "com.tencent.xinWeChat"]
+        let dualEncoded = try JSONEncoder().encode(dualConfig)
+        let dualDecoded = try JSONDecoder().decode(AtoolsConfig.self, from: dualEncoded)
+        TestAssertions.expect(dualDecoded.autoQuitExcludeAppRules == ["com.apple.Music"], "exclude rules must roundtrip independently")
+        TestAssertions.expect(dualDecoded.autoQuitOnlyListedAppRules == ["com.dingtalk.mac", "com.tencent.xinWeChat"], "onlyListed rules must roundtrip independently")
+        TestAssertions.expect(dualDecoded.rules(for: .allApps) == ["com.apple.Music"], "rules(for: .allApps) matches exclude list")
+        TestAssertions.expect(dualDecoded.rules(for: .onlyListed) == ["com.dingtalk.mac", "com.tencent.xinWeChat"], "rules(for: .onlyListed) matches onlyListed list")
+
+        // Legacy format migration
+        let legacyOnlyListedJSON = """
+        {"version":4,"autoQuitMode":"onlyListed","autoQuitAppRules":["com.dingtalk.mac"]}
+        """.data(using: .utf8)!
+        let migratedOnlyListed = try JSONDecoder().decode(AtoolsConfig.self, from: legacyOnlyListedJSON)
+        TestAssertions.expect(migratedOnlyListed.autoQuitOnlyListedAppRules == ["com.dingtalk.mac"], "Legacy rules under onlyListed mode must migrate to autoQuitOnlyListedAppRules")
+        TestAssertions.expect(migratedOnlyListed.autoQuitExcludeAppRules.isEmpty, "autoQuitExcludeAppRules remains empty on onlyListed legacy decode")
+
+        let legacyExcludeJSON = """
+        {"version":4,"autoQuitMode":"allApps","autoQuitAppRules":["com.apple.Safari"]}
+        """.data(using: .utf8)!
+        let migratedExclude = try JSONDecoder().decode(AtoolsConfig.self, from: legacyExcludeJSON)
+        TestAssertions.expect(migratedExclude.autoQuitExcludeAppRules == ["com.apple.Safari"], "Legacy rules under allApps mode must migrate to autoQuitExcludeAppRules")
+        TestAssertions.expect(migratedExclude.autoQuitOnlyListedAppRules.isEmpty, "autoQuitOnlyListedAppRules remains empty on allApps legacy decode")
+
+        print("      ✓ allRegularApps UI filtering & dual AutoQuit rule independence verified.")
+    } catch {
+        TestAssertions.expect(false, "Regular apps & dual rules diagnostic failed: \(error)")
+    }
+
+    // 12.2. Test PanelCoordinator: Pinned Shelf Resilience & Hotkey Isolation
+    print("[12.2] Testing PanelCoordinator pinned shelf resilience...")
+    do {
+        let coordinator = PanelCoordinator.shared
+        coordinator.isShelfPinned = true
+        coordinator.showShelfPanel()
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == true, "ShelfPanel should be visible after showShelfPanel")
+
+        // Activating search panel while shelf is pinned MUST NOT dismiss shelf
+        coordinator.showSearchPanel()
+        TestAssertions.expect(coordinator.searchPanel.isVisible == true, "SearchPanel should be visible after showSearchPanel")
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == true, "ShelfPanel MUST remain visible when search panel opens while pinned")
+
+        // Dismissing search panel MUST NOT dismiss shelf
+        coordinator.hideSearchPanel(restoreFocus: false, animated: false)
+        TestAssertions.expect(coordinator.searchPanel.isVisible == false, "SearchPanel should be hidden after hideSearchPanel")
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == true, "ShelfPanel MUST remain visible when search panel closes")
+
+        // General hideAllPanels (e.g. outside click or app switch) MUST NOT dismiss pinned shelf
+        coordinator.hideAllPanels(restoreFocus: false, animated: false, forceHidePinnedShelf: false)
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == true, "ShelfPanel MUST remain visible on default hideAllPanels")
+
+        // Explicit shelf toggle hotkey MUST be able to dismiss and reopen pinned shelf
+        coordinator.togglePanel(.shelf, animated: false)
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == false, "Shelf toggle hotkey MUST dismiss shelf even if pinned")
+
+        coordinator.togglePanel(.shelf, animated: false)
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == true, "Shelf toggle hotkey MUST reopen shelf")
+
+        // Cleanup
+        coordinator.hideShelfPanel(restoreFocus: false, animated: false, forceHidePinned: true)
+        coordinator.isShelfPinned = false
+        print("      ✓ Pinned shelf resilience & hotkey isolation verified.")
     }
 
     if TestAssertions.failures > 0 {

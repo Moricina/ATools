@@ -158,16 +158,38 @@ public final class PanelCoordinator {
         handleAutomaticDismissal(.appDeactivated)
     }
 
+    private var isAnyPanelShowing: Bool {
+        return (shelfPanelCreated && shelfPanel.isVisible) || (searchPanelCreated && searchPanel.isVisible)
+    }
+
     private var currentPanel: NSPanel? {
-        switch activePanel {
-        case .shelf: return shelfPanelCreated ? shelfPanel : nil
-        case .search: return searchPanelCreated ? searchPanel : nil
-        case nil: return nil
+        if searchPanelCreated && searchPanel.isVisible {
+            return searchPanel
+        }
+        if shelfPanelCreated && shelfPanel.isVisible {
+            return shelfPanel
+        }
+        return nil
+    }
+
+    private func recordPreviousFrontmostAppIfNeeded() {
+        if previousFrontmostApp == nil,
+           let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            previousFrontmostApp = frontmost
         }
     }
 
+    private func restoreFocusIfNeeded(restoreFocus: Bool) {
+        let settingsVisible = SettingsWindowController.isWindowVisible
+        if restoreFocus, !settingsVisible, NSApp.isActive,
+           let previous = previousFrontmostApp, !previous.isTerminated {
+            previous.activate(options: [])
+        }
+        previousFrontmostApp = nil
+    }
+
     private func handleAutomaticDismissal(_ reason: PanelDismissReason) {
-        guard let active = activePanel else { return }
         if reason == .windowResigned {
             // Another ATools-owned window, menu or sheet temporarily taking key
             // status is not an external focus loss. App/workspace notifications
@@ -177,18 +199,32 @@ public final class PanelCoordinator {
                 return
             }
         }
-        let decision = PanelDismissPolicy.shouldDismiss(
-            activePanel: active,
-            isShelfPinned: isShelfPinned,
-            autoCloseOnDeactivate: ConfigManager.shared.config.autoCloseOnDeactivate,
-            isDraggingActive: isDraggingActive,
-            hasModalWindow: NSApp.modalWindow != nil,
-            isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
-            isRightClickMenuOpen: isRightClickMenuOpen
-        )
-        runtimeLog("[Panel] autoDismiss reason=\(reason) panel=\(active) decision=\(decision)")
-        guard decision else { return }
-        hideAllPanels(restoreFocus: false)
+
+        // 如果全盘搜索可见，失焦时无条件收回全盘搜索
+        if searchPanelCreated && searchPanel.isVisible {
+            hideSearchPanel(restoreFocus: false)
+        }
+
+        // 如果应用抽屉可见：固定在桌面时受绝对保护，绝不响应失焦退出；未固定时遵循自动收起策略
+        if shelfPanelCreated && shelfPanel.isVisible {
+            if isShelfPinned {
+                runtimeLog("[Panel] autoDismiss(\(reason)) skipped: shelf is pinned to desktop")
+                return
+            }
+            let decision = PanelDismissPolicy.shouldDismiss(
+                activePanel: .shelf,
+                isShelfPinned: isShelfPinned,
+                autoCloseOnDeactivate: ConfigManager.shared.config.autoCloseOnDeactivate,
+                isDraggingActive: isDraggingActive,
+                hasModalWindow: NSApp.modalWindow != nil,
+                isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
+                isRightClickMenuOpen: isRightClickMenuOpen
+            )
+            runtimeLog("[Panel] autoDismiss reason=\(reason) panel=shelf decision=\(decision)")
+            if decision {
+                hideShelfPanel(restoreFocus: false)
+            }
+        }
     }
 
     /// 初始化时把面板固定按钮状态同步到当前配置值。
@@ -197,83 +233,191 @@ public final class PanelCoordinator {
         shelfPanel.shelfViewController.updatePinButtonState(isPinned: ConfigManager.shared.config.isShelfPinned)
     }
 
-    public func togglePanel(_ kind: PanelKind) {
-        if kind == .shelf && !ConfigManager.shared.config.enableShelfPanel { return }
-        if kind == .search && !ConfigManager.shared.config.enableSearchPanel { return }
+    public func showShelfPanel() {
+        guard ConfigManager.shared.config.enableShelfPanel else { return }
+        panelPresentationGeneration &+= 1
+        recordPreviousFrontmostAppIfNeeded()
 
-        let action = (activePanel == kind) ? "hide" : "show"
-        runtimeLog("[Panel] toggle \(kind): active=\(activePanel.map { String(describing: $0) } ?? "nil") -> \(action)")
-        if activePanel == kind {
-            hideAllPanels()
+        shelfPanel.prepareForDisplay()
+        positionPanelFollowMouse(shelfPanel)
+        animatePanelEntrance(shelfPanel)
+        NSApp.activate(ignoringOtherApps: true)
+        shelfPanel.makeKeyAndOrderFront(nil)
+        shelfPanel.orderFrontRegardless()
+        shelfPanel.makeKey()
+
+        activePanel = .shelf
+        installGlobalOutsideClickMonitor()
+    }
+
+    public func hideShelfPanel(restoreFocus: Bool = true, animated: Bool = true, forceHidePinned: Bool = false) {
+        guard shelfPanelCreated && shelfPanel.isVisible else { return }
+        if isShelfPinned && !forceHidePinned {
+            runtimeLog("[Panel] hideShelfPanel ignored: shelf is pinned to desktop")
+            return
+        }
+        panelPresentationGeneration &+= 1
+        let generation = panelPresentationGeneration
+        runtimeLog("[Panel] hideShelfPanel gen=\(generation) restoreFocus=\(restoreFocus) forceHidePinned=\(forceHidePinned)")
+
+        if activePanel == .shelf {
+            activePanel = (searchPanelCreated && searchPanel.isVisible) ? .search : nil
+        }
+
+        if animated {
+            animatePanelDismissal(shelfPanel, generation: generation)
         } else {
-            switchToPanel(kind)
+            shelfPanel.orderOut(nil)
+            resetPanelEntrance(shelfPanel)
+        }
+
+        if activePanel == nil {
+            stopGlobalOutsideClickMonitor()
+            restoreFocusIfNeeded(restoreFocus: restoreFocus)
+            MemoryGuardian.shared.onPanelsDidHide()
+        }
+    }
+
+    public func showSearchPanel() {
+        guard ConfigManager.shared.config.enableSearchPanel else { return }
+        panelPresentationGeneration &+= 1
+        recordPreviousFrontmostAppIfNeeded()
+
+        // 仅在抽屉未固定时收起抽屉；若抽屉已固定在桌面（isShelfPinned），绝不收起抽屉，两者在屏幕上优雅并存！
+        if !isShelfPinned && shelfPanelCreated && shelfPanel.isVisible {
+            hideShelfPanel(restoreFocus: false, animated: false)
+        }
+
+        AppHotspotIndex.shared.refreshIfStale()
+        searchPanel.prepareForDisplay()
+        positionPanelToScreenCenter(searchPanel)
+        animatePanelEntrance(searchPanel)
+        NSApp.activate(ignoringOtherApps: true)
+        searchPanel.makeKeyAndOrderFront(nil)
+        searchPanel.orderFrontRegardless()
+        searchPanel.makeKey()
+
+        activePanel = .search
+        installGlobalOutsideClickMonitor()
+    }
+
+    public func hideSearchPanel(restoreFocus: Bool = true, animated: Bool = true) {
+        guard searchPanelCreated && searchPanel.isVisible else { return }
+        panelPresentationGeneration &+= 1
+        let generation = panelPresentationGeneration
+        runtimeLog("[Panel] hideSearchPanel gen=\(generation) restoreFocus=\(restoreFocus)")
+
+        if activePanel == .search {
+            activePanel = (shelfPanelCreated && shelfPanel.isVisible) ? .shelf : nil
+        }
+
+        if animated {
+            animatePanelDismissal(searchPanel, generation: generation)
+        } else {
+            searchPanel.orderOut(nil)
+            resetPanelEntrance(searchPanel)
+        }
+
+        if activePanel == nil {
+            stopGlobalOutsideClickMonitor()
+            restoreFocusIfNeeded(restoreFocus: restoreFocus)
+            MemoryGuardian.shared.onPanelsDidHide()
+        } else if activePanel == .shelf {
+            if isShelfPinned {
+                restoreFocusIfNeeded(restoreFocus: restoreFocus)
+            }
+        }
+    }
+
+    public func togglePanel(_ kind: PanelKind, animated: Bool = true) {
+        switch kind {
+        case .shelf:
+            guard ConfigManager.shared.config.enableShelfPanel else { return }
+            let isVisible = shelfPanelCreated && shelfPanel.isVisible
+            runtimeLog("[Panel] toggle shelf: isVisible=\(isVisible)")
+            if isVisible {
+                hideShelfPanel(animated: animated, forceHidePinned: true)
+            } else {
+                showShelfPanel()
+            }
+        case .search:
+            guard ConfigManager.shared.config.enableSearchPanel else { return }
+            let isVisible = searchPanelCreated && searchPanel.isVisible
+            runtimeLog("[Panel] toggle search: isVisible=\(isVisible)")
+            if isVisible {
+                hideSearchPanel(animated: animated)
+            } else {
+                showSearchPanel()
+            }
         }
     }
 
     public func switchToPanel(_ target: PanelKind) {
         runtimeLog("[Panel] switchToPanel(\(target))")
-        if target == .shelf && !ConfigManager.shared.config.enableShelfPanel { return }
-        if target == .search && !ConfigManager.shared.config.enableSearchPanel { return }
-
-        panelPresentationGeneration &+= 1
-        if activePanel == nil,
-           let frontmost = NSWorkspace.shared.frontmostApplication,
-           frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier {
-            previousFrontmostApp = frontmost
-        }
-
-        // 1. Atomically order out any previously active panel (no overlap)
-        if let current = activePanel, current != target {
-            let panelToHide = (current == .shelf) ? shelfPanel : searchPanel
-            panelToHide.orderOut(nil)
-            activePanel = nil
-        }
         switch target {
-        case .shelf:
-            // Build content first so the entrance animation isn't stalled by data loading.
-            shelfPanel.prepareForDisplay()
-            // 鼠标跟随定位 + 多屏可见区域 Clamping
-            positionPanelFollowMouse(shelfPanel)
-            animatePanelEntrance(shelfPanel)
-            NSApp.activate(ignoringOtherApps: true)
-            shelfPanel.makeKeyAndOrderFront(nil)
-            shelfPanel.orderFrontRegardless()
-            // Liquid Glass 的 Metal 活跃着色器依赖窗口在本进程内处于 Key 状态。
-            // `.nonactivatingPanel` 保证不抢占其他 App 的前台焦点，这里显式 makeKey()
-            // 才能触发真正通透的玻璃材质，避免退回不透明的 inactive 灰底。
-            shelfPanel.makeKey()
-        case .search:
-            AppHotspotIndex.shared.refreshIfStale()
-            // Prepare for display (resets to 72pt height) before calculating screen anchor
-            searchPanel.prepareForDisplay()
-            positionPanelToScreenCenter(searchPanel)
-            animatePanelEntrance(searchPanel)
-            NSApp.activate(ignoringOtherApps: true)
-            searchPanel.makeKeyAndOrderFront(nil)
-            searchPanel.orderFrontRegardless()
-            searchPanel.makeKey()
+        case .shelf: showShelfPanel()
+        case .search: showSearchPanel()
         }
-
-        activePanel = target
-        installGlobalOutsideClickMonitor()
     }
 
-    /// Liquid-glass entrance: the panel condenses from scale 0.96 with a soft
-    /// fade into full clarity, then settles with a gentle rise.
-    ///
-    /// The scale runs as an explicit Core Animation on the content layer around its centre.
-    /// (A view-backed layer's anchorPoint is (0,0), so the previous affine transform grew
-    /// the panel out of its bottom-left corner.) The window frame is no longer animated:
-    /// NSWindow frame animation is timer-driven and re-lays-out the glass every step.
-    private func animatePanelEntrance(_ panel: NSPanel) {
-        panel.alphaValue = 0.0
-        let duration: CFTimeInterval = 0.26
-        let timing = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
+    public func hideAllPanels(restoreFocus: Bool = true, animated: Bool = true, forceHidePinnedShelf: Bool = false) {
+        panelPresentationGeneration &+= 1
+        let generation = panelPresentationGeneration
+        let wasShowingPanel = (shelfPanelCreated && shelfPanel.isVisible) || (searchPanelCreated && searchPanel.isVisible)
+        runtimeLog("[Panel] hideAllPanels wasShowing=\(wasShowingPanel) gen=\(generation) restoreFocus=\(restoreFocus) forceHidePinned=\(forceHidePinnedShelf)")
+        isDraggingActive = false
 
-        if let layer = panel.contentView?.layer {
-            let bounds = layer.bounds
-            let center = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
-            let scaled = CATransform3DScale(center, 0.96, 0.96, 1)
+        var panelsToHide: [NSPanel] = []
+        if searchPanelCreated && searchPanel.isVisible {
+            panelsToHide.append(searchPanel)
+        }
+        if shelfPanelCreated && shelfPanel.isVisible {
+            if !isShelfPinned || forceHidePinnedShelf {
+                panelsToHide.append(shelfPanel)
+            }
+        }
+
+        if panelsToHide.contains(where: { $0 === shelfPanel }) {
+            activePanel = nil
+        } else if shelfPanelCreated && shelfPanel.isVisible {
+            activePanel = .shelf
+        } else {
+            activePanel = nil
+        }
+
+        if activePanel == nil {
+            stopGlobalOutsideClickMonitor()
+        }
+
+        for panel in panelsToHide {
+            if animated {
+                animatePanelDismissal(panel, generation: generation)
+            } else {
+                panel.orderOut(nil)
+                resetPanelEntrance(panel)
+            }
+        }
+
+        restoreFocusIfNeeded(restoreFocus: restoreFocus)
+        if activePanel == nil {
+            MemoryGuardian.shared.onPanelsDidHide()
+        }
+    }
+
+    private func animatePanelEntrance(_ panel: NSPanel) {
+        let duration: TimeInterval = 0.16
+        let timing = CAMediaTimingFunction(controlPoints: 0.2, 0.0, 0.0, 1.0)
+
+        panel.alphaValue = 0.0
+
+        if let contentView = panel.contentView {
+            contentView.wantsLayer = true
+            guard let layer = contentView.layer else { return }
+
+            let bounds = contentView.bounds
+            let transform = CATransform3DIdentity
+            let scaleFactor: CGFloat = 0.96
+            let scaled = CATransform3DScale(transform, scaleFactor, scaleFactor, 1.0)
             let from = CATransform3DTranslate(scaled, -bounds.midX, -bounds.midY + 8, 0)
 
             let scale = CABasicAnimation(keyPath: "sublayerTransform")
@@ -296,46 +440,6 @@ public final class PanelCoordinator {
         panel.contentView?.layer?.removeAnimation(forKey: "atools.entrance")
         panel.contentView?.layer?.removeAnimation(forKey: "atools.dismiss")
         panel.alphaValue = 1.0
-    }
-
-    /// - Parameter restoreFocus: re-activate the app that was frontmost before the panel was
-    ///   summoned. Without this, dismissing with Esc left ATools (a window-less accessory app)
-    ///   active and keyboard input went nowhere until the user clicked another window.
-    public func hideAllPanels(restoreFocus: Bool = true, animated: Bool = true) {
-        panelPresentationGeneration &+= 1
-        let generation = panelPresentationGeneration
-        let wasShowingPanel = activePanel != nil
-        runtimeLog("[Panel] hideAllPanels wasShowing=\(wasShowingPanel) gen=\(panelPresentationGeneration + 1) restoreFocus=\(restoreFocus)")
-        isDraggingActive = false
-        stopGlobalOutsideClickMonitor()
-
-        var panelsToHide: [NSPanel] = []
-        // Only touch panels that exist; the lazy getters would otherwise build both panels.
-        if shelfPanelCreated {
-            panelsToHide.append(shelfPanel)
-        }
-        if searchPanelCreated {
-            panelsToHide.append(searchPanel)
-        }
-        activePanel = nil
-
-        for panel in panelsToHide where panel.isVisible {
-            if animated {
-                animatePanelDismissal(panel, generation: generation)
-            } else {
-                panel.orderOut(nil)
-                resetPanelEntrance(panel)
-            }
-        }
-
-        let settingsVisible = SettingsWindowController.isWindowVisible
-        if restoreFocus, wasShowingPanel, !settingsVisible, NSApp.isActive,
-           let previous = previousFrontmostApp, !previous.isTerminated {
-            previous.activate(options: [])
-        }
-        previousFrontmostApp = nil
-
-        MemoryGuardian.shared.onPanelsDidHide()
     }
 
     private func animatePanelDismissal(_ panel: NSPanel, generation: UInt) {
@@ -389,7 +493,7 @@ public final class PanelCoordinator {
     }
 
     private func handleOutsideInteraction() {
-        guard activePanel != nil else { return }
+        guard (shelfPanelCreated && shelfPanel.isVisible) || (searchPanelCreated && searchPanel.isVisible) else { return }
         if isDraggingActive || NSApp.modalWindow != nil { return }
         if isRightClickMenuOpen { return }
 
@@ -397,19 +501,32 @@ public final class PanelCoordinator {
         if let settingsFrame = SettingsWindowController.visibleWindowFrame, NSPointInRect(clickLoc, settingsFrame) {
             return
         }
-        guard let panel = currentPanel else { return }
-        // Use the visible content area (excluding transparent margins) to determine
-        // whether the click was truly outside the panel. The search panel has 14pt
-        // transparent margins around its content for the reveal animation.
-        let visibleFrame = (panel as? PanelVisibleFrameProviding)?.visiblePanelFrame ?? panel.frame
-        guard !NSPointInRect(clickLoc, visibleFrame) else { return }
-        // Delay one RunLoop iteration so that menu opening, drag initiation and
-        // other transient states have time to set their flags before we check.
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.activePanel != nil else { return }
-            if self.isDraggingActive || NSApp.modalWindow != nil { return }
-            if self.isRightClickMenuOpen { return }
-            self.handleAutomaticDismissal(.outsideClick)
+
+        // 若全盘搜索处于打开状态，点击搜索区域外部时仅收回搜索
+        if searchPanelCreated && searchPanel.isVisible {
+            let visibleFrame = (searchPanel as PanelVisibleFrameProviding).visiblePanelFrame
+            if !NSPointInRect(clickLoc, visibleFrame) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isRightClickMenuOpen { return }
+                    self.hideSearchPanel(restoreFocus: true)
+                }
+            }
+            return
+        }
+
+        // 仅应用抽屉可见时，若已固定在桌面，点击外部绝不收起；未固定时按外部点击收起
+        if shelfPanelCreated && shelfPanel.isVisible {
+            if isShelfPinned { return }
+            let visibleFrame = shelfPanel.frame
+            if !NSPointInRect(clickLoc, visibleFrame) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isRightClickMenuOpen { return }
+                    if self.isShelfPinned { return }
+                    self.hideShelfPanel(restoreFocus: true)
+                }
+            }
         }
     }
 

@@ -676,7 +676,7 @@ public final class ShelfGridView: NSView {
     }
 
     @objc private func contextCloseShelf() {
-        PanelCoordinator.shared.hideAllPanels()
+        PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
     }
 
     @objc private func itemClicked(_ sender: ShelfItemButton) {

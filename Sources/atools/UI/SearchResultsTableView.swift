@@ -263,7 +263,7 @@ public final class ContextualSearchTableView: NSTableView {
         if let owner = owner {
             owner.delegate?.searchResultsTableDidRequestDismiss(owner)
         } else {
-            PanelCoordinator.shared.hideAllPanels()
+            PanelCoordinator.shared.hideSearchPanel()
         }
     }
 
@@ -275,7 +275,7 @@ public final class ContextualSearchTableView: NSTableView {
         if let owner = owner {
             owner.delegate?.searchResultsTableDidRequestDismiss(owner)
         } else {
-            PanelCoordinator.shared.hideAllPanels()
+            PanelCoordinator.shared.hideSearchPanel()
         }
     }
 
@@ -287,7 +287,7 @@ public final class ContextualSearchTableView: NSTableView {
         if let owner = owner {
             owner.delegate?.searchResultsTableDidRequestDismiss(owner)
         } else {
-            PanelCoordinator.shared.hideAllPanels()
+            PanelCoordinator.shared.hideSearchPanel()
         }
     }
 
@@ -680,7 +680,7 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
                 let row = self.draggedRow ?? tableView.selectedRow
                 self.draggedRow = nil
                 guard row >= 0 && row < self.results.count else {
-                    PanelCoordinator.shared.hideAllPanels()
+                    PanelCoordinator.shared.hideSearchPanel()
                     return
                 }
                 self.delegate?.searchResultsTable(self, didCompleteDragResult: self.results[row])

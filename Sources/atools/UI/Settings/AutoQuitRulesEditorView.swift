@@ -15,6 +15,7 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
     private var apps: [IndexedApp] = []
     private var filtered: [IndexedApp] = []
     private var selectedBundleIDs: Set<String>
+    private let mode: AutoQuitMode
     private var isDataLoaded = false
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
@@ -25,11 +26,12 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         return NSSize(width: 470, height: 430)
     }
 
-    public override init(frame frameRect: NSRect) {
-        self.selectedBundleIDs = Set(ConfigManager.shared.config.autoQuitAppRules)
+    public init(frame frameRect: NSRect, mode: AutoQuitMode = ConfigManager.shared.config.autoQuitMode) {
+        self.mode = mode
+        self.selectedBundleIDs = Set(ConfigManager.shared.config.rules(for: mode))
         super.init(frame: frameRect)
 
-        switch ConfigManager.shared.config.autoQuitMode {
+        switch mode {
         case .allApps:
             hintLabel.stringValue = "勾选的应用将不会被自动退出（排除名单）。"
         case .onlyListed:
@@ -134,23 +136,23 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         guard !isDataLoaded else { return }
         isDataLoaded = true
         AppHotspotIndex.shared.refreshIfStale()
-        apps = AppHotspotIndex.shared.allApps
+        apps = AppHotspotIndex.shared.allRegularApps
         if apps.isEmpty {
             // 冷启动边缘：应用刚启动、索引首扫尚未完成。扫描结束后自动重载一次。
             AppHotspotIndex.shared.refreshIndex { [weak self] in
                 DispatchQueue.main.async {
                     guard let self = self, self.window != nil, self.apps.isEmpty else { return }
-                    self.apps = AppHotspotIndex.shared.allApps
+                    self.apps = AppHotspotIndex.shared.allRegularApps
                     self.rebuildFiltered()
                     self.tableView.reloadData()
-                    runtimeLog("[AutoQuit] rules data reloaded after index scan: \(self.filtered.count) apps")
+                    runtimeLog("[AutoQuit] rules data reloaded after index scan: \(self.filtered.count) regular apps")
                 }
             }
         }
         rebuildFiltered()
         tableView.reloadData()
         updateCountLabel()
-        runtimeLog("[AutoQuit] rules data loaded: \(filtered.count) apps")
+        runtimeLog("[AutoQuit] rules data loaded: \(filtered.count) regular apps")
     }
 
     private func rebuildFiltered() {
@@ -189,7 +191,7 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
     }
 
     @objc private func saveAndClose() {
-        ConfigManager.shared.updateAutoQuitRules(Array(selectedBundleIDs).sorted())
+        ConfigManager.shared.updateAutoQuitRules(Array(selectedBundleIDs).sorted(), for: mode)
         closeSheet()
     }
 

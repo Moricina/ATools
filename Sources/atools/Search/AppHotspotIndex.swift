@@ -11,12 +11,14 @@ public struct IndexedApp {
     public let lowercasedAliases: [String]
     public let pinyins: [String]
     public let pinyinAbbrs: [String]
+    public let isRegularApp: Bool
 
-    public init(name: String, localizedName: String, path: String, bundleId: String?, additionalAliases: [String] = []) {
+    public init(name: String, localizedName: String, path: String, bundleId: String?, isRegularApp: Bool = true, additionalAliases: [String] = []) {
         self.name = name
         self.localizedName = localizedName
         self.path = path
         self.bundleId = bundleId
+        self.isRegularApp = isRegularApp
 
         var allAliases = Set<String>()
         allAliases.insert(name)
@@ -159,11 +161,17 @@ public final class AppHotspotIndex {
                         }
 
                         let primaryLocalizedName = aliases.first ?? lsName ?? baseName
+                        let isCoreServicesDaemon = fullPath.contains("/System/Library/CoreServices") && !fullPath.contains("/System/Library/CoreServices/Applications")
+                        let isExcluded = metadata.bundleIdentifier.map { AutoQuitManager.systemExcludedBundleIDs.contains($0) || $0 == "cc.atools.app" || $0 == "cc.atools.app.dev" } ?? true
+                        let isPrefPane = fullPath.hasSuffix(".prefPane")
+                        let isRegular = !isPrefPane && !metadata.isUIElement && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
+
                         let indexed = IndexedApp(
                             name: baseName,
                             localizedName: primaryLocalizedName,
                             path: fullPath,
                             bundleId: metadata.bundleIdentifier,
+                            isRegularApp: isRegular,
                             additionalAliases: aliases
                         )
                         results.append(indexed)
@@ -210,12 +218,19 @@ public final class AppHotspotIndex {
         "NeteaseMusic": ["网易云音乐"]
     ]
 
-    /// 已安装应用的全量快照（锁内拷贝）。供设置页「关窗即退」名单编辑器等
-    /// 需要枚举全部应用的 UI 复用；刷新索引后需重新获取。
+    /// 已安装应用的全量快照（锁内拷贝）。供设置页等需要枚举全部应用的 UI 复用；刷新索引后需重新获取。
     public var allApps: [IndexedApp] {
         appsLock.lock()
         defer { appsLock.unlock() }
         return apps
+    }
+
+    /// 已安装标准 GUI 应用程序快照（剔除无面板后台 Agent、守护程序、偏好面板及系统排除项）。
+    /// 专供设置页「关窗即退」名单编辑器等仅面向标准窗口应用的 UI 使用。
+    public var allRegularApps: [IndexedApp] {
+        appsLock.lock()
+        defer { appsLock.unlock() }
+        return apps.filter { $0.isRegularApp }
     }
 
     public func search(_ query: String) -> [IndexedApp] {

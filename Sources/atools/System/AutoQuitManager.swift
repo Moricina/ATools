@@ -27,7 +27,7 @@ public final class AutoQuitManager {
     public static let shared = AutoQuitManager()
 
     /// 硬排除的系统应用：退出 Finder 会被 launchd 立即拉起，其余为常驻系统服务。
-    private static let systemExcludedBundleIDs: Set<String> = [
+    public static let systemExcludedBundleIDs: Set<String> = [
         "com.apple.finder",
         "com.apple.Spotlight",
         "com.apple.notificationcenterui",
@@ -47,6 +47,7 @@ public final class AutoQuitManager {
 
     private var watched: [pid_t: WatchedApp] = [:]
     private var pendingQuits: [pid_t: DispatchWorkItem] = [:]
+    private var terminatingPids: Set<pid_t> = []
     private var fallbackTimer: Timer?
     private var isRunning = false
     private var lock = os_unfair_lock()
@@ -82,6 +83,15 @@ public final class AutoQuitManager {
             guard let self = self,
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self.detach(pid: app.processIdentifier)
+        })
+        workspaceObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.didDeactivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self = self, self.isRunning,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self.checkAppWindowsOnDeactivate(app)
         })
         // 睡眠唤醒后其他应用的 AX 树可能整体失效，与 TrackpadGestureManager 一致地重建
         workspaceObservers.append(workspaceCenter.addObserver(
@@ -135,7 +145,7 @@ public final class AutoQuitManager {
     /// 配置（开关/模式/名单/延迟）变化后的全量重建。
     public func updateConfiguration() {
         assert(Thread.isMainThread)
-        startIfEnabled()
+        rebuild()
     }
 
     private func rebuild() {
@@ -161,8 +171,8 @@ public final class AutoQuitManager {
         guard let bid = bundleID, !bid.isEmpty else { return false }
         guard !systemExcludedBundleIDs.contains(bid) else { return false }
         switch mode {
-        case .allApps: return !rules.contains(bid)
-        case .onlyListed: return rules.contains(bid)
+        case .allApps: return !rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
+        case .onlyListed: return rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
         }
     }
 
@@ -170,6 +180,58 @@ public final class AutoQuitManager {
     /// 应用会在「最后一个窗口关闭」前就被误杀。
     public static func isConfirmedZeroWindowCount(_ count: Int?) -> Bool {
         return count == 0
+    }
+
+    /// 双重权威校验纯函数：结合 AX 窗口计数与 WindowServer 真实窗口层。
+    /// 当 WindowServer 显示仍有标准业务窗口时（如应用失焦、多虚拟桌面切换、第三方应用 AX 延迟响应），
+    /// 无论 AX 返回何值，均绝对不能视为零窗；只有双方均确认为零（或 WindowServer 确认无窗）才确诊。
+    public static func isConfirmedZeroWindowCount(axCount: Int?, windowServerCount: Int?) -> Bool {
+        // 1. 若 WindowServer 确认仍存在 >= 1 个标准窗口，绝不能判定为零窗！
+        // 这一步彻底防止了「用户未点最小化、仅切换应用/点击其他应用」导致的意外退出。
+        if let ws = windowServerCount, ws > 0 {
+            return false
+        }
+        // 2. 若 AX 查询失败（nil），状态未知，保守放行，决不误杀
+        guard let ax = axCount else {
+            return false
+        }
+        // 3. 只有两者均确认无标准窗口（AX 为 0 且 WindowServer 也为 0 或不可用但 AX 确证 0）才确诊
+        if ax == 0 {
+            if let ws = windowServerCount {
+                return ws == 0
+            }
+            return true
+        }
+        return false
+    }
+
+    /// WindowServer 层面标准应用窗口计数（Layer 0，屏幕可见，有效尺寸，排除离屏缓存与极小隐形辅助窗口）
+    public static func windowServerStandardWindowCount(for pid: pid_t) -> Int? {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        var count = 0
+        for w in list {
+            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
+            guard let layer = w[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
+                  let width = bounds["Width"] as? Double,
+                  let height = bounds["Height"] as? Double,
+                  width >= 80, height >= 60 else { continue }
+            if let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, !isOnScreen {
+                continue
+            }
+            count += 1
+        }
+        return count
+    }
+
+    /// 实例级别零窗确认：结合当前进程的 AX 查询与 WindowServer 计数
+    public static func isConfirmedZeroWindows(pid: pid_t, axCount: Int?) -> Bool {
+        let wsCount = windowServerStandardWindowCount(for: pid)
+        return isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount)
     }
 
     private func shouldAttach(_ app: NSRunningApplication) -> Bool {
@@ -198,9 +260,9 @@ public final class AutoQuitManager {
             attachLocked(app)
         }
 
-        // 兜底轮询：捕获不吐 AX 销毁事件的应用（部分 Electron/Java）。
-        // 仅扫 hadWindows 的应用，每 4s 一次 AX 查询，代价可忽略。
-        let timer = Timer(timeInterval: 4.0, target: self, selector: #selector(fallbackPoll), userInfo: nil, repeats: true)
+        // 兜底轮询：捕获不吐 AX 销毁事件的应用（部分 Electron/Java/CEF）。
+        // 仅扫 hadWindows 的应用，每 0.8s 一次轻量查询，代价可忽略，大幅削减轮询延时。
+        let timer = Timer(timeInterval: 0.8, target: self, selector: #selector(fallbackPoll), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         fallbackTimer = timer
         runtimeLog("[AutoQuit] Started; watching \(watched.count) regular app(s).")
@@ -216,6 +278,7 @@ public final class AutoQuitManager {
             work.cancel()
         }
         pendingQuits.removeAll()
+        terminatingPids.removeAll()
         for entry in watched.values {
             teardownObserver(entry.observer)
         }
@@ -236,6 +299,7 @@ public final class AutoQuitManager {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         cancelPendingQuitLocked(pid)
+        terminatingPids.remove(pid)
         if let entry = watched.removeValue(forKey: pid) {
             teardownObserver(entry.observer)
         }
@@ -260,6 +324,8 @@ public final class AutoQuitManager {
         if addErr != .success {
             runtimeLog("[AutoQuit] AddNotification(WindowCreated) failed for pid \(pid): error \(addErr.rawValue)")
         }
+        _ = AXObserverAddNotification(obs, axApp, kAXMainWindowChangedNotification as CFString, nil)
+        _ = AXObserverAddNotification(obs, axApp, kAXFocusedWindowChangedNotification as CFString, nil)
 
         var entry = WatchedApp(
             app: app,
@@ -270,16 +336,19 @@ public final class AutoQuitManager {
         )
         // 为现有窗口注册销毁通知；初始窗口数决定 hadWindows（零窗口应用绝不直接退出）
         let existing = axWindows(of: axApp)
-        if let list = existing {
-            entry.hadWindows = !list.isEmpty
+        let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+        if let list = existing, !list.isEmpty {
+            entry.hadWindows = true
             for window in list {
                 if AXObserverAddNotification(obs, window, kAXUIElementDestroyedNotification as CFString, nil) == .success {
                     entry.registeredWindowRefs.append(window)
                 }
             }
+        } else if let ws = wsCount, ws > 0 {
+            entry.hadWindows = true
         }
         watched[pid] = entry
-        let knownCount = existing.map { String($0.count) } ?? "unknown"
+        let knownCount = existing.map { String($0.count) } ?? (wsCount.map { "ws:\($0)" } ?? "unknown")
         runtimeLog("[AutoQuit] Watching \(app.localizedName ?? "pid \(pid)") (windows: \(knownCount))")
     }
 
@@ -291,55 +360,113 @@ public final class AutoQuitManager {
         guard isRunning, var entry = watched[pid] else { return }
 
         if notificationName == kAXWindowCreatedNotification as String {
+            terminatingPids.remove(pid)
             // 新窗口：注册其销毁通知；若窗口重新出现，取消挂起的退出
             if !entry.registeredWindowRefs.contains(where: { CFEqual($0, element) }) {
                 if AXObserverAddNotification(entry.observer, element, kAXUIElementDestroyedNotification as CFString, nil) == .success {
                     entry.registeredWindowRefs.append(element)
                 }
             }
-            if let count = axWindows(of: entry.axApp)?.count, count > 0 {
+            let axCount = axWindows(of: entry.axApp)?.count
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+            if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
                 entry.hadWindows = true
                 watched[pid] = entry
                 cancelPendingQuitLocked(pid)
             }
-        } else if notificationName == kAXUIElementDestroyedNotification as String {
+        } else if notificationName == kAXUIElementDestroyedNotification as String
+                    || notificationName == kAXMainWindowChangedNotification as String
+                    || notificationName == kAXFocusedWindowChangedNotification as String {
             guard entry.hadWindows else { return }
-            let count = axWindows(of: entry.axApp)?.count
-            if AutoQuitManager.isConfirmedZeroWindowCount(count) {
+            let axCount = axWindows(of: entry.axApp)?.count
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+            if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) {
                 scheduleQuitLocked(pid, app: entry.app)
-            } else if let c = count, c > 0 {
+            } else if axCount == 0 && (wsCount ?? 0) > 0 {
+                // AX 已确认无窗口，但 WindowServer 仍有标准窗口（处于淡出动画中）
+                if pendingQuits[pid] == nil && !terminatingPids.contains(pid) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                        self?.evaluateAppWindows(pid: pid)
+                    }
+                }
+            } else if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
                 cancelPendingQuitLocked(pid)
             }
-            // count == nil → AX 状态未知，跳过本轮判定
+        }
+    }
+
+    private func checkAppWindowsOnDeactivate(_ app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        // 立即检测一次，同时延后 0.15s 再检测一次，兼顾即时响应与复杂应用状态落定
+        evaluateAppWindows(pid: pid)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            self?.evaluateAppWindows(pid: pid)
+        }
+    }
+
+    private func evaluateAppWindows(pid: pid_t) {
+        assert(Thread.isMainThread)
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+
+        guard isRunning, var entry = watched[pid] else { return }
+        let axCount = axWindows(of: entry.axApp)?.count
+        let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+
+        // 补全启动时未建窗应用的 hadWindows 状态：只要检测到曾有窗口，就标记为 hadWindows
+        if !entry.hadWindows {
+            if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
+                entry.hadWindows = true
+                watched[pid] = entry
+            }
+            return
+        }
+
+        if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) {
+            scheduleQuitLocked(pid, app: entry.app)
+        } else if axCount == 0 && (wsCount ?? 0) > 0 {
+            if pendingQuits[pid] == nil && !terminatingPids.contains(pid) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                    self?.evaluateAppWindows(pid: pid)
+                }
+            }
+        } else if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
+            cancelPendingQuitLocked(pid)
         }
     }
 
     @objc private func fallbackPoll() {
-        os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
+        assert(Thread.isMainThread)
         guard isRunning else { return }
-        for (pid, entry) in watched where entry.hadWindows {
-            let count = axWindows(of: entry.axApp)?.count
-            if AutoQuitManager.isConfirmedZeroWindowCount(count) {
-                scheduleQuitLocked(pid, app: entry.app)
-            } else if let c = count, c > 0 {
-                cancelPendingQuitLocked(pid)
-            }
+        let pids: [pid_t] = {
+            os_unfair_lock_lock(&lock)
+            defer { os_unfair_lock_unlock(&lock) }
+            return Array(watched.keys)
+        }()
+        for pid in pids {
+            evaluateAppWindows(pid: pid)
         }
     }
 
     private func scheduleQuitLocked(_ pid: pid_t, app: NSRunningApplication) {
         guard watched[pid] != nil else { return }
         guard pendingQuits[pid] == nil else { return }
+        guard !terminatingPids.contains(pid) else { return }
 
-        let delay = max(0, min(10, ConfigManager.shared.config.autoQuitDelaySeconds))
+        let configuredDelay = max(0, min(10, ConfigManager.shared.config.autoQuitDelaySeconds))
+        let delaySeconds = Double(configuredDelay)
+
         let work = DispatchWorkItem { [weak self] in
             self?.executePendingQuit(pid: pid)
         }
         pendingQuits[pid] = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(delay), execute: work)
-        runtimeLog("[AutoQuit] Last window closed for \(app.localizedName ?? "pid \(pid)"); quitting in \(delay)s.")
+        if delaySeconds <= 0 {
+            DispatchQueue.main.async(execute: work)
+            runtimeLog("[AutoQuit] Last window closed for \(app.localizedName ?? "pid \(pid)"); quitting immediately (0s).")
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds, execute: work)
+            runtimeLog("[AutoQuit] Last window closed for \(app.localizedName ?? "pid \(pid)"); quitting in \(delaySeconds)s.")
+        }
     }
 
     /// 延迟到期后的复查：窗口确认仍为零、进程对象仍是同一个且未退出、
@@ -364,8 +491,15 @@ public final class AutoQuitManager {
             mode: cfg.autoQuitMode,
             rules: cfg.autoQuitAppRules
         ) else { return }
-        guard AutoQuitManager.isConfirmedZeroWindowCount(axWindows(of: entry.axApp)?.count) else { return }
+        
+        // 双重权威校验复核：AX 与 WindowServer 必须确诊零窗，绝不能误杀仍有窗口的应用
+        let axCount = axWindows(of: entry.axApp)?.count
+        guard AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) else {
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): windows still present (AX=\(axCount.map(String.init) ?? "nil"), WS=\(AutoQuitManager.windowServerStandardWindowCount(for: pid).map(String.init) ?? "nil")).")
+            return
+        }
 
+        terminatingPids.insert(pid)
         runtimeLog("[AutoQuit] Terminating \(app.localizedName ?? "pid \(pid)") after last window closed.")
         app.terminate()
     }

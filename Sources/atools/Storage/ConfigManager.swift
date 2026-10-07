@@ -422,8 +422,14 @@ public final class ConfigManager {
         NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
     }
 
-    public func updateAutoQuitRules(_ rules: [String]) {
-        self.config.autoQuitAppRules = rules
+    public func updateAutoQuitRules(_ rules: [String], for mode: AutoQuitMode? = nil) {
+        let targetMode = mode ?? self.config.autoQuitMode
+        switch targetMode {
+        case .allApps:
+            self.config.autoQuitExcludeAppRules = rules
+        case .onlyListed:
+            self.config.autoQuitOnlyListedAppRules = rules
+        }
         save()
         NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
     }

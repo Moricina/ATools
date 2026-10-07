@@ -556,7 +556,13 @@ public final class GeneralTabView: NSView {
             }?.offset ?? 2
             autoQuitDelayPopUp.selectItem(at: nearest)
         }
-        autoQuitRulesButton.title = "编辑名单 (\(cfg.autoQuitAppRules.count))..."
+        let currentRules = cfg.rules(for: cfg.autoQuitMode)
+        switch cfg.autoQuitMode {
+        case .allApps:
+            autoQuitRulesButton.title = "编辑排除名单 (\(currentRules.count))..."
+        case .onlyListed:
+            autoQuitRulesButton.title = "编辑退出名单 (\(currentRules.count))..."
+        }
 
         let trusted = HotkeyManager.isAccessibilityTrusted()
         autoQuitPermissionLabel.stringValue = trusted ? "已授权" : "未授权"
@@ -593,6 +599,7 @@ public final class GeneralTabView: NSView {
         let modes = AutoQuitMode.allCases
         guard modes.indices.contains(sender.indexOfSelectedItem) else { return }
         ConfigManager.shared.updateAutoQuitMode(modes[sender.indexOfSelectedItem])
+        refreshAutoQuitPage()
     }
 
     @objc private func autoQuitDelayChanged(_ sender: NSPopUpButton) {
@@ -613,18 +620,19 @@ public final class GeneralTabView: NSView {
             return
         }
         let t0 = Date()
+        let mode = ConfigManager.shared.config.autoQuitMode
         let sheet = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 470, height: 430),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        sheet.title = "AutoQuit 应用名单"
+        sheet.title = (mode == .allApps) ? "AutoQuit 排除名单" : "AutoQuit 退出名单"
         sheet.isReleasedWhenClosed = false
         sheet.contentMinSize = NSSize(width: 470, height: 430)
         sheet.contentMaxSize = NSSize(width: 470, height: 430)
         sheet.setContentSize(NSSize(width: 470, height: 430))
-        sheet.contentView = AutoQuitRulesEditorView(frame: NSRect(x: 0, y: 0, width: 470, height: 430))
+        sheet.contentView = AutoQuitRulesEditorView(frame: NSRect(x: 0, y: 0, width: 470, height: 430), mode: mode)
         let constructDone = Date()
         // 在 completion 闭包里强持有 sheet，endSheet 关闭后由 ARC 安全释放（不泄漏不悬垂）
         hostWindow.beginSheet(sheet) { _ in

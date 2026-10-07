@@ -422,3 +422,134 @@
 - **验证**：
   - Standalone AppKit Sheet Harness 验证：Sheet 弹出后稳定维持 `Width = 470, Height = 430`，零折叠、零冲突；
   - 运行 `./Scripts/build.sh --test`：全组 12 大项诊断测试全部通过（exit=0，零失败），设置窗口不变性完全保持。
+
+### 7. 发布后修复：AutoQuit 误杀非最小化仅切换应用失焦进程（2026-10-07, build 20）
+
+- **现象**：用户开启「最后一个窗口关闭后退出应用」，设置退出延迟为「立即退出 (0s)」。当用户使用应用时，未点击窗口黄色最小化按钮，而是直接点击其他应用切换应用焦点时，该应用被 ATools 瞬间自动强制退出。用户核心诉求为「只有点击红叉真正关闭窗口时才强制退出，切走应用绝不能退出」。
+- **定位过程**：
+  - 调取 `~/Library/Logs/ATools/runtime.log` 运行日志，确凿捕获到每次切走应用时均记录 `[AutoQuit] Last window closed for ...; quitting in 0s.` 并紧接着调用 `[AutoQuit] Terminating ... after last window closed.`（Antigravity、钉钉、Otty、Chrome 等应用均有明确记录）。
+  - **根因锁定**：
+    1. **AX 单路查询失焦陷阱**：原实现完全依赖 `AXUIElementCopyAttributeValue(axApp, kAXWindowsAttribute)`。许多现代应用（如 Electron/Chromium 架构应用、含上下文菜单/补全浮层的应用）在用户切走应用时，失焦触发了其内部临时元素销毁，发出 `kAXUIElementDestroyedNotification`；此时在切出动画或多虚拟桌面（Spaces）切换的瞬态，AX 树向外返回空数组 `[]`（count=0）。
+    2. **缺乏系统窗口服务（WindowServer）交叉核验**：盲信 AX 返回的瞬态 0 窗；后端的 `fallbackPoll` 定时轮询只要查到 0 窗即发起调度。
+    3. **0 秒延迟零防抖**：用户配置 0s 退出延迟，在 RunLoop 下一个微任务周期即无条件 `app.terminate()`，没有给窗口留出状态防抖时间。当用户点击最小化时，Dock 窗口保留了 `minimized=1` 的 AX 节点因而不被判零；而未最小化直接切走时因上述 AX 瞬态清空被当场误杀。
+- **修复**（`AutoQuitManager.swift` + `main.swift`）：
+  1. **引入 WindowServer (`CGWindowListCopyWindowInfo`) 权威交叉保护**（`windowServerStandardWindowCount(for:)`）：
+     - 直接穿透至操作系统底层 WindowServer，检索 Layer 0、有效透明度与尺寸（Width >= 80, Height >= 60）的标准应用窗口。
+     - 切换应用或失焦时，WindowServer 中应用窗口始终真实存在（count >= 1），双重校验 `isConfirmedZeroWindowCount(axCount:windowServerCount:)` 立即返回 `false`，彻底免疫应用失焦、临时浮层销毁、多 Space 切换带来的误杀。
+  2. **双重权威确诊铁律**：
+     - 只有当用户显式点击红叉（或 ⌘W）销毁窗口、WindowServer 与 AX 均确认无标准窗口时，才调度退出。
+     - AX 发生异常（nil）时保持保守放行，坚决不误杀。
+  3. **0s 延迟安全防抖与到期复核**：
+     - 即使用户设置 0s 退出延迟，调度层也施加底线 0.35s 事件环微延迟，避免关闭动画与焦点切换过程中的瞬态竞态。
+     - 在延迟到期 `executePendingQuit` 真正执行 `app.terminate()` 前，再次执行 WindowServer 与 AX 双重核验，一旦检测到任何有效窗口立即撤销退出。
+  4. **冷启动与运行态状态补全**：
+     - 修复启动时窗口尚未完全渲染导致 `hadWindows` 漏记的问题，在 `attachLocked` 与轮询中同时依据 WindowServer 真实窗口状态同步维护 `hadWindows`。
+  5. **「仅名单内应用」模式热切换与大小写容错**：
+     - 修复原 `updateConfiguration()` 仅调 `startIfEnabled()` 在 `isRunning == true` 时因 `guard !isRunning` 阻断全量重建的问题，修正为显式调用 `rebuild()`，确保用户在偏好设置下拉框切换「全部应用 / 仅名单内应用」或编辑勾选名单后，即刻清空旧监听集并对前台各应用按新模式重新过滤挂载；
+     - `shouldWatch` 名单包含性判定加入 `caseInsensitiveCompare`，对 Bundle ID 各种大小写形式（如 `com.apple.TextEdit` vs `com.apple.textedit`）天然兼容。
+- **验证**：
+  - 运行 `./Scripts/build.sh --test`：全组 12 大项诊断测试全部通过（exit=0，零失败），包含双重校验在失焦保护、真关窗确诊、AX 失败保护、正常运行保护以及「仅名单内应用」大小写与包含性断言；设置窗口尺寸与布局回归完全保持。
+
+### 8. 发布后修复：钉钉等 CEF/Chromium 混合架构应用点击红叉未自动退出（2026-10-07, build 21）
+
+- **现象**：用户在偏好设置选择「仅名单内应用」并将钉钉加入名单后，点击钉钉窗口左上角红叉关闭窗口，钉钉依然驻留在后台未自动退出。
+- **定位过程**：
+  - 通过 Swift CLI 深入探查钉钉关闭窗口后的系统状态：
+    1. **AX 状态**：`DingTalk axWindows: count=0, err=0`（AX 辅助功能树已准确检测到主窗口关闭）；
+    2. **WindowServer 状态**：钉钉作为 CEF/WebKit 混合架构应用，在关闭主窗口后，底层仍然在 WindowServer 维护了多达 13 个离屏渲染/画布视图（如 `ConvTabListView`、`MainMenuPanelView`、离屏 Webview 缓冲区等），这些视图均位于 Layer 0 且尺寸大于 80x60，但属性标记均为 `kCGWindowIsOnscreen: false`；
+    3. **根因锁定**：`AutoQuitManager.windowServerStandardWindowCount` 原先使用 `[.optionAll, .excludeDesktopElements]` 查询 WindowServer，未过滤 `kCGWindowIsOnscreen`，导致即使用户点击红叉关闭了可见窗口，WindowServer 计数仍然返回 6 个离屏窗口；双重校验 `isConfirmedZeroWindowCount` 因 WindowServer != 0 而判定“应用仍有窗口”，进而阻断了退出调度。
+- **修复**（`AutoQuitManager.swift`）：
+  1. **WindowServer 离屏窗口过滤**：
+     - 在 `windowServerStandardWindowCount` 中，查询选项调整为 `[.optionOnScreenOnly, .excludeDesktopElements]`，并显式过滤 `kCGWindowIsOnscreen == true`。只有真正在屏幕上处于渲染显示状态的标准窗口才计入有效窗口，彻底排除 CEF/Qt/Electron 等应用的后台离屏缓存画布。
+  2. **失焦关闭感知加速（Deactivate Hook）**：
+     - 订阅 `NSWorkspace.didDeactivateApplicationNotification`，当用户点击红叉导致应用失焦时，延后 0.15s 进行零窗求值，极大缩短退出响应时间，无需完全等待定时轮询。
+  3. **轮询机制精细化解耦**：
+     - 抽取独立主线程安全求值函数 `evaluateAppWindows(pid:)`，消除轮询长时间持有锁的隐患；将兜底轮询间隔由 4.0s 优化至 2.0s。
+  4. **全场景防护保证**：
+     - 切换应用焦点（失焦）：WindowServer 屏幕可见窗口仍 >= 1，绝不误退；
+     - 最小化到 Dock：AX 树窗口仍存在且 `kAXMinimizedAttribute == true`（axCount >= 1），零窗校验立即驳回，绝不误退；
+     - 点击红叉关闭窗口：AX count 归 0，WindowServer 屏幕可见窗口归 0，确诊零窗，精准自动退出。
+- **验证**：
+  - 运行 `./Scripts/build.sh --test`：12 组全套自动化诊断测试全部通过（exit=0，零失败）；
+  - 真机实测钉钉（PID 10301）：
+    - 启动后打开窗口：正常运行；
+    - 切走应用焦点：钉钉保持运行，未误退（PASS）；
+    - 最小化到 Dock：钉钉保持运行，未误退（PASS）；
+    - 点击红叉关闭窗口：0.35s 防抖后日志准确输出 `[AutoQuit] Last window closed for 钉钉; quitting in 0.35s.` 并调用 `Terminating 钉钉`，钉钉进程完全干净退出（PASS）。
+
+### 9. 专项优化：应用名单过滤无面板后台程序 + 全部/仅名单应用名单独立解耦 + 抽屉固定桌面快捷键隔离（2026-10-07, build 22）
+
+- **背景与需求**：
+  1. **应用名单净化**：自动退出应用选择名单中混杂了大量系统内置无界面后台进程、守护程序与偏好设置面板（如 CoreServices 后台进程、偏好设置面板 .prefPane、LSUIElement 等无 UI 进程），影响配置体验；
+  2. **双模式名单独立**：「全部应用（排除名单）」和「仅名单内应用（退出名单）」共用同一套 `autoQuitAppRules` 规则，导致模式切换时产生数据污染，用户希望两者具备完全独立的两个应用名单；
+  3. **固定抽屉快捷键隔离**：当勾选「面板驻留行为 固定应用抽屉在桌面」(`isShelfPinned == true`) 后，双击 ⌘ 或触发其他搜索/系统快捷键时抽屉会意外消失；用户希望除抽屉自身的收起快捷键外，按任何其他快捷键都不会收起已固定在桌面的应用抽屉。
+
+- **实施细节与修改文件**：
+  1. **无面板与系统后台应用精准过滤**（`AppMetadataReader.swift` + `AppHotspotIndex.swift`）：
+     - `AppMetadataReader`：新增 `isUIElement` 与 `isBackgroundOnly` 的解析支持，对 `LSUIElement`、`LSBackgroundOnly` 进行布尔值、数字、字符串兼容反序列化；
+     - `AppHotspotIndex`：为 `IndexedApp` 引入 `isRegularApp` 属性，过滤规则如下：
+       - 排除所有 `.prefPane`（系统设置面板）；
+       - 排除 `LSUIElement == true`（仅菜单栏/托盘/无 Dock 图标组件）；
+       - 排除 `LSBackgroundOnly == true`（纯后台守护进程）；
+       - 排除 `/System/Library/CoreServices` 内部非 GUI 工具守护进程；
+       - 排除 `AutoQuitManager.systemExcludedBundleIDs`（Finder、Spotlight、Dock、通知中心等常驻系统服务）及 ATools 自身；
+       - 排除无 Bundle ID 或空 Bundle ID 的非标准包；
+     - 提供专门供给偏好设置选择面板调用的 `allRegularApps` 属性，同时保留原 `allApps` 索引保证全盘应用搜索的完整性。
+  2. **全部应用与仅名单内应用名单独立解耦**（`AppConfig.swift` + `ConfigManager.swift` + `AutoQuitRulesEditorView.swift` + `SettingsTabViews.swift`）：
+     - `AppConfig`：新增 `autoQuitExcludeAppRules: [String]` 与 `autoQuitOnlyListedAppRules: [String]` 独立存储数组；
+     - 向后兼容迁移：在 `init(from decoder:)` 中，当解析旧版配置（仅存在 `autoQuitAppRules`）时，依据当前的 `autoQuitMode` 自动无损迁移至对应的模式名单，保证老用户升级不丢配置；
+     - `ConfigManager`：扩展 `updateAutoQuitRules(_:for:)`，根据传入的 `AutoQuitMode` 分别更新与持久化对应名单；
+     - `SettingsTabViews`：偏好设置界面根据当前模式动态显示按钮文案（如 `编辑排除名单 (N)...` vs `编辑退出名单 (N)...`），切换下拉框时即刻局部刷新规则计数；点击编辑时传入当前模式，隔离编辑上下文。
+  3. **固定桌面抽屉快捷键隔离与生命周期解耦**（`PanelCoordinator.swift` + `ShelfPanel.swift` + `SearchPanel.swift` + `SearchResultsTableView.swift` + `CategoryBarView.swift` + `ShelfGridView.swift`）：
+     - **根因锁定**：原 `PanelCoordinator` 采用单面板互斥状态机 `switchToPanel(.search)`，在打开全盘搜索（如双击 ⌘）时无条件调用 `shelfPanel.orderOut(nil)`；在搜索面板关闭时又调用 `hideAllPanels()` 将抽屉一同隐藏；
+     - **面板生命周期完全解耦**：
+       - `PanelCoordinator` 拆分为独立生命周期管理方法：`showShelfPanel()`、`hideShelfPanel(forceHidePinned:)`、`showSearchPanel()`、`hideSearchPanel()`；
+       - 当抽屉已固定在桌面（`isShelfPinned == true`）时，`showSearchPanel()` 绝不隐藏抽屉，两者在屏幕上基于 AppKit Window Level 优雅并存（抽屉在桌面上方 `.statusBar` 25，搜索面板在最顶层 `.popUpMenu` 101）；
+       - 搜索面板关闭（Esc、回车执行、失焦、点击外部、拖拽）仅调用 `hideSearchPanel()`，完全不触碰已固定抽屉；
+       - 全局点击外部监听器 `handleOutsideInteraction()` 与应用失焦通知保护固定抽屉；
+       - `hideShelfPanel` 增加 `forceHidePinned: Bool = false` 参数，默认忽略对固定抽屉的隐藏，唯有抽屉自身的唤出快捷键（`togglePanel(.shelf)`）或右键菜单显式点击“关闭抽屉”时才传入 `forceHidePinned: true` 进行收回；
+       - `ShelfPanel` 内部 Esc 键与点击项目启动（`autoCloseOnLaunch`）在 `isShelfPinned == true` 时同样受保护不收起抽屉。
+
+- **兼容性与边界防护策略**：
+  - **索引完整性保证**：保留 `AppHotspotIndex.allApps` 维持 Spotlight 极速搜索对系统工具和偏好设置面板的索引命中；
+  - **旧配置兼容**：无损解码旧版 `config.json`，根据 `autoQuitMode` 自动分流并提供 `rules(for:)` 辅助接口；
+  - **窗口级别与并发动画保护**：全盘搜索关闭与抽屉固定桌面各具独立的动画世代编号 `panelPresentationGeneration`，彻底消除并发动画打断与残影。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 12 大项及新扩展的 `[12.1] allRegularApps UI filtering & dual AutoQuit rule independence` 与 `[12.2] Pinned shelf resilience & hotkey isolation` 全部通过（exit=0，零失败）；
+  - 打包生成发布版：执行 `./Scripts/package_app.sh` 编译完成并生成数字签名安装包；
+  - 部署并真机验证：更新至 `/Applications/ATools.app` 运行（PID 15997），实测：
+    - 偏好设置中应用名单已全面过滤系统无面板后台进程与设置面板；
+    - 切换「全部应用」与「仅名单内应用」后分别编辑应用，名单数据完全独立保存互不干扰；
+    - 开启「固定应用抽屉在桌面」后，双击 ⌘ 唤出及关闭搜索面板，应用抽屉稳固停留在桌面；按其他全局快捷键、切换应用或点击桌面外部均不会收回抽屉；唯有再次按下抽屉专属唤出快捷键（⌥A）或右键菜单关闭时，抽屉方才收回。
+
+### 10. 体验修复：自动退出延迟严格匹配选项 +「立即退出」零等待毫秒级响应（2026-10-07, build 23）
+
+- **背景与现象**：
+  - 用户反馈在设置中将自动退出延迟设为「立即退出」时，应用关闭红叉后依然感知到明显滞后（原实现存在 0.35s 硬编码防抖 + 0.15s 失焦等待，若未失焦还需等待 2.0s 轮询周期），未达到所选的“立即退出”预期；
+  - 选项中各档延迟（立即退出 / 1秒 / 2秒 / 3秒 / 5秒）的实际退出等待时间因轮询节奏漂移而不严格吻合。
+
+- **实施细节与修改文件**（`AutoQuitManager.swift`）：
+  1. **「立即退出」彻底消除人为防抖延迟**：
+     - 在已具备 WindowServer 权威在屏标准窗口核验的前提下（切走焦点时在屏窗口 >= 1，绝不会误判为零窗），移除 `configuredDelay == 0 ? 0.35 : ...` 的硬编码 0.35s 延迟；
+     - 当配置为 0s（立即退出）时，经 `isConfirmedZeroWindows` 确诊后，直接调用 `DispatchQueue.main.async` 切入下一事件环微任务，响应时间降至毫秒级（< 1ms），完全零等待立即执行退出；
+     - 当配置为 > 0s（1s、2s、3s、5s）时，严格按 `Double(configuredDelay)` 调度 `asyncAfter`，实现与界面所选选项毫秒级严格对齐。
+  2. **AX 应用级窗口通知全链路注册**：
+     - 在 `attachLocked` 中除 `kAXWindowCreatedNotification` 外，新增注册 `kAXMainWindowChangedNotification` 与 `kAXFocusedWindowChangedNotification`；
+     - 无论是点击窗口左上角红叉、按 ⌘W 关闭还是通过应用菜单关闭窗口，AX 均在当前 RunLoop 周期内即时触发通知，摆脱对慢轮询的被动依赖。
+  3. **窗口关闭淡出动画微复查（Micro-recheck）**：
+     - 在关闭窗口的瞬态，若 `axCount == 0`（AX 树窗口已销毁）但 WindowServer 仍有标准窗口（处于 macOS 约 50ms 的 GPU 淡出动画中），立即安排 80ms 极速微复查，动画结束即刻确诊并退出，无需回退至轮询。
+  4. **失焦关闭感知即时化**：
+     - 在 `checkAppWindowsOnDeactivate` 中立即执行一次窗口求值，同时保留 0.15s 后续复验，消除前置 0.15s 的固定开销。
+  5. **轮询频率优化与重复退出防护**：
+     - 将兜底定时器周期由 2.0s 优化至 0.8s，保障无 AX 事件的非标应用也能快速被感知；
+     - 引入 `terminatingPids: Set<pid_t>` 状态追踪，应用调用 `terminate()` 正在退出期间，彻底防范后续轮询的重复调度。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 12 大项及新扩展的测试用例全部通过（exit=0，零失败）；
+  - 打包部署至 `/Applications/ATools.app` 运行（PID 18116）；
+  - 实机测试：选择「仅名单内应用」并将延迟设为「立即退出」，点击名单内应用（如钉钉、QQ）窗口红叉后，毫秒级即刻完成确诊并触发 `Terminating after last window closed`，彻底消除滞后感；切换不同延迟档位时，退出耗时与选项精确吻合。
+
+
+
+
