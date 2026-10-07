@@ -604,4 +604,10 @@ public final class ConfigManager {
         ThumbnailPipeline.shared.updateCostLimit(mb: clamped)
         save()
     }
+
+    public func updateSearchFilterOrder(_ order: [String]) {
+        self.config.searchFilterOrder = order
+        save()
+    }
 }
+

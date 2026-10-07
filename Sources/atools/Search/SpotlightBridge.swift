@@ -53,10 +53,18 @@ public final class SpotlightBridge {
         processLock.unlock()
     }
 
-    public func searchFiles(matching queryText: String, limit: Int = 60, completion: @escaping ([SearchResult]) -> Void) {
+    public func searchFiles(matching queryText: String, limit: Int = 60, filter: SearchTypeFilter = .all, completion: @escaping ([SearchResult]) -> Void) {
         let trimmed = queryText.trimmingCharacters(in: .whitespacesAndNewlines)
 
         guard !trimmed.isEmpty else {
+            DispatchQueue.main.async {
+                completion([])
+            }
+            return
+        }
+
+        if filter == .application {
+            // 应用分类直接由 Layer 1 AppHotspotIndex 闪电直出，跳过文件全盘检索
             DispatchQueue.main.async {
                 completion([])
             }
@@ -70,11 +78,14 @@ public final class SpotlightBridge {
         DispatchQueue.global(qos: .userInitiated).async {
             let snapshot = self.hotFilesSnapshot(waitingUpTo: 0.3)
 
-            // 热目录：先按匹配档位筛+排序（便宜），截取 limit 个后才补读最近打开时间
+            // 热目录：先按类型过滤和匹配档位筛+排序（便宜），截取 limit 个后才补读最近打开时间
             //（kMDItemLastUsedDate 每条约 0.3ms XPC），再算上新鲜度得最终分。
             var hotCandidates: [(file: HotFile, base: Int)] = []
             hotCandidates.reserveCapacity(64)
             for file in snapshot {
+                if filter != .all && !filter.matches(filename: file.name, isDirectory: file.isDirectory) {
+                    continue
+                }
                 var base = SearchRanking.nameTier(name: file.name, query: trimmed) ?? 0
                 let pinyin = SearchRanking.pinyinTier(pinyinFull: file.pinyinFull,
                                                       pinyinAbbr: file.pinyinAbbr,
@@ -110,7 +121,7 @@ public final class SpotlightBridge {
                 scope = .directories(self.hotFolderURLs())
             }
 
-            MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit, scope: scope) { metadataResults in
+            MetadataFileSearchBackend.shared.search(matching: trimmed, limit: limit, scope: scope, filter: filter) { metadataResults in
                 // 归并（方案 A）：热目录与全盘用同一套打分，按分数全局降序；
                 // 此前是拼接（热目录永远在前），全盘的精确命中会被热目录弱命中压住。
                 var merged: [SearchResult] = []

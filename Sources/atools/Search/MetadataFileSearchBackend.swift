@@ -46,7 +46,7 @@ public final class MetadataFileSearchBackend: NSObject {
     /// （对它们直接返回 NULL，历史 bug：全盘检索静默返回空）。只能用通配符形式：
     /// `kMDItemFSName == '*<text>*'cd`（c=忽略大小写 d=忽略变音符）。
     /// 查询串中的 `\ ' * ?` 是元字符/转义符，必须按字面量转义。
-    static func predicateText(matching text: String) -> String {
+    static func predicateText(matching text: String, filter: SearchTypeFilter = .all) -> String {
         var escaped = ""
         escaped.reserveCapacity(text.count + 4)
         for ch in text {
@@ -58,11 +58,16 @@ public final class MetadataFileSearchBackend: NSObject {
             default:   escaped.append(ch)
             }
         }
-        return "(kMDItemFSName == '*\(escaped)*'cd || kMDItemDisplayName == '*\(escaped)*'cd)"
+        let basePred = "(kMDItemFSName == '*\(escaped)*'cd || kMDItemDisplayName == '*\(escaped)*'cd)"
+        if let typePred = filter.mdQueryContentTypePredicate {
+            return "(\(basePred) && \(typePred))"
+        }
+        return basePred
     }
 
     public func search(matching text: String, limit: Int,
                        scope: ScopeTarget = .computer,
+                       filter: SearchTypeFilter = .all,
                        completion: @escaping ([SearchResult]) -> Void) {
         let searchID = UUID()
         idLock.lock()
@@ -74,7 +79,7 @@ public final class MetadataFileSearchBackend: NSObject {
             // Coalesce: a newer request arrived while this one was queued.
             guard self.isCurrent(searchID) else { return }
 
-            let results = self.execute(predicateText: text, limit: limit, scope: scope)
+            let results = self.execute(predicateText: text, limit: limit, scope: scope, filter: filter)
 
             // Drop results that were superseded while the query ran.
             guard self.isCurrent(searchID) else { return }
@@ -94,8 +99,8 @@ public final class MetadataFileSearchBackend: NSObject {
         return currentSearchID == id
     }
 
-    private func execute(predicateText text: String, limit: Int, scope: ScopeTarget) -> [SearchResult] {
-        let predicate = Self.predicateText(matching: text)
+    private func execute(predicateText text: String, limit: Int, scope: ScopeTarget, filter: SearchTypeFilter = .all) -> [SearchResult] {
+        let predicate = Self.predicateText(matching: text, filter: filter)
 
         guard let query = MDQueryCreate(kCFAllocatorDefault, predicate as CFString,
                                         Self.prefetchAttributes as CFArray, [] as CFArray) else {

@@ -573,6 +573,117 @@ if CommandLine.arguments.contains("--test") {
         try? fm.removeItem(at: extraDir)
     }
 
+    // 6.4 按文件类型搜索（SearchTypeFilter）回归：扩展名匹配、MDQuery 谓词解析、前缀提取与端到端协同
+    print("[6.4] Testing SearchTypeFilter (predicates, extensions, prefix parsing & coordinated filtering)...")
+    do {
+        // (a) 检查 8 类枚举与显示名称、SF Symbol
+        TestAssertions.expect(SearchTypeFilter.allCases.count == 8, "SearchTypeFilter 必须包含全部 8 个分类")
+        TestAssertions.expect(SearchTypeFilter.all.displayName == "全部", "全部显示名称为'全部'")
+        TestAssertions.expect(SearchTypeFilter.code.displayName == "代码", "代码显示名称为'代码'")
+        TestAssertions.expect(SearchTypeFilter.document.displayName == "文档", "文档显示名称为'文档'")
+
+        // (b) 检查前缀语法解析
+        let p1 = SearchTypeFilter.extractPrefix(from: "doc: 财报分析")
+        TestAssertions.expect(p1?.filter == .document && p1?.query == "财报分析", "前缀 'doc: 财报分析' 必须解析为 document 和 '财报分析'")
+        let p2 = SearchTypeFilter.extractPrefix(from: "#img app_icon")
+        TestAssertions.expect(p2?.filter == .image && p2?.query == "app_icon", "前缀 '#img app_icon' 必须解析为 image 和 'app_icon'")
+        let p3 = SearchTypeFilter.extractPrefix(from: "code: main.swift")
+        TestAssertions.expect(p3?.filter == .code && p3?.query == "main.swift", "前缀 'code: main.swift' 必须解析为 code 和 'main.swift'")
+        let p4 = SearchTypeFilter.extractPrefix(from: "纯文本无前缀")
+        TestAssertions.expect(p4 == nil, "普通输入不得误提取为前缀")
+
+        // (c) 检查 matches(filename:isDirectory:) 规则
+        TestAssertions.expect(SearchTypeFilter.all.matches(filename: "anything.xyz", isDirectory: false), ".all 匹配任何文件")
+        TestAssertions.expect(SearchTypeFilter.document.matches(filename: "report.pdf", isDirectory: false), ".document 匹配 .pdf")
+        TestAssertions.expect(SearchTypeFilter.document.matches(filename: "paper.docx", isDirectory: false), ".document 匹配 .docx")
+        TestAssertions.expect(SearchTypeFilter.document.matches(filename: "photo.png", isDirectory: false) == false, ".document 不匹配 .png")
+        TestAssertions.expect(SearchTypeFilter.image.matches(filename: "banner.webp", isDirectory: false), ".image 匹配 .webp")
+        TestAssertions.expect(SearchTypeFilter.code.matches(filename: "main.swift", isDirectory: false), ".code 匹配 .swift")
+        TestAssertions.expect(SearchTypeFilter.code.matches(filename: "script.ts", isDirectory: false), ".code 匹配 .ts")
+        TestAssertions.expect(SearchTypeFilter.code.matches(filename: "server.go", isDirectory: false), ".code 匹配 .go")
+        TestAssertions.expect(SearchTypeFilter.code.matches(filename: "lib.rs", isDirectory: false), ".code 匹配 .rs")
+        TestAssertions.expect(SearchTypeFilter.folder.matches(filename: "MyFolder", isDirectory: true), ".folder 匹配普通目录")
+        TestAssertions.expect(SearchTypeFilter.folder.matches(filename: "Safari.app", isDirectory: true) == false, ".folder 严禁匹配 .app 目录")
+        TestAssertions.expect(SearchTypeFilter.application.matches(filename: "Safari.app", isDirectory: true), ".application 匹配 .app")
+
+        // (d) 检查 MDQuery 谓词合法性（所有带 filter 的谓词必须能被 MDQueryCreate 成功解析）
+        for filter in SearchTypeFilter.allCases {
+            let pred = MetadataFileSearchBackend.predicateText(matching: "test", filter: filter)
+            var parsed = false
+            if let mq = MDQueryCreate(kCFAllocatorDefault, pred as CFString,
+                                      [kMDItemPath!] as CFArray, [] as CFArray) {
+                MDQuerySetSearchScope(mq, [kMDQueryScopeComputer!] as CFArray, 0)
+                parsed = MDQueryExecute(mq, CFOptionFlags(kMDQuerySynchronous.rawValue))
+            }
+            TestAssertions.expect(parsed, "带 filter '\(filter.rawValue)' 的 MDQuery 谓词必须可解析: \(pred)")
+        }
+
+        // (e) 检查 SearchCoordinator 端到端分类协同（应用直出 & 文件分类过滤）
+        var appHits: [SearchResult] = []
+        var appDone = false
+        SearchCoordinator.shared.search(query: "Safari", filter: .application) { r in
+            appHits = r
+            appDone = true
+        }
+        let appDl = Date().addingTimeInterval(0.5)
+        while !appDone && Date() < appDl {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        TestAssertions.expect(appHits.allSatisfy { $0.type == .application }, "application 筛选下的所有结果必须全为 application 类型")
+
+        print("      ✓ SearchTypeFilter（规则/谓词/前缀/端到端协同）全部验证通过.")
+    }
+
+    // 6.5 分类胶囊拖动排序与持久化回归：缺省容错、去重补全、编码往返与快捷键动态映射
+    print("[6.5] Testing search filter reordering (resolution, persistence, and shortcut alignment)...")
+    do {
+        // (a) 缺省解析
+        let defaultFilters = SearchTypeFilter.resolvedOrder(from: [])
+        TestAssertions.expect(defaultFilters.count == 8, "空输入必须平滑回退到默认 8 分类")
+        TestAssertions.expect(defaultFilters.first == .all, "默认首项必须为 .all")
+
+        // (b) 自定义顺序解析（含脏数据、重复项与未包含项补齐）
+        let customOrder = ["code", "document", "invalid_garbage", "code", "image"]
+        let resolved = SearchTypeFilter.resolvedOrder(from: customOrder)
+        TestAssertions.expect(resolved.count == 8, "脏数据去重后仍需补齐全部 8 分类且无重复")
+        TestAssertions.expect(resolved[0] == .code, "首项必须为 code")
+        TestAssertions.expect(resolved[1] == .document, "第二项必须为 document")
+        TestAssertions.expect(resolved[2] == .image, "第三项必须为 image")
+        TestAssertions.expect(Set(resolved).count == 8, "解析后的分类集合必须完整且唯一")
+
+        // (c) AtoolsConfig 序列化与持久化往返
+        let originalOrder = ConfigManager.shared.config.searchFilterOrder
+        let testOrder = ["folder", "archive", "code", "all", "document", "image", "audio", "application"]
+        ConfigManager.shared.updateSearchFilterOrder(testOrder)
+        TestAssertions.expect(ConfigManager.shared.config.searchFilterOrder == testOrder, "内存配置必须即时更新")
+
+        if let data = try? JSONEncoder().encode(ConfigManager.shared.config),
+           let decoded = try? JSONDecoder().decode(AtoolsConfig.self, from: data) {
+            TestAssertions.expect(decoded.searchFilterOrder == testOrder, "searchFilterOrder 必须能完整 JSON 往返")
+        } else {
+            TestAssertions.expect(false, "配置编码/解码不得失败")
+        }
+
+        // (d) SearchFilterBarView 胶囊排列与 ⌘1~8 / Tab 视觉顺序动态对齐
+        let bar = SearchFilterBarView()
+        bar.loadPills(from: ["code", "document", "all"])
+        TestAssertions.expect(bar.orderedFilters[0] == .code, "第一张胶囊必须为 code")
+        TestAssertions.expect(bar.orderedFilters[1] == .document, "第二张胶囊必须为 document")
+        TestAssertions.expect(bar.orderedFilters[2] == .all, "第三张胶囊必须为 all")
+
+        bar.selectFilter(number: 1)
+        TestAssertions.expect(bar.selectedFilter == .code, "⌘1 必须动态选中当前第一张胶囊 (code)")
+        bar.selectFilter(number: 2)
+        TestAssertions.expect(bar.selectedFilter == .document, "⌘2 必须动态选中当前第二张胶囊 (document)")
+        bar.cycleFilter(forward: true)
+        TestAssertions.expect(bar.selectedFilter == .all, "Tab 顺次切换必须选中第三张胶囊 (all)")
+
+        // 恢复原配置
+        ConfigManager.shared.updateSearchFilterOrder(originalOrder)
+        print("      ✓ 分类胶囊排序（容错补齐/持久化往返/快捷键动态对齐）通过.")
+    }
+
+
     var coordinatorResults: [SearchResult] = []
     var isCoordDone = false
     SearchCoordinator.shared.search(query: "999生僻词测试XYZ") { results in

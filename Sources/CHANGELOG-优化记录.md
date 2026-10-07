@@ -661,3 +661,69 @@
     - 微信、钉钉、QQ 等已关窗单窗口应用在屏标准窗口数由 2/1/3 精准归零（`on-screen standard window count: 0`）；
     - 活跃应用（如 Chrome、Antigravity）标准窗口数精准识别为 1；
     - 内存与 CPU 负载极度平稳，彻底根除主线程挂起与无限重试卡死隐患。
+
+### 14. 全局搜索支持按文件类型筛选与快捷切换 (2026-10-07, build 27)
+
+- **背景与需求目标**：
+  - 用户反馈在全局搜索时，往往只想快速定位特定类型的资产（如某份 PDF 报告、设计切图 PNG、某段源代码脚本等），通用模糊搜索常被大量同名应用、配置缓存或无关文件淹没；
+  - 需求目标：引入原生液态玻璃文件类型筛选条，支持 8 大分类即时切换、键盘极客流快捷键（Tab / ⌘1~8）与前缀语法（如 `doc: report`）联动，且保持 0 毫秒级性能无衰退。
+
+- **实施细节与涉及文件**：
+  1. **新建数据模型 `SearchTypeFilter.swift`**（`Sources/atools/Models/SearchTypeFilter.swift`）：
+     - 定义 8 大标准分类枚举：`.all`（全部）、`.application`（应用）、`.document`（文档）、`.image`（图片）、`.media`（媒体）、`.code`（代码）、`.archive`（压缩包）、`.folder`（文件夹）；
+     - 配置对应的 SF Symbol 图标、快捷数字编号（1~8）及典型扩展名映射表；
+     - 针对 CoreServices `MDQuery` 生成底层下推 ContentType 谓词；特别针对现代编程语言（`.ts`, `.go`, `.rs`, `.json`, `.yaml`, `.css` 等）加入扩展名通配补充，彻底规避原生 macOS UTType 脱节导致现代语言搜不到的缺陷；
+     - 提供 `matches(filename:isDirectory:)` 内存判定（严格排除 `.app` 目录落入 `.folder`）以及 `extractPrefix(from:)` 前缀语法解析。
+  2. **新建液态玻璃筛选条 `SearchFilterBarView.swift`**（`Sources/atools/UI/SearchFilterBarView.swift`）：
+     - 高度为 28pt，采用与主界面一致的液态玻璃微光圆角胶囊视觉；
+     - 所有胶囊按钮显式声明 `refusesFirstResponder = true`，鼠标点击切换分类时绝对不抢夺搜索框焦点；
+     - 支持 `cycleFilter(forward:)` 循环轮转及 `selectFilter(number:)` 快捷直达；
+     - 完美适配浅色/深色液态玻璃主题。
+  3. **检索下推与协同改造**：
+     - `MetadataFileSearchBackend.swift`：`predicateText` 与 `search` 接收 `SearchTypeFilter`，在 macOS 内核索引数据库层直接下推过滤；
+     - `SpotlightBridge.swift`：在热目录快照中增加 \(O(1)\) 内存类型过滤（耗时 < 0.05ms）；当选择 `.application` 时直接跳过 Layer 2 MDQuery，规避 `.app` 排除逻辑冲突；
+     - `SearchCoordinator.swift`：接收 `filter` 参数。当筛选特定文件类型时，Layer 1 自动抑制计算器与系统指令噪声；当筛选 `.application` 时，Layer 1 `AppHotspotIndex` 独占输出上限提升至 `searchResultLimit`，实现 0ms 闪电直出与拼音首字母检索。
+  4. **搜索面板集成与键盘事件捕获**（`SearchPanel.swift`、`SearchBarView.swift`）：
+     - `SearchViewController` 嵌入 `SearchFilterBarView`，展开态约束锚定 `filterBar.bottomAnchor`，自适应伸缩结果列表高度，严格维持窗口总高 520pt 与折叠高 72pt 不变量；
+     - `SearchTextField.performKeyEquivalent` 拦截 `Tab` / `Shift+Tab`（keyCode 48）与 `⌘1`~`⌘8`，在非 markedText 状态下切换分类，且具备完整的输入法（IME）拼音输入保护；
+     - 输入前缀语法（如 `code: app`）时自动高亮对应胶囊；按 `Esc` 键时若当前非 `.all` 分类则优先复位为 `.all`。
+  5. **诊断测试套件扩充**（`Sources/atools/main.swift`）：
+     - 新增 `[6.4] Testing SearchTypeFilter`：全量覆盖 8 大分类映射、前缀解析、热目录判定规则、MDQuery 谓词解析合法性以及端到端协调过滤断言。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试与诊断套件全部 PASS（exit=0，零失败）；
+  - 实测验证：
+    - 展开态（520pt）与折叠态（72pt）截图对比完美（`/tmp/search_expanded_preview.png` 与 `/tmp/search_collapsed_preview.png`）；
+    - 分类胶囊无缝切换，前缀语法识别顺畅，输入法拼音选词与输入焦点稳固。
+
+### 15. 全局搜索分类胶囊支持长按拖动实时重排与配置持久化 (2026-10-07, build 28)
+
+- **背景与需求目标**：
+  - 用户反馈：“能否长按拖动调节分类胶囊的顺序呢”；
+  - 需求目标：允许用户根据个人高频使用习惯（如开发者常查代码/文件、文字工作者常查文档/图片）在搜索筛选栏自由拖拽调整分类胶囊的排列顺序；拖拽时提供流畅无抖动的实时位移反馈；排序结果自动写入用户配置持久化保存；同时使极客流快捷键（`Tab` / `Shift+Tab` 轮转以及 `⌘1`~`⌘8` 数字直达）与当前屏幕视觉排列顺序保持动态对齐。
+
+- **实施细节与涉及文件**：
+  1. **数据模型扩展与容错补齐**（`Sources/atools/Models/SearchTypeFilter.swift`）：
+     - 新增 `defaultOrderStrings` 提供默认 8 分类原始标识符；
+     - 新增 `resolvedOrder(from storedStrings: [String]) -> [SearchTypeFilter]` 解析算法：支持向下兼容、脏数据自动剔除、重复项去重，并对未包含的合法分类按默认相对位置平滑补齐在末尾，确保无论用户配置如何变动，系统始终维持完整、无损的 8 分类视图。
+  2. **配置持久化与管理器对接**（`Sources/atools/Models/AppConfig.swift` & `Sources/atools/Storage/ConfigManager.swift`）：
+     - 在 `AtoolsConfig` 中新增 `searchFilterOrder: [String]` 属性，初始化及解码器内置 `SearchTypeFilter.defaultOrderStrings` 安全兜底；
+     - `ConfigManager` 新增 `updateSearchFilterOrder(_ order: [String])` 方法，修改后自动通过 `save()` 异步防抖写回 `config.json`。
+  3. **液态玻璃胶囊拖拽源交互**（`Sources/atools/UI/SearchFilterBarView.swift` 中的 `SearchFilterPillButton`）：
+     - 遵循 `NSDraggingSource` 协议，维持 `refusesFirstResponder = true`，鼠标拖拽全过程绝不抢夺搜索框输入焦点；
+     - 手势判别：`mouseDown` 记录坐标并给予 `0.82` 微透明轻点反馈；若鼠标位移超过 4pt 即刻启动系统拖拽会话（`beginDraggingSession`）并将胶囊半透明虚化（alpha 0.35）；若位移未超阈值且在按钮内抬起，则精准触发常规分类选中点击；
+     - 自动抓取按钮图层生成高清矢量位图快照（`createDragSnapshot`），悬浮跟随光标。
+  4. **筛选栏目标区域实时重排与恢复机制**（`SearchFilterBarView`）：
+     - 注册 `cc.atools.filterPillReorder` 自定义拖拽剪贴板标识；
+     - `draggingUpdated` 依据光标在筛选栏内的 X 轴投影计算实时插入索引，排除自身后的 `others` 参照比较确保位移动画零颤抖；
+     - 利用 `NSAnimationContext.runAnimationGroup` 驱动 `NSStackView` 顺滑滑移；
+     - 拖拽取消（如松开在窗口外或按 Esc）通过 `restoreOrder` 毫秒级恢复拖拽前原始顺序；拖拽成功投放（`performDragOperation`）时立即提取当前排列并保存至 `ConfigManager`。
+  5. **快捷键动态视觉对齐**：
+     - 重构 `SearchFilterBarView.cycleFilter` 与 `selectFilter(number:)`：废弃此前固定的静态枚举遍历，全面绑定动态 `orderedFilters`；
+     - 用户将“代码”拖至第一位后，`⌘1` 即可直达“代码”筛选，`Tab` 键自左向右严格沿视觉流动切换，符合直觉。
+  6. **回归诊断测试扩展**（`Sources/atools/main.swift`）：
+     - 新增 `[6.5] Testing search filter reordering`：包含空数据默认回退、脏数据容错去重与补齐、`AtoolsConfig` 序列化往返、`SearchFilterBarView` 动态排列加载及 `⌘1~8` / `Tab` 快捷键动态映射断言。
+
+- **验证与测试**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试与诊断套件全部 PASS（exit=0，零失败）；
+  - 执行 `./Scripts/package_app.sh`：签名及 release 构建通过；已成功部署并替换至 `/Applications/ATools.app`（PID 65871）。

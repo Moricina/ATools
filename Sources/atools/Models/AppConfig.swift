@@ -266,6 +266,7 @@ public struct AtoolsConfig: Codable {
     /// 用户自定义热目录（绝对路径）。仅进内存快照（深度3层、每目录上限25,000条），
     /// 不影响全盘检索范围；卸载的卷会保留在配置里，重新挂载后自动生效。
     public var extraHotFolders: [String]
+    public var searchFilterOrder: [String]
 
     // 关窗即退 (AutoQuit)：最后一个窗口关闭后延迟退出应用
     public var enableAutoQuit: Bool
@@ -328,6 +329,7 @@ public struct AtoolsConfig: Codable {
         searchDebounceMs: Int = 150,
         thumbnailCacheLimitMB: Int = 6,
         extraHotFolders: [String] = [],
+        searchFilterOrder: [String] = SearchTypeFilter.defaultOrderStrings,
         enableAutoQuit: Bool = false,
         autoQuitMode: AutoQuitMode = .allApps,
         autoQuitAppRules: [String]? = nil,
@@ -366,6 +368,7 @@ public struct AtoolsConfig: Codable {
         self.searchDebounceMs = searchDebounceMs
         self.thumbnailCacheLimitMB = thumbnailCacheLimitMB
         self.extraHotFolders = extraHotFolders
+        self.searchFilterOrder = searchFilterOrder
         self.enableAutoQuit = enableAutoQuit
         self.autoQuitMode = autoQuitMode
         if let legacy = autoQuitAppRules {
@@ -392,7 +395,7 @@ public struct AtoolsConfig: Codable {
         case isShelfPinned
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
-        case extraHotFolders
+        case extraHotFolders, searchFilterOrder
         case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
@@ -435,6 +438,7 @@ public struct AtoolsConfig: Codable {
         self.searchDebounceMs = (try? container.decode(Int.self, forKey: .searchDebounceMs)) ?? 150
         self.thumbnailCacheLimitMB = (try? container.decode(Int.self, forKey: .thumbnailCacheLimitMB)) ?? 6
         self.extraHotFolders = (try? container.decode([String].self, forKey: .extraHotFolders)) ?? []
+        self.searchFilterOrder = (try? container.decode([String].self, forKey: .searchFilterOrder)) ?? SearchTypeFilter.defaultOrderStrings
 
         // AutoQuit: 缺字段落到安全默认（总开关关闭）；老配置向下兼容迁移
         self.enableAutoQuit = (try? container.decode(Bool.self, forKey: .enableAutoQuit)) ?? false
@@ -513,6 +517,7 @@ public struct AtoolsConfig: Codable {
         try container.encode(searchDebounceMs, forKey: .searchDebounceMs)
         try container.encode(thumbnailCacheLimitMB, forKey: .thumbnailCacheLimitMB)
         try container.encode(extraHotFolders, forKey: .extraHotFolders)
+        try container.encode(searchFilterOrder, forKey: .searchFilterOrder)
         try container.encode(enableAutoQuit, forKey: .enableAutoQuit)
         try container.encode(autoQuitMode, forKey: .autoQuitMode)
         try container.encode(autoQuitExcludeAppRules, forKey: .autoQuitExcludeAppRules)

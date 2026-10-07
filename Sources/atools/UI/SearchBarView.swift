@@ -9,6 +9,8 @@ public protocol SearchBarDelegate: AnyObject {
     func searchBarDidPressEscape(_ searchBar: SearchBarView)
     func searchBarDidPressCopyPath(_ searchBar: SearchBarView)
     func searchBarDidPressRevealInFinder(_ searchBar: SearchBarView)
+    func searchBarDidRequestCycleFilter(_ searchBar: SearchBarView, forward: Bool)
+    func searchBar(_ searchBar: SearchBarView, didRequestSelectFilterNumber number: Int)
 }
 
 public final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
@@ -80,6 +82,19 @@ public final class SearchTextField: NSTextField {
                 return super.performKeyEquivalent(with: event)
             }
             customDelegate?.searchBarDidPressCopyPath(parent)
+            return true
+        }
+
+        // 3. Tab / Shift + Tab (切换文件类型筛选)
+        if event.keyCode == 48 { // Tab
+            let isShift = event.modifierFlags.contains(.shift)
+            customDelegate?.searchBarDidRequestCycleFilter(parent, forward: !isShift)
+            return true
+        }
+
+        // 4. Command + 1~8 (快捷选择分类)
+        if isCmd && !isOpt, let chars = event.charactersIgnoringModifiers, let num = Int(chars), (1...8).contains(num) {
+            customDelegate?.searchBar(parent, didRequestSelectFilterNumber: num)
             return true
         }
 

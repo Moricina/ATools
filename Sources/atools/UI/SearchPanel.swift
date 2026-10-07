@@ -18,12 +18,13 @@ public final class FlippedView: NSView {
     }
 }
 
-public final class SearchViewController: NSViewController, SearchBarDelegate, SearchResultsTableDelegate {
+public final class SearchViewController: NSViewController, SearchBarDelegate, SearchResultsTableDelegate, SearchFilterBarDelegate {
     public static let collapsedHeight: CGFloat = 72
     public static let expandedHeight: CGFloat = 520
 
     public let searchBar = SearchBarView()
     internal let searchBarOverlayView = NSView()
+    public let filterBar = SearchFilterBarView()
     public let resultsTable = SearchResultsTableView()
     private let hintsBar = NSTextField(labelWithString: "")
 
@@ -45,6 +46,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         super.viewDidLoad()
         searchBar.delegate = self
         searchBar.textField.customDelegate = self
+        filterBar.delegate = self
         resultsTable.delegate = self
 
         // When the panel becomes key, AppKit may resolve its inherited
@@ -79,13 +81,14 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
 
     private func setupLayout() {
         searchBar.translatesAutoresizingMaskIntoConstraints = false
+        filterBar.translatesAutoresizingMaskIntoConstraints = false
         resultsTable.translatesAutoresizingMaskIntoConstraints = false
         hintsBar.translatesAutoresizingMaskIntoConstraints = false
 
         hintsBar.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         updateHintsColor()
         hintsBar.alignment = .right
-        hintsBar.stringValue = "⌘C 复制路径   ⌘R 访达显示   ⏎ 打开   Esc 退出"
+        hintsBar.stringValue = "Tab 分类   ⌘1-8 直达   ⌘C 路径   ⌘R 访达   ⏎ 打开   Esc 退出"
 
         // The capsule lives in its own transparent overlay so it can stay
         // visible while the blurred backdrop is faded out when collapsed.
@@ -106,6 +109,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             searchBar.bottomAnchor.constraint(equalTo: searchBarOverlayView.bottomAnchor)
         ])
 
+        view.addSubview(filterBar)
         view.addSubview(resultsTable)
         view.addSubview(hintsBar)
 
@@ -118,9 +122,12 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
 
         // 展开态约束：仅在展开到 520pt 时激活
         expandedConstraints = [
-            // Tight gap: results emerge right under the search text instead of
-            // floating in a visibly empty band (10pt looked too airy).
-            resultsTable.topAnchor.constraint(equalTo: searchBarOverlayView.bottomAnchor, constant: 2),
+            filterBar.topAnchor.constraint(equalTo: searchBarOverlayView.bottomAnchor, constant: 4),
+            filterBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.sheetInset + 4),
+            filterBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -(Self.sheetInset + 4)),
+            filterBar.heightAnchor.constraint(equalToConstant: 28),
+
+            resultsTable.topAnchor.constraint(equalTo: filterBar.bottomAnchor, constant: 4),
             resultsTable.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: Self.sheetInset + 2),
             resultsTable.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -(Self.sheetInset + 2)),
             resultsTable.bottomAnchor.constraint(equalTo: hintsBar.topAnchor, constant: -4),
@@ -132,8 +139,10 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         ]
 
         NSLayoutConstraint.activate(collapsedConstraints)
+        filterBar.isHidden = true
         resultsTable.isHidden = true
         hintsBar.isHidden = true
+        filterBar.alphaValue = 0.0
         resultsTable.alphaValue = 0.0
         hintsBar.alphaValue = 0.0
     }
@@ -142,6 +151,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         SearchCoordinator.shared.cancelPendingSearches()
         SpotlightBridge.shared.warmHotFolderCache(maxAge: 5)
         searchBar.text = ""
+        filterBar.selectedFilter = .all
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
         searchBar.focus()
@@ -218,6 +228,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
 
             NSLayoutConstraint.deactivate(collapsedConstraints)
             NSLayoutConstraint.activate(expandedConstraints)
+            filterBar.isHidden = false
             resultsTable.isHidden = false
             hintsBar.isHidden = false
             if window.frame.height != fullHeight {
@@ -236,6 +247,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
                 ctx.duration = Self.expandDuration
                 ctx.timingFunction = Self.expandTiming
                 ctx.allowsImplicitAnimation = true
+                filterBar.animator().alphaValue = 1.0
                 resultsTable.animator().alphaValue = 1.0
                 hintsBar.animator().alphaValue = 1.0
             }
@@ -260,6 +272,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
                 ctx.duration = Self.collapseDuration * 0.6
                 ctx.timingFunction = Self.collapseTiming
                 ctx.allowsImplicitAnimation = true
+                filterBar.animator().alphaValue = 0.0
                 resultsTable.animator().alphaValue = 0.0
                 hintsBar.animator().alphaValue = 0.0
             }
@@ -281,9 +294,11 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             NSLayoutConstraint.deactivate(expandedConstraints)
             NSLayoutConstraint.activate(collapsedConstraints)
         }
+        filterBar.isHidden = !expanded
         resultsTable.isHidden = !expanded
         hintsBar.isHidden = !expanded
         // Collapsed state leaves the list/hints at 0 so the next reveal fades them in.
+        filterBar.alphaValue = expanded ? 1.0 : 0.0
         resultsTable.alphaValue = expanded ? 1.0 : 0.0
         hintsBar.alphaValue = expanded ? 1.0 : 0.0
         backdropView?.alphaValue = expanded ? 1.0 : 0.0
@@ -393,17 +408,62 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             // 文字删空立即执行主线程平滑折叠，无需等待后台异步队列回传
-            SearchCoordinator.shared.search(query: "") { _ in }
+            SearchCoordinator.shared.search(query: "", filter: filterBar.selectedFilter) { _ in }
             setPanelExpanded(false, animated: true)
             return
+        }
+
+        // 若输入了前缀语法（如 "doc: report"），自动高亮并切换到对应分类
+        var effectiveFilter = filterBar.selectedFilter
+        var effectiveQuery = query
+        if let extracted = SearchTypeFilter.extractPrefix(from: trimmed) {
+            effectiveFilter = extracted.filter
+            if filterBar.selectedFilter != extracted.filter {
+                filterBar.selectedFilter = extracted.filter
+            }
+            effectiveQuery = extracted.query
         }
 
         // 只要有文字输入，立即平滑展开到标准工作区 520pt（若已展开则无任何布局抖动）
         setPanelExpanded(true, animated: true)
 
-        SearchCoordinator.shared.search(query: query) { [weak self] results in
-            runtimeLog("[SearchVC] received results count: \(results.count) for query: '\(query)'")
+        SearchCoordinator.shared.search(query: effectiveQuery, filter: effectiveFilter) { [weak self] results in
+            runtimeLog("[SearchVC] received results count: \(results.count) for query: '\(query)', filter: \(effectiveFilter.rawValue)")
             // 若在搜索计算期间用户已经删空，丢弃过期的结果，防止正在收拢时突发重绘
+            guard let self = self, self.isExpanded else { return }
+            self.resultsTable.updateResults(results)
+        }
+    }
+
+    public func searchBarDidRequestCycleFilter(_ searchBar: SearchBarView, forward: Bool) {
+        filterBar.cycleFilter(forward: forward)
+    }
+
+    public func searchBar(_ searchBar: SearchBarView, didRequestSelectFilterNumber number: Int) {
+        filterBar.selectFilter(number: number)
+    }
+
+    // MARK: - SearchFilterBarDelegate
+    public func searchFilterBar(_ bar: SearchFilterBarView, didSelectFilter filter: SearchTypeFilter) {
+        runtimeLog("[SearchVC] didSelectFilter: \(filter.rawValue)")
+        // 维持输入框第一响应者
+        view.window?.makeFirstResponder(searchBar.textField)
+        performCurrentSearch()
+    }
+
+    private func performCurrentSearch() {
+        let query = searchBar.text
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        var effectiveFilter = filterBar.selectedFilter
+        var effectiveQuery = query
+        if let extracted = SearchTypeFilter.extractPrefix(from: trimmed) {
+            effectiveFilter = extracted.filter
+            effectiveQuery = extracted.query
+        }
+
+        SearchCoordinator.shared.search(query: effectiveQuery, filter: effectiveFilter) { [weak self] results in
             guard let self = self, self.isExpanded else { return }
             self.resultsTable.updateResults(results)
         }
@@ -422,7 +482,10 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     }
 
     public func searchBarDidPressEscape(_ searchBar: SearchBarView) {
-        if !searchBar.text.isEmpty {
+        if filterBar.selectedFilter != .all {
+            filterBar.selectedFilter = .all
+            performCurrentSearch()
+        } else if !searchBar.text.isEmpty {
             searchBar.text = ""
             SearchCoordinator.shared.cancelPendingSearches()
             resultsTable.updateResults([])
@@ -447,6 +510,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     private func dismissSearchPanel() {
         PanelCoordinator.shared.hideSearchPanel()
         searchBar.text = ""
+        filterBar.selectedFilter = .all
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
     }
