@@ -561,6 +561,7 @@ public struct AtoolsConfig: Codable {
         try container.encode(searchExcludeTrash, forKey: .searchExcludeTrash)
         try container.encode(searchExcludeUserLibrary, forKey: .searchExcludeUserLibrary)
         try container.encode(customExcludedPaths, forKey: .customExcludedPaths)
+        try container.encode(autoPasteOnSummonAfterCopy, forKey: .autoPasteOnSummonAfterCopy)
         try container.encode(enableAutoQuit, forKey: .enableAutoQuit)
         try container.encode(autoQuitMode, forKey: .autoQuitMode)
         try container.encode(autoQuitExcludeAppRules, forKey: .autoQuitExcludeAppRules)

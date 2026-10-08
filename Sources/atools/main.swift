@@ -1199,7 +1199,13 @@ if CommandLine.arguments.contains("--test") {
         let instantResult = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
         TestAssertions.expect(instantResult == "InstantCatchTerm", "极速唤出时 instant catch 必须准确捕获最新复制: \(instantResult ?? "nil")")
 
-        print("      ✓ 复制后呼出自动粘贴（时效性/单次消费/过期拦截/自环防护/敏感凭据过滤/连续多次有效/极速捕获）全部验证通过.")
+        // (i) 配置持久化 JSON 往返测试（防止序列化字段遗漏导致重启或加载后状态自动重置）
+        ConfigManager.shared.updateAutoPasteOnSummonAfterCopy(true)
+        let serializedData = try JSONEncoder().encode(ConfigManager.shared.config)
+        let redecodedConfig = try JSONDecoder().decode(AtoolsConfig.self, from: serializedData)
+        TestAssertions.expect(redecodedConfig.autoPasteOnSummonAfterCopy == true, "autoPasteOnSummonAfterCopy 序列化并反序列化后必须保持为 true")
+
+        print("      ✓ 复制后呼出自动粘贴（时效性/单次消费/过期拦截/自环防护/敏感凭据过滤/连续多次有效/极速捕获/持久化编解码）全部验证通过.")
     }
 
 

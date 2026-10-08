@@ -1168,4 +1168,24 @@
   - `./Scripts/package_app.sh` 完成 Release 签名与 Ed25519 自动更新摘要签名；
   - 通过 GitHub CLI 完成 GitHub Release 发布与四个核心资产（dmg/zip/sig）上传挂载。
 
+### 29. 修复「复制后立即呼出时自动粘贴」配置项 JSON 序列化遗漏导致重启或加载后开关自动重置的问题 (2026-10-08, build 35)
+
+- **背景与根因定位**：
+  - 用户反馈：“检查为什么我之前开启了这个开关，但是过段时间它自己关掉了”；
+  - **排查锁定的根本原因**：
+    在 `Sources/atools/Models/AppConfig.swift` 的 `AtoolsConfig.encode(to encoder: Encoder)` 自定义序列化实现中，遗漏了 `try container.encode(autoPasteOnSummonAfterCopy, forKey: .autoPasteOnSummonAfterCopy)`；
+    导致用户在界面开启开关后，虽然内存中更新为 `true`，但保存到 `~/Library/Application Support/ATools/config.json` 时该字段从未被写盘。应用重启、重新加载配置或更新替换后，反序列化 `init(from decoder:)` 因读取不到该键而静默 fallback 为默认值 `false`，从而导致界面开关被自动重置回关闭状态。
+
+- **实施细节与涉及文件**：
+  1. **配置持久化补全**（`Sources/atools/Models/AppConfig.swift`）：
+     - 在 `AtoolsConfig.encode(to:)` 中显式补全 `try container.encode(autoPasteOnSummonAfterCopy, forKey: .autoPasteOnSummonAfterCopy)`；
+  2. **自动化往返防回退测试**（`Sources/atools/main.swift`）：
+     - 在 `[6.12]` 测试中新增 `(i) 配置持久化 JSON 往返测试`：主动开启开关，执行 JSON encode 后再 decode，断言该布尔值必须保持为 `true`，彻底杜绝后续维护中类似字段序列化遗漏。
+
+- **验证与发布结果**：
+  - `./Scripts/build.sh --test` 诊断套件 100% 全部 PASS 通过；
+  - 核心断言 `✓ 复制后呼出自动粘贴（.../持久化编解码）全部验证通过`；
+  - 发布版本升级为 `v1.3.10 (build 35)`。
+
+
 
