@@ -28,6 +28,7 @@ public final class ConfigManager {
             self.configURL = custom
             self.config = ConfigManager.loadOrCreateDefault(from: custom)
             SpotlightBridge.shared.setExtraHotFolders(self.config.extraHotFolders)
+            SearchExclusionEngine.shared.recompile(config: self.config)
             return
         }
 
@@ -49,6 +50,7 @@ public final class ConfigManager {
         // 启动时把自定义热目录推送给快照（后台读配置会与主线程写配置竞争，
         // 所以 SpotlightBridge 不直接读 ConfigManager，由这里和变更时推送）。
         SpotlightBridge.shared.setExtraHotFolders(self.config.extraHotFolders)
+        SearchExclusionEngine.shared.recompile(config: self.config)
     }
 
     private static func loadOrCreateDefault(from url: URL) -> AtoolsConfig {
@@ -326,6 +328,109 @@ public final class ConfigManager {
         guard config.extraHotFolders.count != before else { return }
         save()
         SpotlightBridge.shared.setExtraHotFolders(config.extraHotFolders)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    // MARK: - 全盘搜索排除范围管理 (对齐 Alfred Search Scope 设计)
+
+    public static let maxCustomExcludedPaths = 32
+
+    /// 校验自定义排除目录路径。合法返回标准化绝对路径，不合法返回 nil。
+    /// 防御规则：必须为存在的绝对目录；禁止根目录 / 与家目录 ~（防止一键排除全盘或全部个人文件）；
+    public func validatedExcludedFolderPath(_ rawPath: String) -> String? {
+        let path = (rawPath as NSString).standardizingPath
+        guard path.hasPrefix("/") else { return nil }
+
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return nil }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if path == "/" || path == home { return nil }
+
+        return path
+    }
+
+    /// 添加自定义排除目录（带子目录包含吸收与去重）
+    @discardableResult
+    public func addCustomExcludedPath(_ rawPath: String) -> Bool {
+        guard let path = validatedExcludedFolderPath(rawPath) else { return false }
+        guard !config.customExcludedPaths.contains(path) else { return false }
+
+        // 若已有路径是当前新路径的父级，则新路径已被覆盖，无需重复添加
+        for existing in config.customExcludedPaths {
+            if path.hasPrefix(existing + "/") { return false }
+        }
+
+        // 若新路径是已有某些路径的父级，则自动吸收清理冗余的子路径
+        config.customExcludedPaths.removeAll { existing in
+            existing.hasPrefix(path + "/")
+        }
+
+        guard config.customExcludedPaths.count < Self.maxCustomExcludedPaths else { return false }
+        config.customExcludedPaths.append(path)
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+        return true
+    }
+
+    public func removeCustomExcludedPath(_ rawPath: String) {
+        let path = (rawPath as NSString).standardizingPath
+        let before = config.customExcludedPaths.count
+        config.customExcludedPaths.removeAll { $0 == path }
+        guard config.customExcludedPaths.count != before else { return }
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    public func resetCustomExcludedPathsToDefault() {
+        config.customExcludedPaths = []
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    // 预设排除开关
+    public func updateSearchExcludeCaches(_ enabled: Bool) {
+        config.searchExcludeCaches = enabled
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    public func updateSearchExcludeLogs(_ enabled: Bool) {
+        config.searchExcludeLogs = enabled
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    public func updateSearchExcludeDeveloper(_ enabled: Bool) {
+        config.searchExcludeDeveloper = enabled
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    public func updateSearchExcludeHidden(_ enabled: Bool) {
+        config.searchExcludeHidden = enabled
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    public func updateSearchExcludeTrash(_ enabled: Bool) {
+        config.searchExcludeTrash = enabled
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
+        SpotlightBridge.shared.dropHotFolderCache()
+    }
+
+    public func updateSearchExcludeUserLibrary(_ enabled: Bool) {
+        config.searchExcludeUserLibrary = enabled
+        save()
+        SearchExclusionEngine.shared.recompile(config: config)
         SpotlightBridge.shared.dropHotFolderCache()
     }
 

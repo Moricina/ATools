@@ -268,6 +268,15 @@ public struct AtoolsConfig: Codable {
     public var extraHotFolders: [String]
     public var searchFilterOrder: [String]
 
+    // 全盘搜索范围排除预设 (对齐 Alfred Search Scope 设计)
+    public var searchExcludeCaches: Bool          // 系统与应用缓存 (如 ~/Library/Caches)
+    public var searchExcludeLogs: Bool            // 系统日志与诊断报告 (如 ~/Library/Logs, /var/log)
+    public var searchExcludeDeveloper: Bool       // 开发者工程构建与依赖产物 (如 node_modules, DerivedData, .build, target)
+    public var searchExcludeHidden: Bool          // 版本控制与隐藏文件 (如 .git, .* 隐藏项)
+    public var searchExcludeTrash: Bool           // 废纸篓与临时目录 (如 ~/.Trash, /tmp)
+    public var searchExcludeUserLibrary: Bool     // 排除 ~/Library 根目录 (智能保留 iCloud 云盘与第三方网盘)
+    public var customExcludedPaths: [String]      // 用户自定义排除目录 (绝对路径列表)
+
     // 关窗即退 (AutoQuit)：最后一个窗口关闭后延迟退出应用
     public var enableAutoQuit: Bool
     public var autoQuitMode: AutoQuitMode
@@ -330,6 +339,13 @@ public struct AtoolsConfig: Codable {
         thumbnailCacheLimitMB: Int = 6,
         extraHotFolders: [String] = [],
         searchFilterOrder: [String] = SearchTypeFilter.defaultOrderStrings,
+        searchExcludeCaches: Bool = true,
+        searchExcludeLogs: Bool = true,
+        searchExcludeDeveloper: Bool = true,
+        searchExcludeHidden: Bool = true,
+        searchExcludeTrash: Bool = true,
+        searchExcludeUserLibrary: Bool = true,
+        customExcludedPaths: [String] = [],
         enableAutoQuit: Bool = false,
         autoQuitMode: AutoQuitMode = .allApps,
         autoQuitAppRules: [String]? = nil,
@@ -369,6 +385,13 @@ public struct AtoolsConfig: Codable {
         self.thumbnailCacheLimitMB = thumbnailCacheLimitMB
         self.extraHotFolders = extraHotFolders
         self.searchFilterOrder = searchFilterOrder
+        self.searchExcludeCaches = searchExcludeCaches
+        self.searchExcludeLogs = searchExcludeLogs
+        self.searchExcludeDeveloper = searchExcludeDeveloper
+        self.searchExcludeHidden = searchExcludeHidden
+        self.searchExcludeTrash = searchExcludeTrash
+        self.searchExcludeUserLibrary = searchExcludeUserLibrary
+        self.customExcludedPaths = customExcludedPaths
         self.enableAutoQuit = enableAutoQuit
         self.autoQuitMode = autoQuitMode
         if let legacy = autoQuitAppRules {
@@ -396,6 +419,7 @@ public struct AtoolsConfig: Codable {
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
         case extraHotFolders, searchFilterOrder
+        case searchExcludeCaches, searchExcludeLogs, searchExcludeDeveloper, searchExcludeHidden, searchExcludeTrash, searchExcludeUserLibrary, customExcludedPaths
         case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
@@ -439,6 +463,13 @@ public struct AtoolsConfig: Codable {
         self.thumbnailCacheLimitMB = (try? container.decode(Int.self, forKey: .thumbnailCacheLimitMB)) ?? 6
         self.extraHotFolders = (try? container.decode([String].self, forKey: .extraHotFolders)) ?? []
         self.searchFilterOrder = (try? container.decode([String].self, forKey: .searchFilterOrder)) ?? SearchTypeFilter.defaultOrderStrings
+        self.searchExcludeCaches = (try? container.decode(Bool.self, forKey: .searchExcludeCaches)) ?? true
+        self.searchExcludeLogs = (try? container.decode(Bool.self, forKey: .searchExcludeLogs)) ?? true
+        self.searchExcludeDeveloper = (try? container.decode(Bool.self, forKey: .searchExcludeDeveloper)) ?? true
+        self.searchExcludeHidden = (try? container.decode(Bool.self, forKey: .searchExcludeHidden)) ?? true
+        self.searchExcludeTrash = (try? container.decode(Bool.self, forKey: .searchExcludeTrash)) ?? true
+        self.searchExcludeUserLibrary = (try? container.decode(Bool.self, forKey: .searchExcludeUserLibrary)) ?? true
+        self.customExcludedPaths = (try? container.decode([String].self, forKey: .customExcludedPaths)) ?? []
 
         // AutoQuit: 缺字段落到安全默认（总开关关闭）；老配置向下兼容迁移
         self.enableAutoQuit = (try? container.decode(Bool.self, forKey: .enableAutoQuit)) ?? false
@@ -518,6 +549,13 @@ public struct AtoolsConfig: Codable {
         try container.encode(thumbnailCacheLimitMB, forKey: .thumbnailCacheLimitMB)
         try container.encode(extraHotFolders, forKey: .extraHotFolders)
         try container.encode(searchFilterOrder, forKey: .searchFilterOrder)
+        try container.encode(searchExcludeCaches, forKey: .searchExcludeCaches)
+        try container.encode(searchExcludeLogs, forKey: .searchExcludeLogs)
+        try container.encode(searchExcludeDeveloper, forKey: .searchExcludeDeveloper)
+        try container.encode(searchExcludeHidden, forKey: .searchExcludeHidden)
+        try container.encode(searchExcludeTrash, forKey: .searchExcludeTrash)
+        try container.encode(searchExcludeUserLibrary, forKey: .searchExcludeUserLibrary)
+        try container.encode(customExcludedPaths, forKey: .customExcludedPaths)
         try container.encode(enableAutoQuit, forKey: .enableAutoQuit)
         try container.encode(autoQuitMode, forKey: .autoQuitMode)
         try container.encode(autoQuitExcludeAppRules, forKey: .autoQuitExcludeAppRules)

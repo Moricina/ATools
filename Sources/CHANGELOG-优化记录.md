@@ -764,3 +764,192 @@
   - 执行 `./Scripts/package_app.sh`：签名及 release 构建通过；
   - 成功部署并替换至 `/Applications/ATools.app`（PID 71712）。
 
+
+### 17. 参照 Alfred 全盘搜索范围设计：支持排除系统缓存等文件与自定义黑名单 (2026-10-08, build 30)
+
+- **背景与需求目标**：
+  - 用户反馈：“参照这款app全盘搜索设计 在设置-全盘搜索界面支持用户排除掉系统缓存等文件，基于思路设计和优化实施方案，并让你的子代理审核一遍”；
+  - 需求目标：参照 Alfred 经典的 Search Scope（Default Results / Folders in Home - Excluding ~/Library）架构与设计规范，在 ATools 的「偏好设置 -> 全盘搜索」界面中新增「排除范围」面板，支持用户自主控制排除系统与应用缓存、日志与崩溃报告、开发依赖产物、废纸篓与隐藏文件；支持添加与管理自定义排除目录列表（黑名单）；在底层 MDQuery 5 万级大循环中实现零锁高速过滤，并智能保护 iCloud 云盘与第三方网盘（OneDrive / 百度网盘等）文档安全可搜；在热目录枚举中实施子树遍历阻断（`skipDescendants`），全面提速检索并净化搜索结果。
+
+- **实施细节与涉及文件**：
+  1. **配置持久化与向下兼容扩展**（`Sources/atools/Models/AppConfig.swift`）：
+     - 在 `AtoolsConfig` 中新增 6 大预设排除开关：`searchExcludeCaches`（系统与应用缓存）、`searchExcludeLogs`（日志与崩溃报告）、`searchExcludeDeveloper`（开发构建与依赖产物）、`searchExcludeHidden`（版本控制与隐藏文件）、`searchExcludeTrash`（废纸篓与临时目录）、`searchExcludeUserLibrary`（用户资源库 ~/Library）；
+     - 新增 `customExcludedPaths: [String]` 用户自定义排除目录绝对路径列表；
+     - 严格向下兼容支持：`init(from decoder:)` 对全部新增字段采用 `(try? container.decode(...)) ?? default` 安全容错兜底，老配置升级无感且不破坏用户现有分类与快捷键。
+  2. **新建统一高性能排除引擎**（`Sources/atools/Search/SearchExclusionEngine.swift`）：
+     - 采用不可变规则预编译快照（`CompiledRules`）架构，每次配置变更时原子重构；
+     - **极速分层比对**：
+       * 第一层（高速前缀比对）：对缓存、日志、临时文件及用户自定义目录执行 `hasPrefix`，利用标准化绝对路径尾斜杠保证 $O(1)$ 快速失败跳出，避免对 5 万条结果进行无谓的堆内存分配与全串比对；
+       * 第二层（双斜杠中缀比对）：针对跨目录深度的开发依赖（`/node_modules/`, `/DerivedData/`, `/.build/`, `/target/`, `/__pycache__/` 等）严格限定双斜杠边界，杜绝误伤合法普通文件名；
+     - **对齐 Alfred 的关键云盘特赦机制（Bypass Whitelist）**：
+       * 针对 `~/Library` 排除规则，特别设置针对 `~/Library/Mobile Documents/`（iCloud Drive）与 `~/Library/CloudStorage/`（OneDrive、百度网盘、Dropbox、Google Drive 等）的智能放行白名单，确保用户存放在云盘中的工作文档 100% 正常可搜，同时滤除其他庞杂的系统内部数据。
+     - **热目录递归阻断（`shouldSkipDescendants`）**：
+       * 在枚举热目录时，检测到被排除的工程文件夹（如 `node_modules`）或用户黑名单目录时立即调用 `enumerator.skipDescendants()`，直接剪除万级子树深层磁盘遍历，显著降低 CPU 与快照内存开销。
+  3. **配置管理器扩展与路径安全校验**（`Sources/atools/Storage/ConfigManager.swift`）：
+     - 新增 `validatedExcludedFolderPath(_:)`：过滤非法输入，严格禁止将系统根目录 `/` 或用户家目录 `~` 加入排除项（避免用户误操作瘫痪全盘搜索）；
+     - 新增 `addCustomExcludedPath(_:)`：内置子目录包含关系收敛算法（Subsumption Check），已有父目录时自动拒绝冗余子目录，添加父目录时自动吸收并清理已有子目录，保持规则列表最简化；
+     - 提供 `removeCustomExcludedPath`、`resetCustomExcludedPathsToDefault` 以及 6 大预设开关的修改方法，保存后实时触发引擎规则重构并使热目录快照自动失效刷新。
+  4. **全盘文件检索与热目录快照接入**（`MetadataFileSearchBackend.swift` & `SpotlightBridge.swift`）：
+     - `MetadataFileSearchBackend` 废弃写死数组，全面接入 `SearchExclusionEngine.shared.isExcluded(path:)`；
+     - `SpotlightBridge.listHotFolder` 接入 `shouldSkipDescendants` 阻断与文件排除，实现双层动态生效。
+  5. **偏好设置界面新增「排除范围」面板**（`Sources/atools/UI/Settings/SettingsTabViews.swift` 中的 `SearchTabView`）：
+     - 子标签扩充为 4 个：`["搜索选项", "排除范围", "扩展功能", "网络搜索"]`；
+     - **Page 1 (排除范围)** 布局结构：
+       * **卡片 1 (常用排除预设)**：包含 6 项现代开关行，清晰阐明排除作用（如“用户资源库 (~/Library)”明确标注“智能保留 iCloud 云盘与第三方网盘”）；
+       * **卡片 2 (自定义排除目录)**：以卡片列表形式展示已添加的排除目录（包含系统文件夹图标、目录名、中间截断路径与删除按钮）；底部配有「添加排除目录…」按钮（唤起系统 `NSOpenPanel`）与「恢复默认」按钮，以及动态数量与功能说明标签；
+     - 控件约束全面设置 `byTruncatingMiddle` 与低抗压拉伸优先级，严格维持窗口 780.0pt 宽度恒定。
+  6. **回归诊断测试扩展**（`Sources/atools/main.swift`）：
+     - 新增 `[6.7] Testing Search Exclusion Engine & Custom Scopes (Alfred-style)`：
+       * 覆盖系统缓存、日志诊断、开发产物、版本控制与隐藏文件全套排除断言；
+       * 覆盖 iCloud Drive 与 CloudStorage 云盘关键文档放行特赦与云盘内部依赖拦截断言；
+       * 覆盖热目录遍历剪枝阻断（`shouldSkipDescendants`）断言；
+       * 覆盖自定义排除目录合法性拦截（根目录与家目录保护）、父子目录包含自动吸收与实时排除断言；
+       * 覆盖老配置缺失字段的向前解码兼容性断言。
+
+- **兼容性与边界防护策略**：
+  - 单例循环依赖死锁防御：`SearchExclusionEngine.init()` 采用独立纯默认配置初始化，解耦与 `ConfigManager.shared` 相互等待导致的 `_dispatch_once_wait` 陷阱；
+  - 窗口尺寸不变性防护：通过自动化布局诊断测试断言，4 分段标签与自定义路径列表在任何极长路径下绝不撑破 780.0pt 窗口边界。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项综合诊断套件（含计算器、系统指令、配置管理器、分类管理、应用索引、全盘检索、排序归并、热目录拼音、分类筛选栏、语法指令、排除引擎与自定义范围、基线内存、设置窗口恒定 780pt、抽屉面板、搜索面板展开收起、更新管理器与关窗即退）**100% 全部 PASS 通过（exit=0，零失败）**。
+
+
+### 18. 对齐 Alfred 极速交互体验：空格一键进入文件检索 & 访达文件夹拖拽进设置 (2026-10-08, build 30)
+
+- **背景与需求目标**：
+  - 用户反馈：“/plan 空格一键进入文件检索、从访达直接拖拽文件夹进设置。对于这两个功能点进行设计，生成实施方案，并让你的子代理审核一遍，确保功能跑通、不影响其他功能正常运行”；
+  - 需求目标：参照 Alfred 标杆级的交互直觉与操作流畅度，打造两项核心功能：
+    1. **空格一键进入文件检索 (Spacebar Shortcut)**：搜索框在空白状态下单按一次空格键，直接一键切换至“文档/文件”检索模式（`SearchTypeFilter.document`），同时输入框保持聚焦，支持打字即搜；在分类模式下若再次清空并按下退格键（Delete/Backspace），平滑回退至“全部”模式。
+    2. **访达直接拖拽文件夹进设置 (Finder Drag-and-Drop Scope into Settings)**：支持从 macOS 访达（Finder）直接多选或单选拖拽文件夹到「偏好设置 -> 全盘搜索」中的「自定义热目录」卡片和「自定义排除目录」卡片，提供强调色边框高亮悬停反馈与自动去重落地。
+
+- **实施细节与涉及文件**：
+  1. **现代卡片式容器原生拖拽扩展**（`Sources/atools/UI/Settings/SettingsComponents.swift`）：
+     - 为 `SettingsCardView` 原生接入 `NSDraggingDestination` 协议；
+     - 提供 `public var onDropFolders: (([String]) -> Void)?` 回调，设置后自动注册 `registerForDraggedTypes([.fileURL])`；
+     - **拖拽生命周期与交互设计**：
+       * `draggingEntered` / `draggingUpdated`：解析 pasteboard 中的 `NSURL` 列表，校验包含真实存在的文件夹且排除 `.app` 应用程序包；若合法返回 `.copy` 并激活高亮态（卡片边框切换为 1.5pt `NSColor.controlAccentColor`）；
+       * `draggingExited`：平滑恢复边框样式；
+       * `performDragOperation`：提取全部合法绝对路径并派发 `onDropFolders` 回调。
+  2. **偏好设置热目录与排除黑名单卡片拖拽落地**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 为 `cardHot`（自定义热目录）绑定 `onDropFolders`：批量调用 `ConfigManager.shared.addHotFolder(path)`，自动完成父子目录包含检测与去重，刷新列表；若有非法路径或超限触发系统声音反馈；
+     - 为 `cardCustom`（自定义排除目录）绑定 `onDropFolders`：批量调用 `ConfigManager.shared.addCustomExcludedPath(path)`，自动执行 Subsumption 父子目录吸收合并，刷新列表并重构排除引擎规则；
+     - 优化卡片副标题与空态引导文案，明确提示：“可点击添加，或直接从访达将文件夹拖拽至此”。
+  3. **窗口底层事件安全拦截与输入法（IME）保护**（`Sources/atools/UI/SearchPanel.swift`）：
+     - 吸收子代理深度审核结论：在 AppKit 中，编辑状态下的 `NSTextField` 会交由系统共享的 Field Editor (`NSTextView`) 接管 `firstResponder`，常规按键不经过 `performKeyEquivalent` 或 `NSTextField.keyDown`。因此将按键拦截前置在 `SearchPanel: NSPanel` 的 `sendEvent(_:)` 顶层统一处理；
+     - **严格的输入法保护**：判断 `(editor as? NSTextView)?.hasMarkedText() == true`。当用户正在进行中文拼音输入（如打 “wenjian” 并按空格选词）时，严格放行，**绝对不拦截拼音选词与输入法交互**；
+     - **空格切入文件检索**：在输入框文本为空、修饰键为空且无输入法上屏时，按空格键（keyCode 49）触发 `searchViewController.handleSpacebarShortcut()`，自动将 `filterBar.selectedFilter` 切换至 `.document`，展开面板并立即消费该事件，防止在文本框中留下无意义的单空格字符；
+     - **退格回退全部模式**：在分类不为 `.all` 且文本为空时，按退格键（keyCode 51）触发 `searchViewController.handleBackspaceShortcut()`，自动回退到 `.all` 模式并折叠面板，且彻底消除 macOS 底层发出“无法退格”的警告提示音。
+  4. **全套自动化测试扩展**（`Sources/atools/main.swift`）：
+     - 新增 `[6.8] Testing Spacebar File Search Shortcut & Settings Drag-and-Drop Card (Alfred-style)`：
+       * 空格空白切入 `.document` 模式判定与重复空格防御断言；
+       * 非空文本时不触发快捷模式切换断言；
+       * 退格空白回退 `.all` 模式与已是全部模式时不拦截断言；
+       * `SettingsCardView` 拖拽回调注入、合法目录校验、排除黑名单添加与配置持久化复原断言。
+
+- **兼容性与边界防护策略**：
+  - 零破坏性向前兼容：无需调整配置数据结构，复用已验证的 `extraHotFolders` 与 `customExcludedPaths` 存储契约；
+  - 窗口 780.0pt 宽度保护：长路径标签配合中间截断与低抗压优先级，拖入任何超长文件名绝不撑大偏好设置窗口；
+  - 编译零警告：修复测试断言中的未使用变量，编译链接零警告通过。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件 100% 全部 PASS 通过；
+  - 执行 `./Scripts/package_app.sh`：Release 版本构建签名打包成功；
+  - 部署并成功启动 `/Applications/ATools.app`（PID 89518）。
+
+### 19. 搜索框语法指令胶囊化 (Syntax Token Capsule) 视觉设计与交互闭环 (2026-10-08, build 30)
+
+- **背景与需求目标**：
+  - 用户反馈：“/plan 给搜索框中的语法加上胶囊，类似于图二这样的，做一个设计计划，并让你的子代理审核一下”；
+  - 核心痛点与目标：用户对比图一（传统在输入框中生硬输入纯文本 `/doc `）与图二（现代启动器中以高质感 Token Chip 胶囊 `[ 🗂 plan ]` 挂在搜索框前、输入框紧随其后输入关键词），要求全面提升搜索框的语法指令视觉表现与交互质感。
+  - 关键要素：
+    1. **原生 Token 胶囊控件 (`SyntaxCapsuleView`)**：集成指令专属 SF Symbol 图标、指令中文名称、微型关闭（`×`）按钮、微圆角（6pt）、细边框与悬停高亮；
+    2. **自适应外观与动态 AutoLayout 切换**：支持液态玻璃浅色/深色主题外观自适应；在挂载胶囊时平滑拉伸输入框左锚点（`textFieldLeadingToCapsuleConstraint`），卸载时恢复为 `textFieldLeadingToIconConstraint`；
+    3. **自动转胶囊机制**：用户键入已注册指令（如 `/doc`、`/web`、`/calc`、`/app` 等）后按下空格、Tab 自动补全或在候选列表回车时，指令自动转换为胶囊并挂载在搜索框前，输入框自动清空并定位光标，提示语自适应变为 `"在 \(name) 中搜索..."`；
+    4. **退格键与快捷键闭环**：输入框为空时按 Backspace（退格键）或 Esc，优先卸载胶囊并将筛选模式平滑恢复为“全部”，消除系统提示音；
+    5. **搜索路由合成守护**：对于非本地文件分类指令（`/web`、`/calc`），激活胶囊后在输入框打字时，自动合成内部指令（如 `"/web Swift"` 或 `"/calc 128*8"`），保证底层即时直出与网页跳转，防止被降级为全盘搜索；系统动作指令（`/lock` 等）回车即执行，严禁转换为胶囊。
+
+- **实施细节与涉及文件**：
+  1. **语法指令模型扩展**（`Sources/atools/Models/SearchSyntaxCommand.swift`）：
+     - 增加 `SearchSyntaxCommand.commands` 静态别名；
+     - 新增 `SearchSyntaxCommand.command(for filter: SearchTypeFilter) -> SearchSyntaxCommand?` 映射方法，打通下部分类栏与顶部胶囊的双向同步。
+  2. **搜索栏 Token 胶囊视图与动态布局**（`Sources/atools/UI/SearchBarView.swift`）：
+     - 新增 `SyntaxCapsuleView`：
+       * 包含 `iconImageView`（13×13）、`titleLabel`（12pt Medium）、`removeButton`（13×13 微型关闭叉）；
+       * 开启鼠标跟踪区域，实现轻量悬停反馈与点击关闭回调（`onRemove`）；
+       * 严格设置水平 Hugging Priority 和 Compression Resistance 为 `.required (1000)`，防止输入长文本时挤压胶囊；
+       * 增加深浅模式自适应背景色彩与边框渲染；
+     - 新增 `SearchBarDelegate.searchBarDidRequestRemoveSyntaxCapsule(_:)` 代理协议；
+     - 在 `SearchBarView` 中实现动态 AutoLayout 约束切换管理（`textFieldLeadingToIconConstraint`、`textFieldLeadingToCapsuleConstraint`、`capsuleLeadingToIconConstraint`）；
+     - 实现 `setSyntaxCommand(_:)` 统一挂载/卸载入口，自适应更新 `placeholderAttributedString` 与 `placeholderString`。
+  3. **搜索主面板交互接驳与状态机控制**（`Sources/atools/UI/SearchPanel.swift`）：
+     - 接入 `searchBarDidRequestRemoveSyntaxCapsule` 与 `removeActiveSyntaxCapsule()`；
+     - 在 `didChangeQuery` 中支持敲入斜杠指令 + 空格时的自动胶囊化；
+     - 封装 `getEffectiveQueryAndFilter` 路由引擎，针对 `.applyFilter`、`.webSearch`、`.calculator` 自动装配底层查询；
+     - 在 `handleBackspaceShortcut` 中实现退格优先卸载胶囊、次级恢复全部的双稳态闭环；
+     - 在 `handleSpacebarShortcut` 中按下空格切入文件检索时同步激活 `cmd_doc` 胶囊；
+     - 在 `dismissSearchPanel` 与 `prepareForDisplay` 中彻底重置胶囊状态。
+  4. **全套自动化测试扩展**（`Sources/atools/main.swift`）：
+     - 新增 `[6.9] Testing Search Bar Syntax Token Capsule (Visual Chip & State Machine)`：
+       * 胶囊挂载、卸载与 `placeholder` 占位符自适应切换断言；
+       * 点击胶囊 `×` 按钮卸载与筛选器回退断言；
+       * 键入 `"/web "` 自动转换为语法胶囊与输入框清空断言；
+       * 输入框为空时按 Backspace 退格键卸载胶囊与事件拦截断言；
+       * `prepareForDisplay` 窗口展示前彻底清理胶囊断言。
+
+- **兼容性与边界防护策略**：
+  - 系统瞬时动作保护：系统指令（`/lock`、`/sleep`、`/empty`、`/restart`）直接执行，严禁转换为胶囊残留；
+  - 输入法打字保护：在 `SearchPanel.sendEvent` 中严密监控 `isMarked`，中文拼音选词过程中绝不拦截空格或退格；
+  - 界面与布局无缝过渡：胶囊出现时保持窗口顶边与胶囊高度 44pt 绝对平稳，绝无跳动与残影。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件 100% 全部 PASS 通过（0 失败）；
+  - 执行 `./Scripts/package_app.sh`：打包构建 Release 版本成功；
+  - 部署到 `/Applications/ATools.app` 并成功重启运行（PID 8215）。
+
+### 20. 搜索栏下部分类胶囊圆角视觉统一与舒适间距拓展 (2026-10-08, build 30)
+
+- **背景与需求目标**：
+  - 用户反馈：“上面搜索栏的胶囊和下面的统一一下，下面这一栏改成上面那种圆角小一点的，并且胶囊间距不要太紧凑”；
+  - 需求目标：
+    1. **圆角与高度规格统一**：将下部分类筛选栏中的胶囊控件（`SearchFilterPillButton`、`SearchSyntaxPillButton`）的大药丸半圆弧角（`13pt`）重构为与顶部搜索胶囊完全统一的 **`6pt` 微圆角**；统一高度为 `24pt`；
+    2. **胶囊间距呼吸感拓展**：将胶囊容器 `stackView.spacing` 从原本拥挤紧凑的 `4pt` 翻倍拓展至 **`8pt`**，告别挨在一起的局促感；
+    3. **按钮内边距与精致质感对齐**：重载 `intrinsicContentSize` 为文字两侧拓展 `10pt` 舒适留白；重构深浅模式下选中与悬停的微透明底色与 0.5pt 细边框，达到 100% 视觉协调。
+
+- **实施细节与涉及文件**：
+  1. **分类栏胶囊视图重构**（`Sources/atools/UI/SearchFilterBarView.swift`）：
+     - `SearchFilterPillButton`：
+       * `layer?.cornerRadius` 由 `13` 调整为 `6`；
+       * 重载 `intrinsicContentSize`（宽度 +10pt，高度 24pt），杜绝文字紧贴边框；
+       * 字体调整为 12pt Medium / Semibold，与顶部搜索胶囊文本规范对齐；
+       * `updateAppearance()` 彻底重构：选中态深色采用 `white 0.15` + 边框 `white 0.22`，浅色采用 `black 0.08` + 边框 `black 0.12`，与顶部搜索胶囊完全一致；
+     - `SearchSyntaxPillButton`：
+       * `layer?.cornerRadius` 同步调整为 `6`；
+       * 重载 `intrinsicContentSize`，高亮指令边框设为精致 0.5pt；
+     - `SearchFilterBarView`：
+       * `stackView.spacing` 调整为 `8`；
+       * `btn.heightAnchor` 约束由 `26` 统一调整为 `24`。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件 100% 全部 PASS 通过；
+  - 执行 `./Scripts/package_app.sh`：打包构建 Release 版本成功；
+  - 成功部署至 `/Applications/ATools.app` 并完成平滑重启（PID 9902）。
+
+### 21. 语法指令选项与胶囊标题纯中文显示优化 (2026-10-08, build 30)
+
+- **背景与需求目标**：
+  - 用户反馈：“胶囊选项也不要显示英文了，只要中文”；
+  - 需求目标：去除非必要的生硬英文指令前缀（如 `/doc`、`/code`、`/app` 等），全面提升界面母语化阅读体验。在输入 `/` 触发语法提示时，结果列表中的指令条目与下部分类胶囊栏仅呈现清爽明确的纯中文标题（如“文档”、“代码”、“应用”、“图片”、“音视频”、“压缩包”、“文件夹”等）。
+
+- **实施细节与涉及文件**：
+  1. **搜索协调器结果装配**（`Sources/atools/Search/SearchCoordinator.swift`）：
+     - 将生成 `syntaxCommand` 结果的 `title` 从 `\(cmd.trigger) \(cmd.name)` 修正为纯中文 `cmd.name`；
+     - 触发词与快捷键说明保留在副标题或说明中，主标题干净利落。
+  2. **指令分类胶囊按钮标题**（`Sources/atools/UI/SearchFilterBarView.swift`）：
+     - 将 `SearchSyntaxPillButton` 的 `attributedTitle` 从 `" \(command.trigger) \(command.name)"` 改为纯中文 `" \(command.name)"`。
+  3. **自动化测试扩展**（`Sources/atools/main.swift`）：
+     - 在 `[6.6]` 中新增断言：`TestAssertions.expect(slashResults.first?.title == "文档")`，确保指令卡片标题不带英文前缀。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项综合诊断套件 100% 全部 PASS 通过（0 失败）；
+  - 执行 `./Scripts/package_app.sh`：打包构建 Release 版本成功；
+  - 部署并成功重启 `/Applications/ATools.app`（PID 11283）。

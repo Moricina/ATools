@@ -157,6 +157,14 @@ public struct SearchSyntaxCommand: Identifiable, Equatable {
         )
     ]
 
+    public static var commands: [SearchSyntaxCommand] { allCommands }
+
+    /// 根据类型过滤器反查对应的语法指令（如 .document -> cmd_doc）
+    public static func command(for filter: SearchTypeFilter) -> SearchSyntaxCommand? {
+        if filter == .all { return nil }
+        return allCommands.first { $0.filter == filter }
+    }
+
     /// 根据用户输入前缀过滤指令（如 "/" 返回全部，"/d" 返回 doc / dir，"/c" 返回 code / calc）
     public static func matching(prefix: String) -> [SearchSyntaxCommand] {
         let trimmed = prefix.trimmingCharacters(in: .whitespaces)

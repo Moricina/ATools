@@ -82,6 +82,81 @@ public final class SettingsCardView: NSView {
             ])
         }
     }
+
+    // MARK: - 访达文件夹拖拽投放支持 (Finder Drag-and-Drop)
+
+    /// 当设置此闭包时，卡片自动注册并响应来自 Finder 的文件夹拖拽
+    public var onDropFolders: (([String]) -> Void)? {
+        didSet {
+            if onDropFolders != nil {
+                registerForDraggedTypes([.fileURL])
+            } else {
+                unregisterDraggedTypes()
+            }
+        }
+    }
+
+    override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard onDropFolders != nil else { return [] }
+        let folders = extractDirectories(from: sender)
+        if !folders.isEmpty {
+            setDragHighlighted(true)
+            return .copy
+        }
+        return []
+    }
+
+    override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard onDropFolders != nil else { return [] }
+        let folders = extractDirectories(from: sender)
+        return folders.isEmpty ? [] : .copy
+    }
+
+    override public func draggingExited(_ sender: NSDraggingInfo?) {
+        setDragHighlighted(false)
+    }
+
+    override public func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard onDropFolders != nil else { return false }
+        return !extractDirectories(from: sender).isEmpty
+    }
+
+    override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        setDragHighlighted(false)
+        guard let onDrop = onDropFolders else { return false }
+        let folders = extractDirectories(from: sender)
+        guard !folders.isEmpty else { return false }
+        onDrop(folders)
+        return true
+    }
+
+    private func setDragHighlighted(_ highlighted: Bool) {
+        if highlighted {
+            layer?.borderWidth = 1.5
+            layer?.borderColor = NSColor.controlAccentColor.cgColor
+        } else {
+            layer?.borderWidth = 0
+            layer?.borderColor = NSColor.clear.cgColor
+        }
+    }
+
+    private func extractDirectories(from sender: NSDraggingInfo) -> [String] {
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] else {
+            return []
+        }
+        var directories: [String] = []
+        let fm = FileManager.default
+        for url in urls {
+            let path = url.standardized.path
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+                // 排除 .app 软件安装包（通常不应作为普通热目录或排除目录被拖入）
+                if path.hasSuffix(".app") { continue }
+                directories.append(path)
+            }
+        }
+        return directories
+    }
 }
 
 /// 标准设置行视图：左侧图标 + 主标题 + 详细副标题说明，右侧控件

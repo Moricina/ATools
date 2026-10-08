@@ -64,7 +64,7 @@ public final class SearchCoordinator {
                 let hint = isSystem ? "按下回车执行指令" : "按下 Tab 键自动补全语法"
                 instantSyntaxResults.append(SearchResult(
                     id: "syntax_\(cmd.id)",
-                    title: "\(cmd.trigger) \(cmd.name)",
+                    title: cmd.name,
                     subtitle: "\(cmd.description)  •  \(hint)",
                     type: .syntaxCommand,
                     score: 1000 - index * 10,

@@ -158,6 +158,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         SearchCoordinator.shared.cancelPendingSearches()
         SpotlightBridge.shared.warmHotFolderCache(maxAge: 5)
         searchBar.text = ""
+        searchBar.setSyntaxCommand(nil)
         filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
         resultsTable.updateResults([])
@@ -413,7 +414,41 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     // MARK: - SearchBarDelegate
     public func searchBar(_ searchBar: SearchBarView, didChangeQuery query: String) {
         runtimeLog("[SearchVC] didChangeQuery: '\(query)'")
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var currentQuery = query
+
+        // 1. 若当前没有挂载胶囊，检测是否刚输入了斜杠指令加空格（例如 "/doc " 或 "/web "）
+        if searchBar.activeSyntaxCommand == nil && currentQuery.hasPrefix("/") {
+            for cmd in SearchSyntaxCommand.allCommands {
+                let prefixWithSpace = "\(cmd.trigger) "
+                if currentQuery.hasPrefix(prefixWithSpace) {
+                    let remainder = String(currentQuery.dropFirst(prefixWithSpace.count))
+                    switch cmd.actionType {
+                    case .applyFilter(let filter):
+                        searchBar.setSyntaxCommand(cmd)
+                        searchBar.text = remainder
+                        currentQuery = remainder
+                        filterBar.selectedFilter = filter
+                        filterBar.showTypeFilters()
+                        if let editor = searchBar.textField.currentEditor() {
+                            editor.selectedRange = NSRange(location: remainder.count, length: 0)
+                        }
+                    case .webSearch, .calculator:
+                        searchBar.setSyntaxCommand(cmd)
+                        searchBar.text = remainder
+                        currentQuery = remainder
+                        filterBar.showTypeFilters()
+                        if let editor = searchBar.textField.currentEditor() {
+                            editor.selectedRange = NSRange(location: remainder.count, length: 0)
+                        }
+                    case .systemAction:
+                        break
+                    }
+                    break
+                }
+            }
+        }
+
+        let trimmed = currentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             filterBar.showTypeFilters()
             // 文字删空立即执行主线程平滑折叠，无需等待后台异步队列回传
@@ -422,17 +457,62 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             return
         }
 
-        // 侦测斜杠语法（如 "/" 或 "/d" 等未敲空格的指令阶段）
-        if trimmed.hasPrefix("/") && !trimmed.contains(" ") {
+        // 2. 侦测斜杠语法（如 "/" 或 "/d" 等未敲空格的指令阶段，且未激活胶囊）
+        if searchBar.activeSyntaxCommand == nil && trimmed.hasPrefix("/") && !trimmed.contains(" ") {
             let matched = SearchSyntaxCommand.matching(prefix: trimmed)
             filterBar.showSyntaxCommands(matched)
         } else {
             filterBar.showTypeFilters()
         }
 
-        // 若输入了前缀语法（如 "doc: report" 或 "/doc report"），自动高亮并切换到对应分类
+        // 3. 计算合成查询与有效过滤类型
+        let (effectiveQuery, effectiveFilter) = getEffectiveQueryAndFilter(from: currentQuery)
+
+        // 只要有文字输入，立即平滑展开到标准工作区 520pt（若已展开则无任何布局抖动）
+        setPanelExpanded(true, animated: true)
+
+        SearchCoordinator.shared.search(query: effectiveQuery, filter: effectiveFilter) { [weak self] results in
+            runtimeLog("[SearchVC] received results count: \(results.count) for query: '\(currentQuery)', filter: \(effectiveFilter.rawValue)")
+            guard let self = self, self.isExpanded else { return }
+            self.resultsTable.updateResults(results)
+        }
+    }
+
+    public func searchBarDidRequestRemoveSyntaxCapsule(_ searchBar: SearchBarView) {
+        removeActiveSyntaxCapsule()
+    }
+
+    public func removeActiveSyntaxCapsule() {
+        searchBar.setSyntaxCommand(nil)
+        filterBar.selectedFilter = .all
+        filterBar.showTypeFilters()
+        view.window?.makeFirstResponder(searchBar.textField)
+        if searchBar.text.isEmpty {
+            SearchCoordinator.shared.cancelPendingSearches()
+            resultsTable.updateResults([])
+            setPanelExpanded(false, animated: true)
+        } else {
+            performCurrentSearch()
+        }
+    }
+
+    private func getEffectiveQueryAndFilter(from rawQuery: String) -> (query: String, filter: SearchTypeFilter) {
+        let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let activeCmd = searchBar.activeSyntaxCommand {
+            switch activeCmd.actionType {
+            case .applyFilter(let filter):
+                return (trimmed, filter)
+            case .webSearch:
+                return ("/web \(trimmed)", filterBar.selectedFilter)
+            case .calculator:
+                return ("/calc \(trimmed)", filterBar.selectedFilter)
+            case .systemAction:
+                return (trimmed, filterBar.selectedFilter)
+            }
+        }
+
         var effectiveFilter = filterBar.selectedFilter
-        var effectiveQuery = query
+        var effectiveQuery = rawQuery
         if let extracted = SearchTypeFilter.extractPrefix(from: trimmed) {
             effectiveFilter = extracted.filter
             if filterBar.selectedFilter != extracted.filter {
@@ -440,16 +520,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             }
             effectiveQuery = extracted.query
         }
-
-        // 只要有文字输入，立即平滑展开到标准工作区 520pt（若已展开则无任何布局抖动）
-        setPanelExpanded(true, animated: true)
-
-        SearchCoordinator.shared.search(query: effectiveQuery, filter: effectiveFilter) { [weak self] results in
-            runtimeLog("[SearchVC] received results count: \(results.count) for query: '\(query)', filter: \(effectiveFilter.rawValue)")
-            // 若在搜索计算期间用户已经删空，丢弃过期的结果，防止正在收拢时突发重绘
-            guard let self = self, self.isExpanded else { return }
-            self.resultsTable.updateResults(results)
-        }
+        return (effectiveQuery, effectiveFilter)
     }
 
     public func searchBarDidRequestAutocompleteSyntax(_ searchBar: SearchBarView) {
@@ -469,6 +540,11 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     // MARK: - SearchFilterBarDelegate
     public func searchFilterBar(_ bar: SearchFilterBarView, didSelectFilter filter: SearchTypeFilter) {
         runtimeLog("[SearchVC] didSelectFilter: \(filter.rawValue)")
+        if filter == .all {
+            searchBar.setSyntaxCommand(nil)
+        } else if let cmd = SearchSyntaxCommand.command(for: filter) {
+            searchBar.setSyntaxCommand(cmd)
+        }
         // 维持输入框第一响应者
         view.window?.makeFirstResponder(searchBar.textField)
         performCurrentSearch()
@@ -479,32 +555,24 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     }
 
     private func applySyntaxCommand(_ command: SearchSyntaxCommand) {
-        if let filter = command.filter {
-            searchBar.text = "\(command.trigger) "
+        switch command.actionType {
+        case .applyFilter(let filter):
+            searchBar.setSyntaxCommand(command)
+            searchBar.text = ""
             filterBar.selectedFilter = filter
             filterBar.showTypeFilters()
             view.window?.makeFirstResponder(searchBar.textField)
-            if let editor = searchBar.textField.currentEditor() {
-                editor.selectedRange = NSRange(location: searchBar.text.count, length: 0)
-            }
             performCurrentSearch()
-        } else {
-            switch command.actionType {
-            case .webSearch, .calculator:
-                searchBar.text = "\(command.trigger) "
-                filterBar.showTypeFilters()
-                view.window?.makeFirstResponder(searchBar.textField)
-                if let editor = searchBar.textField.currentEditor() {
-                    editor.selectedRange = NSRange(location: searchBar.text.count, length: 0)
-                }
-                performCurrentSearch()
-            case .systemAction(let id):
-                if let act = SystemActions.shared.actions.first(where: { $0.id == id }) {
-                    dismissSearchPanel()
-                    act.execute()
-                }
-            default:
-                break
+        case .webSearch, .calculator:
+            searchBar.setSyntaxCommand(command)
+            searchBar.text = ""
+            filterBar.showTypeFilters()
+            view.window?.makeFirstResponder(searchBar.textField)
+            performCurrentSearch()
+        case .systemAction(let id):
+            if let act = SystemActions.shared.actions.first(where: { $0.id == id }) {
+                dismissSearchPanel()
+                act.execute()
             }
         }
     }
@@ -519,17 +587,45 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
-        var effectiveFilter = filterBar.selectedFilter
-        var effectiveQuery = query
-        if let extracted = SearchTypeFilter.extractPrefix(from: trimmed) {
-            effectiveFilter = extracted.filter
-            effectiveQuery = extracted.query
-        }
+        let (effectiveQuery, effectiveFilter) = getEffectiveQueryAndFilter(from: query)
 
         SearchCoordinator.shared.search(query: effectiveQuery, filter: effectiveFilter) { [weak self] results in
             guard let self = self, self.isExpanded else { return }
             self.resultsTable.updateResults(results)
         }
+    }
+
+    @discardableResult
+    public func handleSpacebarShortcut() -> Bool {
+        guard searchBar.text.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        if filterBar.selectedFilter == .all && searchBar.activeSyntaxCommand == nil {
+            filterBar.selectedFilter = .document
+            if let cmd = SearchSyntaxCommand.command(for: .document) {
+                searchBar.setSyntaxCommand(cmd)
+            }
+            filterBar.showTypeFilters()
+            view.window?.makeFirstResponder(searchBar.textField)
+            setPanelExpanded(true, animated: true)
+            return true
+        }
+        return false
+    }
+
+    @discardableResult
+    public func handleBackspaceShortcut() -> Bool {
+        guard searchBar.text.isEmpty else { return false }
+        if searchBar.activeSyntaxCommand != nil {
+            removeActiveSyntaxCapsule()
+            return true
+        }
+        if filterBar.selectedFilter != .all {
+            filterBar.selectedFilter = .all
+            filterBar.showTypeFilters()
+            view.window?.makeFirstResponder(searchBar.textField)
+            setPanelExpanded(false, animated: true)
+            return true
+        }
+        return false
     }
 
     public func searchBarDidPressArrowDown(_ searchBar: SearchBarView) {
@@ -545,7 +641,9 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     }
 
     public func searchBarDidPressEscape(_ searchBar: SearchBarView) {
-        if filterBar.selectedFilter != .all {
+        if searchBar.activeSyntaxCommand != nil {
+            removeActiveSyntaxCapsule()
+        } else if filterBar.selectedFilter != .all {
             filterBar.selectedFilter = .all
             performCurrentSearch()
         } else if !searchBar.text.isEmpty {
@@ -573,6 +671,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     private func dismissSearchPanel() {
         PanelCoordinator.shared.hideSearchPanel()
         searchBar.text = ""
+        searchBar.setSyntaxCommand(nil)
         filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
         resultsTable.updateResults([])
@@ -676,6 +775,39 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
 
     override public var canBecomeKey: Bool { true }
     override public var canBecomeMain: Bool { false }
+
+    override public func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown {
+            let isMarked: Bool
+            if let editor = searchViewController.searchBar.textField.currentEditor() as? NSTextView {
+                isMarked = editor.hasMarkedText()
+            } else {
+                isMarked = false
+            }
+
+            // 当输入法正在拼音选词上屏时，绝不拦截空格或退格
+            if !isMarked {
+                let query = searchViewController.searchBar.text
+                let trimmed = query.trimmingCharacters(in: .whitespaces)
+                let modifiers = event.modifierFlags.intersection([.command, .option, .control])
+
+                // 1. 空格一键切入文件检索 (keyCode 49)
+                if event.keyCode == 49 && trimmed.isEmpty && modifiers.isEmpty {
+                    if searchViewController.handleSpacebarShortcut() {
+                        return
+                    }
+                }
+
+                // 2. 退格键回退到全部分类 (keyCode 51)
+                if event.keyCode == 51 && query.isEmpty && modifiers.isEmpty {
+                    if searchViewController.handleBackspaceShortcut() {
+                        return
+                    }
+                }
+            }
+        }
+        super.sendEvent(event)
+    }
 
     public func prepareForDisplay() {
         searchViewController.prepareForDisplay()

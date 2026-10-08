@@ -215,7 +215,6 @@ public final class MetadataFileSearchBackend: NSObject {
     }
 
     private static func isExcluded(_ path: String) -> Bool {
-        let excluded = ["/.Trash/", "/DerivedData/", "/node_modules/", "/.git/", "/Library/Caches/", "/Library/Developer/CommandLineTools/"]
-        return excluded.contains(where: path.contains)
+        return SearchExclusionEngine.shared.isExcluded(path: path)
     }
 }

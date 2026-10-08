@@ -293,11 +293,13 @@ public final class SpotlightBridge {
                 enumerator.skipDescendants()
             }
             let filename = fileURL.lastPathComponent
-            if filename == "node_modules" || filename == "DerivedData" || filename == ".git" {
+            if SearchExclusionEngine.shared.shouldSkipDescendants(folderName: filename, path: fileURL.path) {
                 enumerator.skipDescendants()
                 continue
             }
-            if filename.hasPrefix(".") || filename.hasSuffix(".app") { continue }
+            if filename.hasPrefix(".") || filename.hasSuffix(".app") || SearchExclusionEngine.shared.isExcluded(path: fileURL.path) {
+                continue
+            }
             let values = try? fileURL.resourceValues(forKeys: [.isDirectoryKey, .contentModificationDateKey])
             let isDir = values?.isDirectory ?? false
             let modified = values?.contentModificationDate

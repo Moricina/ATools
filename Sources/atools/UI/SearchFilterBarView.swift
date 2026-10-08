@@ -36,7 +36,7 @@ public final class SearchSyntaxPillButton: NSButton {
         isBordered = false
         bezelStyle = .inline
         wantsLayer = true
-        layer?.cornerRadius = 13
+        layer?.cornerRadius = 6
         layer?.masksToBounds = true
         title = ""
         toolTip = "\(command.trigger) \(command.name) - \(command.description) (按 Tab 补全)"
@@ -47,6 +47,11 @@ public final class SearchSyntaxPillButton: NSButton {
         imageHugsTitle = true
 
         updateAppearance()
+    }
+
+    override public var intrinsicContentSize: NSSize {
+        let base = super.intrinsicContentSize
+        return NSSize(width: base.width + 10, height: 24)
     }
 
     override public func updateTrackingAreas() {
@@ -74,7 +79,7 @@ public final class SearchSyntaxPillButton: NSButton {
 
     public func updateAppearance() {
         let isDark = glassIsDark
-        let font = NSFont.systemFont(ofSize: 11.5, weight: isHighlightedPill ? .semibold : .medium)
+        let font = NSFont.systemFont(ofSize: 12, weight: isHighlightedPill ? .semibold : .medium)
         let textColor: NSColor
 
         if isHighlightedPill {
@@ -82,7 +87,7 @@ public final class SearchSyntaxPillButton: NSButton {
             layer?.backgroundColor = isDark
                 ? NSColor(red: 0.15, green: 0.45, blue: 0.95, alpha: 0.28).cgColor
                 : NSColor(red: 0.05, green: 0.35, blue: 0.85, alpha: 0.12).cgColor
-            layer?.borderWidth = 0.85
+            layer?.borderWidth = 0.5
             layer?.borderColor = isDark
                 ? NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.45).cgColor
                 : NSColor(red: 0.1, green: 0.45, blue: 0.95, alpha: 0.30).cgColor
@@ -109,7 +114,7 @@ public final class SearchSyntaxPillButton: NSButton {
         contentTintColor = textColor
         let style = NSMutableParagraphStyle()
         style.alignment = .center
-        attributedTitle = NSAttributedString(string: " \(command.trigger) \(command.name)", attributes: [
+        attributedTitle = NSAttributedString(string: " \(command.name)", attributes: [
             .font: font,
             .foregroundColor: textColor,
             .paragraphStyle: style
@@ -149,7 +154,7 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
         isBordered = false
         bezelStyle = .inline
         wantsLayer = true
-        layer?.cornerRadius = 13
+        layer?.cornerRadius = 6
         layer?.masksToBounds = true
         title = ""
         toolTip = "\(filter.displayName) (可拖动排序)"
@@ -161,13 +166,18 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
 
         let style = NSMutableParagraphStyle()
         style.alignment = .center
-        let font = NSFont.systemFont(ofSize: 11.5, weight: .medium)
+        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
         attributedTitle = NSAttributedString(string: " \(filter.displayName)", attributes: [
             .font: font,
             .paragraphStyle: style
         ])
 
         updateAppearance()
+    }
+
+    override public var intrinsicContentSize: NSSize {
+        let base = super.intrinsicContentSize
+        return NSSize(width: base.width + 10, height: 24)
     }
 
     override public func updateTrackingAreas() {
@@ -269,27 +279,27 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
 
     public func updateAppearance() {
         let isDark = glassIsDark
-        let font = NSFont.systemFont(ofSize: 11.5, weight: isPillSelected ? .semibold : .medium)
+        let font = NSFont.systemFont(ofSize: 12, weight: isPillSelected ? .semibold : .medium)
         let textColor: NSColor
 
         if isPillSelected {
-            textColor = GlassPalette.textPrimary(isDark: isDark)
+            textColor = isDark ? NSColor(white: 0.95, alpha: 1.0) : NSColor(white: 0.15, alpha: 1.0)
             layer?.backgroundColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.18).cgColor
-                : NSColor(white: 0.0, alpha: 0.09).cgColor
-            layer?.borderWidth = 0.75
+                ? NSColor.white.withAlphaComponent(0.15).cgColor
+                : NSColor.black.withAlphaComponent(0.08).cgColor
+            layer?.borderWidth = 0.5
             layer?.borderColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.22).cgColor
-                : NSColor(white: 0.0, alpha: 0.12).cgColor
+                ? NSColor.white.withAlphaComponent(0.22).cgColor
+                : NSColor.black.withAlphaComponent(0.12).cgColor
         } else if isHovered {
             textColor = GlassPalette.textPrimary(isDark: isDark)
             layer?.backgroundColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.08).cgColor
-                : NSColor(white: 0.0, alpha: 0.04).cgColor
+                ? NSColor.white.withAlphaComponent(0.08).cgColor
+                : NSColor.black.withAlphaComponent(0.04).cgColor
             layer?.borderWidth = 0.5
             layer?.borderColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.12).cgColor
-                : NSColor(white: 0.0, alpha: 0.06).cgColor
+                ? NSColor.white.withAlphaComponent(0.12).cgColor
+                : NSColor.black.withAlphaComponent(0.06).cgColor
         } else {
             textColor = GlassPalette.textSecondary(isDark: isDark)
             layer?.backgroundColor = NSColor.clear.cgColor
@@ -385,7 +395,7 @@ public final class SearchFilterBarView: NSView {
         stackView.orientation = .horizontal
         stackView.distribution = .fillProportionally
         stackView.alignment = .centerY
-        stackView.spacing = 4
+        stackView.spacing = 8
         addSubview(stackView)
 
         NSLayoutConstraint.activate([
@@ -418,7 +428,7 @@ public final class SearchFilterBarView: NSView {
             btn.setContentCompressionResistancePriority(.required, for: .horizontal)
             stackView.addArrangedSubview(btn)
 
-            btn.heightAnchor.constraint(equalToConstant: 26).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 24).isActive = true
         }
     }
 
@@ -450,7 +460,7 @@ public final class SearchFilterBarView: NSView {
             btn.setContentHuggingPriority(.required, for: .horizontal)
             btn.setContentCompressionResistancePriority(.required, for: .horizontal)
             stackView.addArrangedSubview(btn)
-            btn.heightAnchor.constraint(equalToConstant: 26).isActive = true
+            btn.heightAnchor.constraint(equalToConstant: 24).isActive = true
         }
     }
 

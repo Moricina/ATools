@@ -12,6 +12,7 @@ public protocol SearchBarDelegate: AnyObject {
     func searchBarDidRequestCycleFilter(_ searchBar: SearchBarView, forward: Bool)
     func searchBar(_ searchBar: SearchBarView, didRequestSelectFilterNumber number: Int)
     func searchBarDidRequestAutocompleteSyntax(_ searchBar: SearchBarView)
+    func searchBarDidRequestRemoveSyntaxCapsule(_ searchBar: SearchBarView)
 }
 
 public final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
@@ -123,6 +124,130 @@ public final class SearchTextField: NSTextField {
 }
 
 
+/// 现代 macOS 搜索框指令胶囊 Token 视图 (对齐图二：图标 + 标题 + 关闭小叉)
+public final class SyntaxCapsuleView: NSView {
+    public let iconImageView = NSImageView()
+    public let titleLabel = NSTextField(labelWithString: "")
+    public let removeButton = NSButton()
+    public var onRemove: (() -> Void)?
+
+    private var isHovered: Bool = false {
+        didSet { updateAppearance() }
+    }
+    private var trackingArea: NSTrackingArea?
+
+    override public init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupUI()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupUI() {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.masksToBounds = true
+        translatesAutoresizingMaskIntoConstraints = false
+
+        // 抗拉伸抗挤压优先级设为最高，保证胶囊尺寸严格紧凑贴合内容
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        iconImageView.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(iconImageView)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        titleLabel.lineBreakMode = .byClipping
+        titleLabel.setContentHuggingPriority(.required, for: .horizontal)
+        titleLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(titleLabel)
+
+        removeButton.translatesAutoresizingMaskIntoConstraints = false
+        removeButton.bezelStyle = .inline
+        removeButton.isBordered = false
+        removeButton.image = ThumbnailPipeline.shared.symbolIcon(name: "xmark", pointSize: 8, weight: .bold)
+        removeButton.target = self
+        removeButton.action = #selector(removeClicked)
+        removeButton.toolTip = "清除指令"
+        addSubview(removeButton)
+
+        NSLayoutConstraint.activate([
+            heightAnchor.constraint(equalToConstant: 24),
+
+            iconImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            iconImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconImageView.widthAnchor.constraint(equalToConstant: 13),
+            iconImageView.heightAnchor.constraint(equalToConstant: 13),
+
+            titleLabel.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 4),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            removeButton.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 3),
+            removeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            removeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            removeButton.widthAnchor.constraint(equalToConstant: 12),
+            removeButton.heightAnchor.constraint(equalToConstant: 12)
+        ])
+
+        updateAppearance()
+    }
+
+    @objc private func removeClicked() {
+        onRemove?()
+    }
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea { removeTrackingArea(existing) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override public func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovered = true
+    }
+
+    override public func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovered = false
+    }
+
+    public func configure(with command: SearchSyntaxCommand) {
+        iconImageView.image = ThumbnailPipeline.shared.symbolIcon(name: command.iconSymbolName, pointSize: 11, weight: .medium)
+        titleLabel.stringValue = command.name
+        updateAppearance()
+    }
+
+    public func updateAppearance() {
+        let isDark = ConfigManager.shared.config.theme.isDark
+        if isDark {
+            layer?.backgroundColor = isHovered
+                ? NSColor.white.withAlphaComponent(0.18).cgColor
+                : NSColor.white.withAlphaComponent(0.12).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.20).cgColor
+            titleLabel.textColor = NSColor(white: 0.95, alpha: 1.0)
+            iconImageView.contentTintColor = NSColor(white: 0.90, alpha: 1.0)
+            removeButton.contentTintColor = isHovered ? NSColor.white : NSColor(white: 0.65, alpha: 1.0)
+        } else {
+            layer?.backgroundColor = isHovered
+                ? NSColor.black.withAlphaComponent(0.09).cgColor
+                : NSColor.black.withAlphaComponent(0.06).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = NSColor.black.withAlphaComponent(0.10).cgColor
+            titleLabel.textColor = NSColor(white: 0.15, alpha: 1.0)
+            iconImageView.contentTintColor = NSColor(white: 0.25, alpha: 1.0)
+            removeButton.contentTintColor = isHovered ? NSColor(white: 0.10, alpha: 1.0) : NSColor(white: 0.45, alpha: 1.0)
+        }
+    }
+}
+
 public final class SearchBarView: NSView, NSTextFieldDelegate {
     public weak var delegate: SearchBarDelegate? {
         didSet {
@@ -131,10 +256,18 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     }
 
     private let iconImageView = NSImageView()
+    public let syntaxCapsuleView = SyntaxCapsuleView()
     public let textField = SearchTextField()
     private let clearButton = NSButton()
     private let glassEffectView = LiquidGlassContainerView()
     private var trackingArea: NSTrackingArea?
+
+    public private(set) var activeSyntaxCommand: SearchSyntaxCommand?
+
+    private var textFieldLeadingToIconConstraint: NSLayoutConstraint!
+    private var textFieldLeadingToCapsuleConstraint: NSLayoutConstraint!
+    private var capsuleLeadingToIconConstraint: NSLayoutConstraint!
+
     private var isFocused: Bool = false {
         didSet {
             updateGlassTint()
@@ -189,7 +322,9 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     @objc private func handleThemeChanged() {
         updateGlassTint()
         updateBackgroundStyles()
+        syntaxCapsuleView.updateAppearance()
         textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
+        updatePlaceholder()
     }
 
     private func setupViews() {
@@ -213,6 +348,14 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         iconImageView.contentTintColor = .secondaryLabelColor
         addSubview(iconImageView)
 
+        // Syntax Capsule View (默认隐藏，挂载指令时显式展开)
+        syntaxCapsuleView.isHidden = true
+        syntaxCapsuleView.onRemove = { [weak self] in
+            guard let self = self else { return }
+            self.delegate?.searchBarDidRequestRemoveSyntaxCapsule(self)
+        }
+        addSubview(syntaxCapsuleView)
+
         // Text Field
         textField.translatesAutoresizingMaskIntoConstraints = false
         textField.isBordered = false
@@ -223,8 +366,8 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         }
         textField.focusRingType = .none
         textField.font = NSFont.systemFont(ofSize: 18, weight: .medium)
-        textField.placeholderString = "搜索应用、全盘文件、计算或输入命令..."
         textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
+        updatePlaceholder()
         textField.delegate = self
         textField.customDelegate = nil
         textField.searchBarView = self
@@ -242,6 +385,10 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         clearButton.isHidden = true
         addSubview(clearButton)
 
+        capsuleLeadingToIconConstraint = syntaxCapsuleView.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 8)
+        textFieldLeadingToCapsuleConstraint = textField.leadingAnchor.constraint(equalTo: syntaxCapsuleView.trailingAnchor, constant: 8)
+        textFieldLeadingToIconConstraint = textField.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 10)
+
         NSLayoutConstraint.activate([
             glassEffectView.leadingAnchor.constraint(equalTo: leadingAnchor),
             glassEffectView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -253,16 +400,44 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
             iconImageView.widthAnchor.constraint(equalToConstant: 22),
             iconImageView.heightAnchor.constraint(equalToConstant: 22),
 
+            syntaxCapsuleView.centerYAnchor.constraint(equalTo: centerYAnchor),
+
             clearButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             clearButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             clearButton.widthAnchor.constraint(equalToConstant: 20),
             clearButton.heightAnchor.constraint(equalToConstant: 20),
 
-            textField.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 10),
+            textFieldLeadingToIconConstraint,
             textField.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -8),
             textField.centerYAnchor.constraint(equalTo: centerYAnchor),
             textField.heightAnchor.constraint(equalToConstant: 32)
         ])
+    }
+
+    public func setSyntaxCommand(_ command: SearchSyntaxCommand?) {
+        activeSyntaxCommand = command
+        if let command = command {
+            syntaxCapsuleView.configure(with: command)
+            syntaxCapsuleView.isHidden = false
+            NSLayoutConstraint.deactivate([textFieldLeadingToIconConstraint])
+            NSLayoutConstraint.activate([capsuleLeadingToIconConstraint, textFieldLeadingToCapsuleConstraint])
+        } else {
+            syntaxCapsuleView.isHidden = true
+            NSLayoutConstraint.deactivate([capsuleLeadingToIconConstraint, textFieldLeadingToCapsuleConstraint])
+            NSLayoutConstraint.activate([textFieldLeadingToIconConstraint])
+        }
+        updatePlaceholder()
+    }
+
+    private func updatePlaceholder() {
+        let text = activeSyntaxCommand != nil ? "在 \(activeSyntaxCommand!.name) 中搜索..." : "搜索应用、全盘文件、计算或输入命令..."
+        let isDark = glassIsDark
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: GlassPalette.textTertiary(isDark: isDark),
+            .font: NSFont.systemFont(ofSize: 18, weight: .regular)
+        ]
+        textField.placeholderString = text
+        textField.placeholderAttributedString = NSAttributedString(string: text, attributes: attrs)
     }
 
     private func updateBackgroundStyles() {

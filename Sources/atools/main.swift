@@ -736,6 +736,7 @@ if CommandLine.arguments.contains("--test") {
         }
         TestAssertions.expect(!slashResults.isEmpty, "输入 '/' 必须秒级直出语法指令卡片")
         TestAssertions.expect(slashResults.allSatisfy { $0.type == .syntaxCommand }, "所有卡片类型必须为 syntaxCommand")
+        TestAssertions.expect(slashResults.first?.title == "文档", "语法指令卡片标题必须纯中文显示 '文档'，不得带有英文前缀")
 
         // 验证 /calc 快速计算直出
         var calcResults: [SearchResult] = []
@@ -764,6 +765,216 @@ if CommandLine.arguments.contains("--test") {
         TestAssertions.expect(webResults.first?.type == .webSearch, "/web Swift 必须即时输出 webSearch 卡片")
 
         print("      ✓ 斜杠语法胶囊（指令匹配/模式动态切换/Tab补全候选/极速直出）通过.")
+    }
+
+    // 6.7 全盘搜索排除引擎 (SearchExclusionEngine) 与自定义范围黑名单 (对齐 Alfred 设计)
+    print("[6.7] Testing Search Exclusion Engine & Custom Scopes (Alfred-style)...")
+    do {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let engine = SearchExclusionEngine.shared
+
+        // (a) 预设过滤规则覆盖断言
+        TestAssertions.expect(engine.isExcluded(path: "/Library/Caches/com.apple.test"), "系统缓存 /Library/Caches 必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "\(home)/Library/Caches/com.atools.app"), "用户缓存 ~/Library/Caches 必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/var/log/system.log"), "系统日志 /var/log 必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "\(home)/Library/Logs/DiagnosticReports/crash.ips"), "用户日志与崩溃报告必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/private/var/folders/zz/zyxv/T/tmpfile"), "系统临时文件必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "\(home)/.Trash/deleted_file.txt"), "废纸篓内容必须被排除")
+
+        // 开发者构建与依赖产物断言
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/Project/node_modules/react/index.js"), "node_modules 产物必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/DerivedData/App/Build/Products/Debug/app"), "DerivedData 必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/repo/.build/debug/output"), ".build 产物必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/repo/target/release/binary"), "target 构建目录必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/repo/__pycache__/app.cpython-310.pyc"), "__pycache__ 必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/repo/.git/config"), ".git 必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: "/Users/dev/.env"), "以 '.' 开头的隐藏文件必须被排除")
+
+        // 正常合法文件不得被误杀
+        TestAssertions.expect(!engine.isExcluded(path: "\(home)/Documents/2026_target_report.docx"), "包含 target 词根的正常文档不得被误杀")
+        TestAssertions.expect(!engine.isExcluded(path: "\(home)/Desktop/node_developer_guide.pdf"), "文件名含 node 词根的文档不得被误杀")
+
+        // (b) 对齐 Alfred 的关键云盘特赦放行机制 (iCloud Drive & CloudStorage 白名单)
+        let normalLibraryPath = "\(home)/Library/Application Support/ATools/config.json"
+        let normalPrefPath = "\(home)/Library/Preferences/com.apple.finder.plist"
+        let icloudDocPath = "\(home)/Library/Mobile Documents/com~apple~CloudDocs/WorkReport.pdf"
+        let cloudStoragePath = "\(home)/Library/CloudStorage/OneDrive-Personal/Project.xlsx"
+        let cloudStorageDevPath = "\(home)/Library/CloudStorage/OneDrive-Personal/Code/node_modules/pkg/index.js"
+
+        TestAssertions.expect(engine.isExcluded(path: normalLibraryPath), "~/Library 下常规应用配置数据必须被排除")
+        TestAssertions.expect(engine.isExcluded(path: normalPrefPath), "~/Library 下系统偏好设置必须被排除")
+        TestAssertions.expect(!engine.isExcluded(path: icloudDocPath), "iCloud Drive (~/Library/Mobile Documents) 必须智能特赦放行！")
+        TestAssertions.expect(!engine.isExcluded(path: cloudStoragePath), "第三方云盘 (~/Library/CloudStorage) 必须智能特赦放行！")
+        TestAssertions.expect(engine.isExcluded(path: cloudStorageDevPath), "云盘内部的 node_modules 仍须被开发者规则严格排除")
+
+        // (c) 热目录遍历剪枝阻断 (shouldSkipDescendants)
+        TestAssertions.expect(engine.shouldSkipDescendants(folderName: "node_modules", path: "/path/node_modules"), "热目录应跳过 node_modules 子树")
+        TestAssertions.expect(engine.shouldSkipDescendants(folderName: "DerivedData", path: "/path/DerivedData"), "热目录应跳过 DerivedData 子树")
+        TestAssertions.expect(engine.shouldSkipDescendants(folderName: ".git", path: "/path/.git"), "热目录应跳过 .git 子树")
+        TestAssertions.expect(!engine.shouldSkipDescendants(folderName: "MyProject", path: "/path/MyProject"), "热目录正常文件夹不得被跳过")
+
+        // (d) 自定义排除目录的合法性、互斥包含与持久化往返测试
+        let tempExclusionParent = FileManager.default.temporaryDirectory.appendingPathComponent("atools_exclusion_parent_\(UUID().uuidString)").path
+        let tempExclusionChild = (tempExclusionParent as NSString).appendingPathComponent("sub_folder")
+        try? FileManager.default.createDirectory(atPath: tempExclusionChild, withIntermediateDirectories: true)
+
+        defer {
+            try? FileManager.default.removeItem(atPath: tempExclusionParent)
+            ConfigManager.shared.resetCustomExcludedPathsToDefault()
+        }
+
+        // 拒绝根目录与家目录
+        TestAssertions.expect(ConfigManager.shared.addCustomExcludedPath("/") == false, "必须拒绝排除根目录 '/'")
+        TestAssertions.expect(ConfigManager.shared.addCustomExcludedPath(home) == false, "必须拒绝排除整个用户家目录")
+
+        // 添加子目录
+        TestAssertions.expect(ConfigManager.shared.addCustomExcludedPath(tempExclusionChild) == true, "添加合法自定义排除目录必须成功")
+        TestAssertions.expect(ConfigManager.shared.config.customExcludedPaths.contains(tempExclusionChild), "配置中必须包含已添加的子目录")
+
+        // 添加父目录：自动吸收清理冗余子目录
+        TestAssertions.expect(ConfigManager.shared.addCustomExcludedPath(tempExclusionParent) == true, "添加父级排除目录必须成功")
+        TestAssertions.expect(ConfigManager.shared.config.customExcludedPaths.contains(tempExclusionParent), "配置中必须包含父目录")
+        TestAssertions.expect(!ConfigManager.shared.config.customExcludedPaths.contains(tempExclusionChild), "父目录加入后必须自动吸收移除冗余子目录")
+
+        // 再次添加已被覆盖的子目录：自动拒绝
+        TestAssertions.expect(ConfigManager.shared.addCustomExcludedPath(tempExclusionChild) == false, "已被上级目录覆盖的路径不得重复添加")
+
+        // 验证引擎对自定义目录的即时排除
+        let fileInExcluded = "\(tempExclusionChild)/secret.txt"
+        TestAssertions.expect(engine.isExcluded(path: fileInExcluded), "自定义排除目录内的文件必须被判定为 excluded")
+
+        // 移除排除目录
+        ConfigManager.shared.removeCustomExcludedPath(tempExclusionParent)
+        TestAssertions.expect(!ConfigManager.shared.config.customExcludedPaths.contains(tempExclusionParent), "移除后配置中不得包含该路径")
+        TestAssertions.expect(!engine.isExcluded(path: fileInExcluded), "移除排除目录后文件必须恢复为未被排除")
+
+        // (e) 向下兼容老配置 JSON 解码测试
+        let legacyJson = """
+        {
+            "version": 4,
+            "enableFullDiskSearch": true,
+            "searchResultLimit": 80
+        }
+        """.data(using: .utf8)!
+        let legacyDecoded = try! JSONDecoder().decode(AtoolsConfig.self, from: legacyJson)
+        TestAssertions.expect(legacyDecoded.searchExcludeCaches == true, "老配置缺字段必须默认开启 searchExcludeCaches")
+        TestAssertions.expect(legacyDecoded.searchExcludeUserLibrary == true, "老配置缺字段必须默认开启 searchExcludeUserLibrary")
+        TestAssertions.expect(legacyDecoded.customExcludedPaths.isEmpty, "老配置缺字段必须默认 customExcludedPaths 为空数组")
+
+        print("      ✓ Search Exclusion Engine & Custom Scopes（预设过滤/iCloud特赦/剪枝阻断/配置兼容）全部通过.")
+    }
+
+    // 6.8 空格一键切入文件检索 & 访达文件夹拖拽进设置卡片 (对齐 Alfred 体验)
+    print("[6.8] Testing Spacebar File Search Shortcut & Settings Drag-and-Drop Card (Alfred-style)...")
+    do {
+        // (a) 空格与退格快捷键逻辑验证
+        let searchVC = SearchViewController()
+        searchVC.loadView()
+        searchVC.viewDidLoad()
+
+        // 初始状态为全部模式，输入框为空
+        TestAssertions.expect(searchVC.filterBar.selectedFilter == .all, "初始筛选器必须为 .all")
+        TestAssertions.expect(searchVC.searchBar.text.isEmpty, "初始搜索栏输入框必须为空")
+
+        // 模拟空白按空格：切入 .document 模式
+        let spaceHandled = searchVC.handleSpacebarShortcut()
+        TestAssertions.expect(spaceHandled == true, "空白状态按空格必须成功处理并返回 true")
+        TestAssertions.expect(searchVC.filterBar.selectedFilter == .document, "空白按空格必须切换为 .document 筛选器")
+        TestAssertions.expect(searchVC.isExpanded == true, "按空格切换后搜索面板必须展开")
+
+        // 再次按空格（已在 .document 分类）：不再重复切换
+        let spaceAgain = searchVC.handleSpacebarShortcut()
+        TestAssertions.expect(spaceAgain == false, "已处于非全部状态再次触发空白空格不重复消费")
+
+        // 模拟空白按退格：回退为 .all 模式
+        let backspaceHandled = searchVC.handleBackspaceShortcut()
+        TestAssertions.expect(backspaceHandled == true, "非 .all 模式下空白按退格必须成功处理并返回 true")
+        TestAssertions.expect(searchVC.filterBar.selectedFilter == .all, "空白按退格必须平滑回退到 .all 筛选器")
+
+        // 再次按退格（已在 .all 模式）：不消费
+        let backspaceAgain = searchVC.handleBackspaceShortcut()
+        TestAssertions.expect(backspaceAgain == false, "已在 .all 模式时退格不拦截")
+
+        // 当输入框有非空白文本时，空格快捷键不被触发
+        searchVC.searchBar.text = "report"
+        let nonBlankSpace = searchVC.handleSpacebarShortcut()
+        TestAssertions.expect(nonBlankSpace == false, "输入框有内容时空格快捷切入不应触发")
+        searchVC.searchBar.text = ""
+
+        // (b) SettingsCardView 访达拖拽放置机制断言
+        let card = SettingsCardView()
+        TestAssertions.expect(card.onDropFolders == nil, "初始 onDropFolders 必须为空")
+
+        var droppedPathsReceived: [String] = []
+        card.onDropFolders = { paths in
+            droppedPathsReceived = paths
+        }
+        TestAssertions.expect(card.onDropFolders != nil, "赋值后 onDropFolders 必须非空")
+        card.onDropFolders?(["/tmp"])
+        TestAssertions.expect(droppedPathsReceived == ["/tmp"], "模拟投放路径必须被闭包完整接收")
+
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("atools_drag_test_\(UUID().uuidString)")
+        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        // 模拟合法目录注入并加入自定义排除
+        let dirPath = tempDir.path
+        TestAssertions.expect(fm.fileExists(atPath: dirPath), "临时测试目录必须真实存在")
+        let addOk = ConfigManager.shared.addCustomExcludedPath(dirPath)
+        TestAssertions.expect(addOk == true, "拖入合法目录必须成功加入排除黑名单")
+        TestAssertions.expect(ConfigManager.shared.config.customExcludedPaths.contains(dirPath), "配置中必须包含拖入的目录")
+
+        // 清理测试目录并复原配置
+        ConfigManager.shared.removeCustomExcludedPath(dirPath)
+        TestAssertions.expect(!ConfigManager.shared.config.customExcludedPaths.contains(dirPath), "移除后配置必须清除该目录")
+        try? fm.removeItem(at: tempDir)
+
+        print("      ✓ 空格一键切入文件检索 & 访达文件夹拖拽进设置（快捷切换/退格回退/拖拽落地/配置复原）全部通过.")
+    }
+
+    // 6.9 搜索框语法胶囊 (Syntax Token Capsule) 交互与状态机闭环
+    print("[6.9] Testing Search Bar Syntax Token Capsule (Visual Chip & State Machine)...")
+    do {
+        let searchVC = SearchViewController()
+        searchVC.loadView()
+        searchVC.viewDidLoad()
+
+        let searchBar = searchVC.searchBar
+        TestAssertions.expect(searchBar.activeSyntaxCommand == nil, "初始状态下语法胶囊必须为 nil")
+
+        // (a) 胶囊挂载与占位提示语切换
+        guard let docCmd = SearchSyntaxCommand.allCommands.first(where: { $0.id == "cmd_doc" }) else {
+            fatalError("必须存在 cmd_doc 指令")
+        }
+        searchBar.setSyntaxCommand(docCmd)
+        TestAssertions.expect(searchBar.activeSyntaxCommand?.id == "cmd_doc", "挂载后 activeSyntaxCommand 必须为 cmd_doc")
+        let placeholder = searchBar.textField.placeholderString ?? searchBar.textField.placeholderAttributedString?.string ?? ""
+        TestAssertions.expect(placeholder.contains("文档"), "挂载胶囊后输入框 placeholder 必须包含 '文档'")
+
+        // (b) 点击胶囊移除关闭
+        searchVC.removeActiveSyntaxCapsule()
+        TestAssertions.expect(searchBar.activeSyntaxCommand == nil, "调用 removeActiveSyntaxCapsule 后胶囊必须卸载")
+        TestAssertions.expect(searchVC.filterBar.selectedFilter == .all, "移除胶囊后筛选器必须回退到 .all")
+
+        // (c) 键入斜杠指令 + 空格自动转换胶囊
+        searchVC.searchBar(searchBar, didChangeQuery: "/web ")
+        TestAssertions.expect(searchBar.activeSyntaxCommand?.id == "cmd_web", "键入 '/web ' 必须自动将指令转变为胶囊")
+        TestAssertions.expect(searchBar.text.isEmpty, "转变为胶囊后输入框应当自动清空以便键入关键词")
+
+        // (d) 胶囊退格键卸载闭环
+        TestAssertions.expect(searchBar.text.isEmpty, "当前输入框为空")
+        let bsResult = searchVC.handleBackspaceShortcut()
+        TestAssertions.expect(bsResult == true, "胶囊挂载且输入框为空时按退格键必须返回 true 拦截事件")
+        TestAssertions.expect(searchBar.activeSyntaxCommand == nil, "退格后语法胶囊必须卸载")
+        TestAssertions.expect(searchVC.filterBar.selectedFilter == .all, "退格后筛选器恢复为 .all")
+
+        // (e) prepareForDisplay 重置测试
+        searchBar.setSyntaxCommand(docCmd)
+        searchVC.prepareForDisplay()
+        TestAssertions.expect(searchBar.activeSyntaxCommand == nil, "prepareForDisplay 必须彻底重置语法胶囊")
+        TestAssertions.expect(searchBar.text.isEmpty, "prepareForDisplay 必须清空输入框")
+
+        print("      ✓ 搜索框语法胶囊（视觉胶囊挂载/输入自动转胶囊/占位符更新/退格卸载/状态重置）全部通过.")
     }
 
 

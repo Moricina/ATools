@@ -1058,6 +1058,15 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     private var headerView: SettingsHeaderView!
     private var hotFolderStack: NSStackView!
 
+    // 排除范围页控件
+    private var excludeCachesSwitch: NSSwitch!
+    private var excludeLogsSwitch: NSSwitch!
+    private var excludeDevSwitch: NSSwitch!
+    private var excludeUserLibSwitch: NSSwitch!
+    private var excludeTrashSwitch: NSSwitch!
+    private var excludeHiddenSwitch: NSSwitch!
+    private var customExclusionStack: NSStackView!
+
     public init() {
         super.init(frame: .zero)
         setupUI()
@@ -1069,7 +1078,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     private func setupUI() {
         translatesAutoresizingMaskIntoConstraints = false
 
-        headerView = SettingsHeaderView(title: "全盘搜索", iconName: "magnifyingglass", tabs: ["搜索选项", "扩展功能", "网络搜索"])
+        headerView = SettingsHeaderView(title: "全盘搜索", iconName: "magnifyingglass", tabs: ["搜索选项", "排除范围", "扩展功能", "网络搜索"])
         addSubview(headerView)
 
         pageContainer = NSView()
@@ -1141,6 +1150,19 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
         let cardHot = SettingsCardView()
         cardHot.translatesAutoresizingMaskIntoConstraints = false
+        cardHot.onDropFolders = { [weak self] droppedPaths in
+            var addedCount = 0
+            for path in droppedPaths {
+                if ConfigManager.shared.addHotFolder(path) {
+                    addedCount += 1
+                }
+            }
+            if addedCount > 0 {
+                self?.reloadHotFolderRows()
+            } else {
+                NSSound.beep()
+            }
+        }
         optionsScrollContent.addSubview(cardHot)
 
         let hotFolderContainer = NSView()
@@ -1173,7 +1195,165 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         ])
         reloadHotFolderRows()
 
-        // Page 1: 扩展功能
+        // Page 1: 排除范围 (对齐 Alfred Search Scope 设计)
+        let exclusionPage = NSView()
+        let exclusionScrollContent = NSView()
+        let exclusionScroll = makeTabScrollView(contentView: exclusionScrollContent)
+        exclusionPage.addSubview(exclusionScroll)
+        NSLayoutConstraint.activate([
+            exclusionScroll.topAnchor.constraint(equalTo: exclusionPage.topAnchor),
+            exclusionScroll.leadingAnchor.constraint(equalTo: exclusionPage.leadingAnchor),
+            exclusionScroll.trailingAnchor.constraint(equalTo: exclusionPage.trailingAnchor),
+            exclusionScroll.bottomAnchor.constraint(equalTo: exclusionPage.bottomAnchor)
+        ])
+
+        let secPresetTitle = makeSectionHeader(title: "常用排除预设 (快捷过滤)")
+        exclusionScrollContent.addSubview(secPresetTitle)
+
+        let cardPreset = SettingsCardView()
+        cardPreset.translatesAutoresizingMaskIntoConstraints = false
+        exclusionScrollContent.addSubview(cardPreset)
+
+        excludeCachesSwitch = NSSwitch()
+        excludeCachesSwitch.target = self
+        excludeCachesSwitch.action = #selector(toggleExcludeCaches(_:))
+        let rowCaches = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "archivebox"),
+            title: "排除系统与应用缓存",
+            subtitle: "自动过滤 ~/Library/Caches, /Library/Caches 及各类 WebKit 临时缓存数据",
+            accessory: excludeCachesSwitch
+        )
+        cardPreset.addRow(rowCaches)
+
+        excludeLogsSwitch = NSSwitch()
+        excludeLogsSwitch.target = self
+        excludeLogsSwitch.action = #selector(toggleExcludeLogs(_:))
+        let rowLogs = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "doc.text.magnifyingglass"),
+            title: "排除系统日志与崩溃报告",
+            subtitle: "自动过滤 ~/Library/Logs, /var/log, DiagnosticReports 及系统崩溃堆栈文件",
+            accessory: excludeLogsSwitch
+        )
+        cardPreset.addRow(rowLogs)
+
+        excludeDevSwitch = NSSwitch()
+        excludeDevSwitch.target = self
+        excludeDevSwitch.action = #selector(toggleExcludeDev(_:))
+        let rowDev = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "hammer"),
+            title: "排除常见开发依赖与构建产物",
+            subtitle: "自动过滤 node_modules, DerivedData, .build, target, __pycache__, .gradle 等工程副产物",
+            accessory: excludeDevSwitch
+        )
+        cardPreset.addRow(rowDev)
+
+        excludeUserLibSwitch = NSSwitch()
+        excludeUserLibSwitch.target = self
+        excludeUserLibSwitch.action = #selector(toggleExcludeUserLib(_:))
+        let rowUserLib = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "folder.badge.gearshape"),
+            title: "排除用户资源库 (~/Library)",
+            subtitle: "参照 Alfred 核心规则过滤系统配置杂项；智能保留 iCloud 云盘与各类第三方网盘文档",
+            accessory: excludeUserLibSwitch
+        )
+        cardPreset.addRow(rowUserLib)
+
+        excludeTrashSwitch = NSSwitch()
+        excludeTrashSwitch.target = self
+        excludeTrashSwitch.action = #selector(toggleExcludeTrash(_:))
+        let rowTrash = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "trash"),
+            title: "排除废纸篓与临时目录",
+            subtitle: "自动过滤 ~/.Trash, /private/var/folders, /tmp 等已丢弃与临时文件夹",
+            accessory: excludeTrashSwitch
+        )
+        cardPreset.addRow(rowTrash)
+
+        excludeHiddenSwitch = NSSwitch()
+        excludeHiddenSwitch.target = self
+        excludeHiddenSwitch.action = #selector(toggleExcludeHidden(_:))
+        let rowHidden = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "eye.slash"),
+            title: "排除版本控制与隐藏文件",
+            subtitle: "自动过滤 .git, .svn 及以 \".\" 开头的系统级隐藏文件与隐藏文件夹",
+            accessory: excludeHiddenSwitch
+        )
+        cardPreset.addRow(rowHidden, isLast: true)
+
+        NSLayoutConstraint.activate([
+            secPresetTitle.topAnchor.constraint(equalTo: exclusionScrollContent.topAnchor, constant: 14),
+            secPresetTitle.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
+
+            cardPreset.topAnchor.constraint(equalTo: secPresetTitle.bottomAnchor, constant: 8),
+            cardPreset.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
+            cardPreset.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28)
+        ])
+
+        // 自定义排除目录 (黑名单)
+        let secCustomTitle = makeSectionHeader(title: "自定义排除目录 (黑名单)")
+        exclusionScrollContent.addSubview(secCustomTitle)
+
+        let cardCustom = SettingsCardView()
+        cardCustom.translatesAutoresizingMaskIntoConstraints = false
+        cardCustom.onDropFolders = { [weak self] droppedPaths in
+            var addedCount = 0
+            for path in droppedPaths {
+                if ConfigManager.shared.addCustomExcludedPath(path) {
+                    addedCount += 1
+                }
+            }
+            if addedCount > 0 {
+                self?.reloadCustomExclusionRows()
+            } else {
+                NSSound.beep()
+            }
+        }
+        exclusionScrollContent.addSubview(cardCustom)
+
+        let customContainer = NSView()
+        customContainer.translatesAutoresizingMaskIntoConstraints = false
+        cardCustom.addRow(customContainer, isLast: true)
+
+        customExclusionStack = NSStackView()
+        customExclusionStack.orientation = .vertical
+        customExclusionStack.spacing = 0
+        customExclusionStack.distribution = .fill
+        customExclusionStack.alignment = .leading
+        customExclusionStack.translatesAutoresizingMaskIntoConstraints = false
+        customContainer.addSubview(customExclusionStack)
+        NSLayoutConstraint.activate([
+            customExclusionStack.topAnchor.constraint(equalTo: customContainer.topAnchor),
+            customExclusionStack.bottomAnchor.constraint(equalTo: customContainer.bottomAnchor),
+            customExclusionStack.leadingAnchor.constraint(equalTo: customContainer.leadingAnchor),
+            customExclusionStack.trailingAnchor.constraint(equalTo: customContainer.trailingAnchor),
+            customExclusionStack.widthAnchor.constraint(equalTo: customContainer.widthAnchor)
+        ])
+
+        let exclusionTipLabel = NSTextField(labelWithString: "💡 提示：排除范围在全盘检索与内存快照中同时生效；设置排除目录可有效净化搜索结果并大幅提升检索性能。")
+        exclusionTipLabel.translatesAutoresizingMaskIntoConstraints = false
+        exclusionTipLabel.font = NSFont.systemFont(ofSize: 11)
+        exclusionTipLabel.textColor = .secondaryLabelColor
+        exclusionTipLabel.cell?.wraps = true
+        exclusionTipLabel.maximumNumberOfLines = 2
+        exclusionTipLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        exclusionScrollContent.addSubview(exclusionTipLabel)
+
+        NSLayoutConstraint.activate([
+            secCustomTitle.topAnchor.constraint(equalTo: cardPreset.bottomAnchor, constant: 20),
+            secCustomTitle.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
+
+            cardCustom.topAnchor.constraint(equalTo: secCustomTitle.bottomAnchor, constant: 8),
+            cardCustom.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
+            cardCustom.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28),
+
+            exclusionTipLabel.topAnchor.constraint(equalTo: cardCustom.bottomAnchor, constant: 12),
+            exclusionTipLabel.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
+            exclusionTipLabel.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28),
+            exclusionTipLabel.bottomAnchor.constraint(equalTo: exclusionScrollContent.bottomAnchor, constant: -28)
+        ])
+        reloadCustomExclusionRows()
+
+        // Page 2: 扩展功能
         let extPage = NSView()
         let extScrollContent = NSView()
         let extScroll = makeTabScrollView(contentView: extScrollContent)
@@ -1311,7 +1491,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             tipLabel.bottomAnchor.constraint(equalTo: webScrollContent.bottomAnchor, constant: -28)
         ])
 
-        pages = [optionsPage, extPage, webPage]
+        pages = [optionsPage, exclusionPage, extPage, webPage]
         for (idx, page) in pages.enumerated() {
             page.translatesAutoresizingMaskIntoConstraints = false
             pageContainer.addSubview(page)
@@ -1332,9 +1512,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     public func refresh() {
         let cfg = ConfigManager.shared.config
         reloadHotFolderRows()
+        reloadCustomExclusionRows()
         diskSearchSwitch.state = cfg.enableFullDiskSearch ? .on : .off
         calcSwitch.state = cfg.enableCalculator ? .on : .off
         dictSwitch.state = cfg.enableDictionary ? .on : .off
+
+        excludeCachesSwitch.state = cfg.searchExcludeCaches ? .on : .off
+        excludeLogsSwitch.state = cfg.searchExcludeLogs ? .on : .off
+        excludeDevSwitch.state = cfg.searchExcludeDeveloper ? .on : .off
+        excludeUserLibSwitch.state = cfg.searchExcludeUserLibrary ? .on : .off
+        excludeTrashSwitch.state = cfg.searchExcludeTrash ? .on : .off
+        excludeHiddenSwitch.state = cfg.searchExcludeHidden ? .on : .off
 
         switch cfg.searchResultLimit {
         case ..<40: limitControl.selectedSegment = 0
@@ -1388,7 +1576,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let folders = ConfigManager.shared.config.extraHotFolders
         if folders.isEmpty {
             addRow(makeHotFolderInfoRow(
-                subtitle: "默认热目录：下载 / 桌面 / 文档（深度 3 层）。可在此添加更多目录进内存快照，搜索毫秒级即时命中；快照未覆盖的文件由全盘检索兜底。"))
+                subtitle: "默认热目录：下载 / 桌面 / 文档（深度 3 层）。可点击添加或从访达直接拖拽文件夹至此，搜索毫秒级命中；未覆盖目录由全盘检索兜底。"))
         } else {
             for (index, path) in folders.enumerated() {
                 if index > 0 { addRow(makeSeparator()) }
@@ -1465,7 +1653,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         titleLabel.textColor = .controlAccentColor
         row.addSubview(titleLabel)
 
-        let subtitle = NSTextField(labelWithString: "已添加 \(count)/\(ConfigManager.maxExtraHotFolders) · 深度 3 层、每目录上限 25,000 条，超出部分由全盘检索兜底")
+        let subtitle = NSTextField(labelWithString: "已添加 \(count)/\(ConfigManager.maxExtraHotFolders) · 可点击添加，或直接从访达将文件夹拖拽至此")
         subtitle.translatesAutoresizingMaskIntoConstraints = false
         subtitle.font = NSFont.systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
@@ -1565,6 +1753,222 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             alert.alertStyle = .warning
             alert.runModal()
         }
+    }
+
+    // MARK: - 自定义排除目录列表与事件
+
+    private func reloadCustomExclusionRows() {
+        guard customExclusionStack != nil else { return }
+        for view in customExclusionStack.arrangedSubviews {
+            customExclusionStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        func addRow(_ view: NSView) {
+            customExclusionStack.addArrangedSubview(view)
+            view.widthAnchor.constraint(equalTo: customExclusionStack.widthAnchor).isActive = true
+        }
+
+        let paths = ConfigManager.shared.config.customExcludedPaths
+        if paths.isEmpty {
+            addRow(makeCustomExclusionInfoRow(subtitle: "暂无自定义排除目录。可点击下方按钮添加，或直接从访达将文件夹拖拽至此。"))
+        } else {
+            for (index, path) in paths.enumerated() {
+                if index > 0 { addRow(makeSeparator()) }
+                addRow(makeCustomExclusionRow(path: path))
+            }
+            addRow(makeSeparator())
+        }
+        addRow(makeAddCustomExclusionRow(count: paths.count))
+    }
+
+    private func makeCustomExclusionRow(path: String) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let icon = NSImageView()
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.image = ThumbnailPipeline.shared.symbolIcon(name: "folder.badge.minus")
+        icon.contentTintColor = .secondaryLabelColor
+        row.addSubview(icon)
+
+        let titleLabel = NSTextField(labelWithString: (path as NSString).lastPathComponent)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        row.addSubview(titleLabel)
+
+        let pathLabel = NSTextField(labelWithString: path)
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.font = NSFont.systemFont(ofSize: 11)
+        pathLabel.textColor = .secondaryLabelColor
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        row.addSubview(pathLabel)
+
+        let removeBtn = NSButton(image: NSImage(systemSymbolName: "minus.circle.fill",
+                                                accessibilityDescription: "移除") ?? NSImage(),
+                                 target: self, action: #selector(removeCustomExclusionClicked(_:)))
+        removeBtn.translatesAutoresizingMaskIntoConstraints = false
+        removeBtn.isBordered = false
+        removeBtn.identifier = NSUserInterfaceItemIdentifier(path)
+        removeBtn.toolTip = "从排除目录中移除"
+        removeBtn.contentTintColor = .secondaryLabelColor
+        row.addSubview(removeBtn)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 46),
+
+            icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 18),
+            icon.heightAnchor.constraint(equalToConstant: 18),
+
+            removeBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            removeBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 44),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
+
+            pathLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            pathLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
+            pathLabel.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7)
+        ])
+        return row
+    }
+
+    private func makeAddCustomExclusionRow(count: Int) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "添加排除目录…")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        titleLabel.textColor = .controlAccentColor
+        row.addSubview(titleLabel)
+
+        let subtitle = NSTextField(labelWithString: "已添加 \(count)/\(ConfigManager.maxCustomExcludedPaths) · 可点击添加，或直接从访达将文件夹拖拽至此")
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+        subtitle.font = NSFont.systemFont(ofSize: 11)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.lineBreakMode = .byTruncatingMiddle
+        row.addSubview(subtitle)
+
+        let addBtn = NSButton(image: NSImage(systemSymbolName: "plus.circle.fill",
+                                             accessibilityDescription: "添加") ?? NSImage(),
+                              target: self, action: #selector(addCustomExclusionClicked(_:)))
+        addBtn.translatesAutoresizingMaskIntoConstraints = false
+        addBtn.isBordered = false
+        addBtn.toolTip = "选择文件夹添加至排除黑名单"
+        addBtn.isEnabled = count < ConfigManager.maxCustomExcludedPaths
+        addBtn.contentTintColor = .controlAccentColor
+        row.addSubview(addBtn)
+
+        let resetBtn = NSButton(title: "恢复默认", target: self, action: #selector(resetCustomExclusionClicked(_:)))
+        resetBtn.translatesAutoresizingMaskIntoConstraints = false
+        resetBtn.bezelStyle = .inline
+        resetBtn.font = NSFont.systemFont(ofSize: 11)
+        resetBtn.toolTip = "清空自定义排除目录"
+        row.addSubview(resetBtn)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 46),
+
+            titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: resetBtn.leadingAnchor, constant: -8),
+
+            subtitle.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: resetBtn.leadingAnchor, constant: -8),
+            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7),
+
+            resetBtn.trailingAnchor.constraint(equalTo: addBtn.leadingAnchor, constant: -8),
+            resetBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+
+            addBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            addBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
+        return row
+    }
+
+    private func makeCustomExclusionInfoRow(subtitle: String) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(wrappingLabelWithString: subtitle)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = NSFont.systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        row.addSubview(label)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(greaterThanOrEqualToConstant: 46),
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            label.topAnchor.constraint(equalTo: row.topAnchor, constant: 12),
+            label.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -12)
+        ])
+        return row
+    }
+
+    @objc private func addCustomExclusionClicked(_ sender: Any?) {
+        guard ConfigManager.shared.config.customExcludedPaths.count < ConfigManager.maxCustomExcludedPaths else {
+            NSSound.beep()
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        panel.prompt = "排除"
+        panel.message = "选择要从全盘搜索中排除的文件夹"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if ConfigManager.shared.addCustomExcludedPath(url.path) {
+            reloadCustomExclusionRows()
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "无法排除该目录"
+            alert.informativeText = "该目录不存在、已被包含在已有排除项中、或是系统根/用户家目录，或已达到最大排除数量（\(ConfigManager.maxCustomExcludedPaths) 个）。"
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
+    }
+
+    @objc private func removeCustomExclusionClicked(_ sender: NSButton) {
+        guard let path = sender.identifier?.rawValue, !path.isEmpty else { return }
+        ConfigManager.shared.removeCustomExcludedPath(path)
+        reloadCustomExclusionRows()
+    }
+
+    @objc private func resetCustomExclusionClicked(_ sender: Any?) {
+        ConfigManager.shared.resetCustomExcludedPathsToDefault()
+        reloadCustomExclusionRows()
+    }
+
+    @objc private func toggleExcludeCaches(_ sender: NSSwitch) {
+        ConfigManager.shared.updateSearchExcludeCaches(sender.state == .on)
+    }
+
+    @objc private func toggleExcludeLogs(_ sender: NSSwitch) {
+        ConfigManager.shared.updateSearchExcludeLogs(sender.state == .on)
+    }
+
+    @objc private func toggleExcludeDev(_ sender: NSSwitch) {
+        ConfigManager.shared.updateSearchExcludeDeveloper(sender.state == .on)
+    }
+
+    @objc private func toggleExcludeUserLib(_ sender: NSSwitch) {
+        ConfigManager.shared.updateSearchExcludeUserLibrary(sender.state == .on)
+    }
+
+    @objc private func toggleExcludeTrash(_ sender: NSSwitch) {
+        ConfigManager.shared.updateSearchExcludeTrash(sender.state == .on)
+    }
+
+    @objc private func toggleExcludeHidden(_ sender: NSSwitch) {
+        ConfigManager.shared.updateSearchExcludeHidden(sender.state == .on)
     }
 
     @objc private func toggleCalc(_ sender: NSSwitch) {
