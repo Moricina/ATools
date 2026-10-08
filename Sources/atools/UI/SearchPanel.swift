@@ -154,16 +154,27 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         hintsBar.alphaValue = 0.0
     }
 
-    public func prepareForDisplay() {
+    public func prepareForDisplay(prefilledText: String? = nil) {
         SearchCoordinator.shared.cancelPendingSearches()
         SpotlightBridge.shared.warmHotFolderCache(maxAge: 5)
-        searchBar.text = ""
         searchBar.setSyntaxCommand(nil)
         filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
         searchBar.focus()
+
+        if let prefilled = prefilledText, !prefilled.isEmpty {
+            searchBar.text = prefilled
+            searchBar(searchBar, didChangeQuery: prefilled)
+            // 确保第一响应者稳态建立后，将文本进行全选高亮（方便用户回车直接搜索，或按任意字符直接覆盖）
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.searchBar.textField.selectAll(nil)
+            }
+        } else {
+            searchBar.text = ""
+        }
     }
 
     /// Incremented on every expand/collapse so stale animation completions are ignored.
@@ -718,7 +729,7 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
         let contentRect = NSRect(x: 0, y: 0, width: 680, height: 72)
         super.init(
             contentRect: contentRect,
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.borderless],
             backing: .buffered,
             defer: false
         )
@@ -774,7 +785,29 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
     }
 
     override public var canBecomeKey: Bool { true }
-    override public var canBecomeMain: Bool { false }
+    override public var canBecomeMain: Bool { true }
+
+    public private(set) var summonPasteboardChangeCount: Int = -1
+
+    public func markSummonPasteboardState() {
+        summonPasteboardChangeCount = NSPasteboard.general.changeCount
+    }
+
+    override public func becomeKey() {
+        super.becomeKey()
+        // 重新夺回 Key 状态时，确保将第一响应者无缝恢复给输入框
+        let tf = searchViewController.searchBar.textField
+        if firstResponder !== tf && firstResponder !== tf.currentEditor() {
+            makeFirstResponder(tf)
+        }
+        // 双保险兜底：若在离开期间系统剪贴板发生了更新（例如用户在外部 AuraSnap / Maccy 剪贴板中选取了记录），
+        // 留出 150ms 投递窗口期给原生 ⌘V，确认未收到原生按键后再安全兜底注入
+        let watermark = summonPasteboardChangeCount
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self = self, self.isVisible else { return }
+            _ = tf.pasteLatestFromClipboardIfNeeded(since: watermark)
+        }
+    }
 
     override public func sendEvent(_ event: NSEvent) {
         if event.type == .keyDown {
@@ -809,7 +842,32 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
         super.sendEvent(event)
     }
 
-    public func prepareForDisplay() {
-        searchViewController.prepareForDisplay()
+    override public func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if super.performKeyEquivalent(with: event) {
+            return true
+        }
+
+        let isCmd = event.modifierFlags.contains(.command)
+        let isOpt = event.modifierFlags.contains(.option)
+        let key = event.charactersIgnoringModifiers?.lowercased()
+
+        // 兜底保护：当搜索面板处于激活状态，但焦点未在输入框（如点击了分类或结果列表）时，按 ⌘V 直接粘贴进搜索框
+        if isCmd && !isOpt && key == "v" {
+            searchViewController.searchBar.textField.pasteFromClipboard()
+            return true
+        }
+
+        // 兜底保护：按 ⌘A 全选搜索输入框
+        if isCmd && !isOpt && key == "a" {
+            makeFirstResponder(searchViewController.searchBar.textField)
+            searchViewController.searchBar.textField.selectAll(nil)
+            return true
+        }
+
+        return false
+    }
+
+    public func prepareForDisplay(prefilledText: String? = nil) {
+        searchViewController.prepareForDisplay(prefilledText: prefilledText)
     }
 }

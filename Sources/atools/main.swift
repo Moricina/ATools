@@ -977,6 +977,231 @@ if CommandLine.arguments.contains("--test") {
         print("      ✓ 搜索框语法胶囊（视觉胶囊挂载/输入自动转胶囊/占位符更新/退格卸载/状态重置）全部通过.")
     }
 
+    // 6.10 测试搜索框剪贴板粘贴与原生编辑快捷键 (Cmd+V, Cmd+A, Cmd+C, Cmd+X, Undo/Redo)
+    print("[6.10] Testing Search Bar Clipboard Paste & Editing Shortcuts (Cmd+V / Cmd+A / Cmd+C / Cmd+X)...")
+    do {
+        let searchPanel = SearchPanel()
+        let searchVC = searchPanel.searchViewController
+        let searchBar = searchVC.searchBar
+        let tf = searchBar.textField
+
+        searchPanel.makeKeyAndOrderFront(nil)
+        searchPanel.makeFirstResponder(tf)
+
+        let pb = NSPasteboard.general
+
+        // (a) 纯文本剪贴板粘贴测试
+        pb.clearContents()
+        pb.setString("SwiftLang", forType: .string)
+        tf.pasteFromClipboard()
+        TestAssertions.expect(tf.stringValue.contains("SwiftLang"), "pasteFromClipboard 必须正确将文本粘贴进输入框")
+        TestAssertions.expect(searchBar.text.contains("SwiftLang"), "searchBar.text 必须与输入框同步")
+
+        // (b) Cmd+A 全选快捷键
+        let eventA = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: searchPanel.windowNumber,
+            context: nil,
+            characters: "a",
+            charactersIgnoringModifiers: "a",
+            isARepeat: false,
+            keyCode: 0
+        )!
+        let handledA = tf.performKeyEquivalent(with: eventA)
+        TestAssertions.expect(handledA == true, "Cmd+A 必须被 SearchTextField 拦截消费")
+        if let editor = tf.currentEditor() as? NSTextView {
+            TestAssertions.expect(editor.selectedRange.length == tf.stringValue.count, "Cmd+A 必须全选所有输入框文字")
+        }
+
+        // (c) Cmd+C 复制选中文本
+        pb.clearContents()
+        let eventC = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: searchPanel.windowNumber,
+            context: nil,
+            characters: "c",
+            charactersIgnoringModifiers: "c",
+            isARepeat: false,
+            keyCode: 8
+        )!
+        let handledC = tf.performKeyEquivalent(with: eventC)
+        TestAssertions.expect(handledC == true, "有文字选中时 Cmd+C 必须消费并复制")
+        TestAssertions.expect(pb.string(forType: .string) == "SwiftLang", "剪贴板中必须含有被复制的文本")
+
+        // (d) Cmd+X 剪切选中文本
+        let eventX = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: searchPanel.windowNumber,
+            context: nil,
+            characters: "x",
+            charactersIgnoringModifiers: "x",
+            isARepeat: false,
+            keyCode: 7
+        )!
+        let handledX = tf.performKeyEquivalent(with: eventX)
+        TestAssertions.expect(handledX == true, "Cmd+X 必须成功消费")
+        TestAssertions.expect(tf.stringValue.isEmpty, "剪切后文本框必须被清空")
+
+        // (e) 访达复制文件智能提取文件名粘贴
+        pb.clearContents()
+        let dummyFileURL = URL(fileURLWithPath: "/Users/test/Documents/AnnualReport.xlsx")
+        pb.writeObjects([dummyFileURL as NSURL])
+        tf.pasteFromClipboard()
+        TestAssertions.expect(tf.stringValue == "AnnualReport.xlsx", "从访达复制的文件粘贴时必须智能提取文件名: \(tf.stringValue)")
+
+        // (f) SearchPanel 顶层快捷键兜底测试 (聚焦不在 textField 时按 Cmd+V)
+        searchPanel.makeFirstResponder(nil)
+        pb.clearContents()
+        pb.setString("TopLevelPaste", forType: .string)
+        let eventV = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [.command],
+            timestamp: 0,
+            windowNumber: searchPanel.windowNumber,
+            context: nil,
+            characters: "v",
+            charactersIgnoringModifiers: "v",
+            isARepeat: false,
+            keyCode: 9
+        )!
+        let panelHandledV = searchPanel.performKeyEquivalent(with: eventV)
+        TestAssertions.expect(panelHandledV == true, "SearchPanel 顶层必须兜底捕获 Cmd+V 并粘贴")
+        TestAssertions.expect(searchBar.text.contains("TopLevelPaste"), "顶层粘贴必须落地到搜索输入框")
+
+        print("      ✓ 剪贴板粘贴与原生快捷键（纯文本/访达文件提取/Cmd+V/Cmd+A/Cmd+C/Cmd+X/顶层兜底）全部验证通过.")
+    }
+
+    // 6.11 测试全盘搜索外部辅助浮层（剪贴板工具如 AuraSnap/Maccy）保活与协同粘贴防护
+    print("[6.11] Testing SearchPanel Auxiliary Floating Tool & Clipboard Lifecycle Protection...")
+    do {
+        let searchPanel = SearchPanel()
+        let searchVC = searchPanel.searchViewController
+        let tf = searchVC.searchBar.textField
+
+        // (a) 会话基准剪贴板标记与防重水位测试
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("PreSessionString", forType: .string)
+        let initialWatermark = pb.changeCount
+
+        searchPanel.markSummonPasteboardState()
+        TestAssertions.expect(searchPanel.summonPasteboardChangeCount == initialWatermark, "SearchPanel 必须正确记录唤出时剪贴板 changeCount")
+
+        // 未发生剪贴板更新时，pasteLatestFromClipboardIfNeeded 不应触发
+        let untouched = tf.pasteLatestFromClipboardIfNeeded(since: initialWatermark)
+        TestAssertions.expect(!untouched, "剪贴板未改变时不得触发兜底粘贴")
+
+        // 外部工具将条目写入剪贴板（模拟 AuraSnap 选中条目后更新 NSPasteboard）
+        pb.clearContents()
+        pb.setString("ClipboardItemFromAuraSnap", forType: .string)
+        let newWatermark = pb.changeCount
+        TestAssertions.expect(newWatermark > initialWatermark, "写入剪贴板后 changeCount 必须递增")
+
+        // 首次兜底粘贴执行：必须成功注入并对齐水位
+        let firstPaste = tf.pasteLatestFromClipboardIfNeeded(since: initialWatermark)
+        TestAssertions.expect(firstPaste == true, "检测到外部剪贴板更新时首次兜底必须成功注入")
+        TestAssertions.expect(tf.stringValue.contains("ClipboardItemFromAuraSnap"), "输入框必须成功收到选中的剪贴板条目")
+        TestAssertions.expect(tf.lastHandledPasteboardChangeCount == newWatermark, "处理后水位必须精确对齐到当前 changeCount")
+
+        // 模拟外部模拟按键二次到达或重复触发：防重机制必须严格拦截，绝不发生重复双贴
+        let duplicatePaste = tf.pasteLatestFromClipboardIfNeeded(since: initialWatermark)
+        TestAssertions.expect(!duplicatePaste, "相同剪贴板版本必须被防重机制严格拦截，绝不发生二次重复粘贴")
+
+        // (b) 辅助工具点击检测与自身窗口识别
+        let panelFrame = searchPanel.frame
+        let centerPoint = NSPoint(x: panelFrame.midX, y: panelFrame.midY)
+        // 自身窗口内部判定
+        TestAssertions.expect(PanelCoordinator.isClickOnAuxiliaryToolWindow(at: centerPoint), "自身搜索面板窗口必须被识别并豁免保护")
+
+        print("      ✓ 外部辅助浮层协同保活（基准标记/精准单次注入/防重阻断/窗口豁免）全部验证通过.")
+    }
+
+    // 6.12 测试全盘搜索「复制后立即呼出时自动粘贴」(时效性/单次消费/自身复制隔离/敏感类型拦截)
+    print("[6.12] Testing autoPasteOnSummonAfterCopy (Recency, Consumption, Self-Copy Guard & Sensitive Filter)...")
+    do {
+        let tracker = PasteboardRecencyTracker.shared
+        let originalConfigState = ConfigManager.shared.config.autoPasteOnSummonAfterCopy
+
+        defer {
+            ConfigManager.shared.updateAutoPasteOnSummonAfterCopy(originalConfigState)
+            tracker.stopMonitoring()
+        }
+
+        // (a) 开关关闭状态下即使最近复制也绝不触发
+        ConfigManager.shared.updateAutoPasteOnSummonAfterCopy(false)
+        tracker.simulateExternalCopy(text: "QueryWhenDisabled")
+        TestAssertions.expect(tracker.checkAndConsumePasteContent() == nil, "开关关闭时 checkAndConsumePasteContent 必须返回 nil")
+
+        // (b) 开关开启状态下 3 秒内复制唤出成功消费
+        ConfigManager.shared.updateAutoPasteOnSummonAfterCopy(true)
+        tracker.simulateExternalCopy(text: "FreshCopiedTerm")
+        let content1 = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+        TestAssertions.expect(content1 == "FreshCopiedTerm", "3 秒内的外部复制必须成功提取: \(content1 ?? "nil")")
+
+        // 再次检查：单次消费锁定，绝不重复提取
+        let contentDuplicate = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+        TestAssertions.expect(contentDuplicate == nil, "单次消费后再次唤出必须返回 nil，杜绝旧内容反复粘贴")
+
+        // (c) 超过 3 秒的时效性过期防护
+        tracker.simulateExternalCopy(text: "ExpiredOldTerm", at: Date().addingTimeInterval(-4.0))
+        let expiredContent = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+        TestAssertions.expect(expiredContent == nil, "超过 3 秒的过期复制必须被拒绝自动粘贴")
+
+        // (d) ATools 自身复制自环污染隔离
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("/Users/aurora/Downloads/TestReport.pdf", forType: .string)
+        tracker.markSelfGeneratedChangeCount(pb.changeCount)
+        tracker.simulateExternalCopy(text: "/Users/aurora/Downloads/TestReport.pdf") // 模拟自身写入
+        tracker.markSelfGeneratedChangeCount(pb.changeCount)
+        let selfCopyResult = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+        TestAssertions.expect(selfCopyResult == nil, "ATools 自身产出的复制必须被标记忽略，绝不回环误贴")
+
+        // (e) 密码管理器保密凭据安全拦截
+        pb.clearContents()
+        let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+        pb.declareTypes([.string, concealedType], owner: nil)
+        pb.setString("MySuperSecretPassword123!", forType: .string)
+        pb.setString("", forType: concealedType)
+        tracker.simulateExternalCopy(text: "MySuperSecretPassword123!")
+        // 重新添加 concealed 类型模拟
+        let sensitivePB = NSPasteboard.general
+        sensitivePB.addTypes([concealedType], owner: nil)
+        let passwordResult = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+        TestAssertions.expect(passwordResult == nil, "含有保密凭据类型 (ConcealedType) 的剪贴板严禁自动预填充")
+
+        // (f) prepareForDisplay 预填充端到端验证
+        let searchPanel = SearchPanel()
+        searchPanel.prepareForDisplay(prefilledText: "SwiftAsyncAwait")
+        TestAssertions.expect(searchPanel.searchViewController.searchBar.text == "SwiftAsyncAwait", "prepareForDisplay 必须正确填充 prefilledText")
+
+        // (g) 连续多次复制唤出回归测试（彻底防范“仅开启后第一次有效”问题）
+        for iteration in 1...3 {
+            let iterationText = "ContinuousQuery_#\(iteration)"
+            tracker.simulateExternalCopy(text: iterationText)
+            let result = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+            TestAssertions.expect(result == iterationText, "第 \(iteration) 次连续复制后唤出必须正确提取: \(result ?? "nil")")
+        }
+
+        // (h) 复制后极速唤起测试（无需等待后台定时器 tick，瞬间增量自动捕获）
+        pb.clearContents()
+        pb.setString("InstantCatchTerm", forType: .string)
+        let instantResult = tracker.checkAndConsumePasteContent(withinSeconds: 3.0)
+        TestAssertions.expect(instantResult == "InstantCatchTerm", "极速唤出时 instant catch 必须准确捕获最新复制: \(instantResult ?? "nil")")
+
+        print("      ✓ 复制后呼出自动粘贴（时效性/单次消费/过期拦截/自环防护/敏感凭据过滤/连续多次有效/极速捕获）全部验证通过.")
+    }
+
 
 
     var coordinatorResults: [SearchResult] = []

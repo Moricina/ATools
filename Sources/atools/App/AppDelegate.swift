@@ -12,6 +12,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotkeys()
         TrackpadGestureManager.shared.startListeningIfEnabled()
         AutoQuitManager.shared.startIfEnabled()
+        PasteboardRecencyTracker.shared.startMonitoringIfNeeded()
 
         // Warm up in-memory app index (its initializer performs the first scan)
         _ = AppHotspotIndex.shared

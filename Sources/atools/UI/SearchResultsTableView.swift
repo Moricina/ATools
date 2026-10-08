@@ -573,15 +573,18 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
         if let path = result.path, !path.isEmpty {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(path, forType: .string)
+            PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
             return true
         } else if result.type == .calculator {
             let rawText = result.title.hasPrefix("= ") ? String(result.title.dropFirst(2)) : result.title
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(rawText, forType: .string)
+            PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
             return true
         } else if !result.title.isEmpty {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(result.title, forType: .string)
+            PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
             return true
         }
         return false

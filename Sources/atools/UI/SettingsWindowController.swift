@@ -9,6 +9,7 @@ public extension Notification.Name {
     static let atoolsThemeDidChange = Notification.Name("atoolsThemeDidChange")
     static let atoolsAutoQuitDidChange = Notification.Name("atoolsAutoQuitDidChange")
     static let atoolsDidSelectSyntaxCommand = Notification.Name("atoolsDidSelectSyntaxCommand")
+    static let atoolsAutoPasteOnSummonDidChange = Notification.Name("atoolsAutoPasteOnSummonDidChange")
 }
 
 public extension NSAlert {

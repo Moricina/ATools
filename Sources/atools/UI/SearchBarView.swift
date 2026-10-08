@@ -57,6 +57,106 @@ public final class SearchTextField: NSTextField {
         set { super.cellClass = newValue }
     }
 
+    // MARK: - Clipboard & Editing Support
+
+    public private(set) var lastHandledPasteboardChangeCount: Int = -1
+
+    public func pasteFromClipboard() {
+        guard let parent = searchBarView ?? (superview as? SearchBarView) else { return }
+        let pb = NSPasteboard.general
+        lastHandledPasteboardChangeCount = pb.changeCount
+        var textToPaste: String?
+
+        if let str = pb.string(forType: .string), !str.isEmpty {
+            textToPaste = str
+        } else if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], let first = urls.first {
+            textToPaste = first.lastPathComponent
+        }
+
+        guard let text = textToPaste, !text.isEmpty else { return }
+
+        let sanitized = text.replacingOccurrences(of: "\r\n", with: " ")
+                            .replacingOccurrences(of: "\n", with: " ")
+                            .replacingOccurrences(of: "\r", with: " ")
+
+        if let editor = currentEditor() as? NSTextView {
+            editor.insertText(sanitized, replacementRange: editor.selectedRange)
+        } else {
+            window?.makeFirstResponder(self)
+            if let editor = currentEditor() as? NSTextView {
+                editor.insertText(sanitized, replacementRange: editor.selectedRange)
+            } else {
+                parent.text = sanitized
+                parent.delegate?.searchBar(parent, didChangeQuery: sanitized)
+            }
+        }
+    }
+
+    /// 双保险兜底：若在搜索面板唤出期间剪贴板发生了新变动（如用户在外部 AuraSnap / Maccy 剪贴板中选定了条目），
+    /// 且尚未被原生 ⌘V 或 pasteFromClipboard 处理过，进行安全单次填入
+    @discardableResult
+    public func pasteLatestFromClipboardIfNeeded(since initialCount: Int) -> Bool {
+        let currentCount = NSPasteboard.general.changeCount
+        guard currentCount > initialCount, currentCount != lastHandledPasteboardChangeCount else {
+            return false
+        }
+        pasteFromClipboard()
+        return true
+    }
+
+    @objc public func paste(_ sender: Any?) {
+        pasteFromClipboard()
+    }
+
+    @objc public func copy(_ sender: Any?) {
+        if let editor = currentEditor() as? NSTextView, editor.selectedRange.length > 0 {
+            editor.copy(sender)
+        } else if let parent = searchBarView ?? (superview as? SearchBarView) {
+            customDelegate?.searchBarDidPressCopyPath(parent)
+        }
+    }
+
+    @objc public func cut(_ sender: Any?) {
+        if let editor = currentEditor() as? NSTextView, editor.selectedRange.length > 0 {
+            editor.cut(sender)
+        }
+    }
+
+    @objc override public func selectAll(_ sender: Any?) {
+        if let editor = currentEditor() as? NSTextView {
+            editor.selectAll(sender)
+        } else {
+            selectText(sender)
+        }
+    }
+
+    override public func menu(for event: NSEvent) -> NSMenu? {
+        let menu = NSMenu(title: "编辑")
+        let cutItem = menu.addItem(withTitle: "剪切", action: #selector(cut(_:)), keyEquivalent: "x")
+        let copyItem = menu.addItem(withTitle: "拷贝", action: #selector(copy(_:)), keyEquivalent: "c")
+        let pasteItem = menu.addItem(withTitle: "粘贴", action: #selector(paste(_:)), keyEquivalent: "v")
+        menu.addItem(.separator())
+        let selectAllItem = menu.addItem(withTitle: "全选", action: #selector(selectAll(_:)), keyEquivalent: "a")
+
+        cutItem.target = self
+        copyItem.target = self
+        pasteItem.target = self
+        selectAllItem.target = self
+
+        let hasSelection: Bool
+        if let editor = currentEditor() as? NSTextView {
+            hasSelection = editor.selectedRange.length > 0
+        } else {
+            hasSelection = false
+        }
+        cutItem.isEnabled = hasSelection
+        copyItem.isEnabled = hasSelection || (searchBarView != nil)
+        let pb = NSPasteboard.general
+        pasteItem.isEnabled = pb.string(forType: .string)?.isEmpty == false || (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL])?.isEmpty == false
+
+        return menu
+    }
+
     override public func performKeyEquivalent(with event: NSEvent) -> Bool {
         // If user is currently composing marked text in IME (e.g. typing Chinese pinyin), do not intercept
         if let editor = currentEditor() as? NSTextView, editor.hasMarkedText() {
@@ -77,17 +177,49 @@ public final class SearchTextField: NSTextField {
             return true
         }
 
-        // 2. Command + C 或 Option + Command + C (复制文件路径)
+        // 2. Command + C 或 Option + Command + C (复制选中文本 或 复制选中文件路径)
         if isCmd && key == "c" {
             // 如果输入框有选中的文字且未按 Option，优先执行文本复制
             if let editor = currentEditor() as? NSTextView, editor.selectedRange.length > 0 && !isOpt {
-                return super.performKeyEquivalent(with: event)
+                editor.copy(nil)
+                return true
             }
             customDelegate?.searchBarDidPressCopyPath(parent)
             return true
         }
 
-        // 3. Tab / Shift + Tab (切换文件类型筛选 或 斜杠语法自动补全)
+        // 3. Command + V (粘贴剪贴板内容/文件名为搜索词)
+        if isCmd && !isOpt && key == "v" {
+            pasteFromClipboard()
+            return true
+        }
+
+        // 4. Command + A (全选输入框文本)
+        if isCmd && !isOpt && key == "a" {
+            selectAll(nil)
+            return true
+        }
+
+        // 5. Command + X (剪切选中文本)
+        if isCmd && !isOpt && key == "x" {
+            cut(nil)
+            return true
+        }
+
+        // 6. Command + Z / Shift + Command + Z (撤销 / 重做)
+        if isCmd && !isOpt && key == "z" {
+            let isShift = event.modifierFlags.contains(.shift)
+            let um = (currentEditor() as? NSTextView)?.undoManager ?? undoManager
+            if let um = um {
+                if isShift {
+                    if um.canRedo { um.redo(); return true }
+                } else {
+                    if um.canUndo { um.undo(); return true }
+                }
+            }
+        }
+
+        // 7. Tab / Shift + Tab (切换文件类型筛选 或 斜杠语法自动补全)
         if event.keyCode == 48 { // Tab
             let isShift = event.modifierFlags.contains(.shift)
             let currentText = parent.text.trimmingCharacters(in: .whitespaces)
@@ -99,7 +231,7 @@ public final class SearchTextField: NSTextField {
             return true
         }
 
-        // 4. Command + 1~8 (快捷选择分类)
+        // 8. Command + 1~8 (快捷选择分类)
         if isCmd && !isOpt, let chars = event.charactersIgnoringModifiers, let num = Int(chars), (1...8).contains(num) {
             customDelegate?.searchBar(parent, didRequestSelectFilterNumber: num)
             return true

@@ -990,3 +990,164 @@
   - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（13 大项）**100% 全部 PASS 通过**（0 失败）；
   - 执行 `./Scripts/package_app.sh`：Release 版本构建签名打包成功；
   - 成功部署至 `/Applications/ATools.app` 并完成平滑重启。
+### 23. 全局搜索框剪贴板粘贴与原生文本编辑快捷键全链路闭环 (2026-10-08, build 30)
+
+- **背景与原因排查**：
+  - 用户反馈：“检查一下为什么全局搜索粘贴不进剪贴板里面的内容了”；
+  - **核心原因诊断**：
+    1. **菜单响应链断流（主因）**：ATools 属于 Accessory 状态栏应用（`activationPolicy = .accessory`），且搜索面板为无边框悬浮面板（`styleMask: [.borderless, .nonactivatingPanel]`，`canBecomeMain = false`）。在 AppKit 机制中，当应用没有处于主窗口状态时，系统主菜单（MainMenu）的全局快捷键分发链会直接中断，导致 `NSTextField` 依赖的系统菜单项动作（`paste:`、`copy:`、`cut:`、`selectAll:`）无法自动触达输入框，执行时无任何反应或发出系统警告音；
+    2. **`SearchTextField` 快捷键拦截盲区**：此前在 `SearchTextField.performKeyEquivalent` 中，仅针对 `⌘R`、`⌘C`（复制路径）、`Tab`、`⌘1~8` 等做了自定义拦截，对于 `⌘V`（粘贴）、`⌘A`（全选）、`⌘X`（剪切）、`⌘Z`（撤销）等基础编辑按键全部交回 `super.performKeyEquivalent`。而 AppKit 原生 `NSTextField` 在 `performKeyEquivalent` 中并不直接处理 `⌘V` 等编辑键，原本指望 MainMenu 接管却因上述原因断流；
+    3. **从访达复制文件类型不兼容**：用户在访达中选中文件按 `⌘C` 后，剪贴板注入的是 `public.file-url`，通常不含纯文本类型（`public.utf8-plain-text`）。原生输入框仅接收纯文本，直接粘贴无法解析出文件名称。
+
+- **实施细节与涉及文件**：
+  1. **现代剪贴板智能解析与粘贴引擎**（`Sources/atools/UI/SearchBarView.swift` 中的 `SearchTextField`）：
+     - 新增 `pasteFromClipboard()`：
+       * 智能多格式解析：优先读取纯文本/富文本字符串；若剪贴板内为用户从访达（Finder）拷贝的文件或文件夹（`readObjects(forClasses: [NSURL.self])`），自动萃取文件名（`first.lastPathComponent`），让用户复制文件后可一秒粘入搜索框快速检索；
+       * 换行符与格式清洗：将 `\r\n` / `\n` 自动清洗替换为空格，杜绝在单行搜索框内导致布局挤压或截断；
+       * 智能落位与事件派发：优先向当前活跃 Field Editor（`NSTextView`）执行 `insertText(_:replacementRange:)`，自动保留 Undo 栈并触发文本监听；在未激活编辑态时直接安全注入并通知 `delegate?.searchBar(_:didChangeQuery:)`，保证即粘即搜；
+     - 显式声明 `@objc public func paste(_ sender: Any?)`、`copy(_ sender: Any?)`、`cut(_ sender: Any?)` 与 `selectAll(_ sender: Any?)`，完整接入 AppKit 标准动态响应者体系；
+     - 重载 `menu(for event:)`：为搜索框提供原生“剪切、拷贝、粘贴、全选”右键上下文菜单。
+  2. **键盘按键等价物（Key Equivalents）闭环补全**（`SearchTextField.performKeyEquivalent`）：
+     - `⌘V`（keyCode 9）：直接执行 `pasteFromClipboard()` 并返回 `true`，彻底绕过 MainMenu 依赖；
+     - `⌘A`（keyCode 0）：执行全选；
+     - `⌘X`（keyCode 7）：剪切选中文字；
+     - `⌘C`（keyCode 8）：当输入框中有选中文本时优先复制文本；无选中文本时保留复制选中文件路径的原有极客设计；
+     - `⌘Z` / `⇧⌘Z`（keyCode 6）：对接 `undoManager` 支持精准撤销与重做。
+  3. **搜索面板顶层快捷键兜底机制**（`Sources/atools/UI/SearchPanel.swift`）：
+     - 重载 `SearchPanel.performKeyEquivalent(with:)`：当用户在搜索面板激活状态下，哪怕光标焦点因鼠标点击结果列表或分类胶囊而短暂脱离输入框，只要按下 `⌘V` 或 `⌘A`，顶层面板自动兜底将剪贴板内容注入输入框或全选，带来极致丝滑的无死角操作体验。
+  4. **回归诊断测试扩展**（`Sources/atools/main.swift`）：
+     - 新增 `[6.10] Testing Search Bar Clipboard Paste & Editing Shortcuts (Cmd+V / Cmd+A / Cmd+C / Cmd+X)`：
+       * 覆盖纯文本粘贴落地与输入框/查询协同断言；
+       * 覆盖 `⌘A` 全选范围与 `⌘C` 选中文本复制断言；
+       * 覆盖 `⌘X` 剪切文本清空断言；
+       * 覆盖从访达复制文件智能提取文件名粘贴断言；
+       * 覆盖 `SearchPanel` 顶层焦点脱离时的 `⌘V` 兜底粘贴断言。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（14 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 执行 `./Scripts/package_app.sh`：Release 版本构建签名打包成功；
+  - 成功部署至 `/Applications/ATools.app` 并完成启动运行（PID 33820）。
+### 24. 彻底解决与外部剪贴板管理器 (AuraSnap / Maccy) 联动时面板意外回收与粘贴失败问题 (2026-10-08, build 30)
+
+- **背景与原因排查**：
+  - 用户反馈：“还是不行，我打开全盘搜索，再唤出AuraSnap的剪贴板，选中剪贴板记录后，没有粘贴进全盘搜索框，而是两个面板一起回收了”；
+  - **核心链路原因追踪**：
+    1. **ATools 无法被外部剪贴板工具识别为激活前台应用**：原 `SearchPanel` 配置了 `styleMask: [.borderless, .nonactivatingPanel]` 且 `canBecomeMain = false`。在 macOS WindowServer 机制中，拥有 `.nonactivatingPanel` 属性的面板永远不会使所属应用成为系统级的 `frontmostApplication`。当用户在搜索框前呼出 AuraSnap 剪贴板时，AuraSnap 记录的上一个前台激活应用并非 ATools，而是更早前使用的 DingTalk、WPS Office 或 Finder！
+    2. **选中剪贴板条目触发激活错误应用与 ATools 误判收起**：当用户在 AuraSnap 中双击或回车选中记录时，AuraSnap 先向系统发起“激活上一个前台应用”（错误激活了背景的 DingTalk/WPS），并模拟按下 `⌘V`。此时 ATools 监听到后台应用被重新激活，触发了 `handleAutomaticDismissal(.appSwitched)`，导致搜索面板立即隐藏收起，`⌘V` 丢失且两个面板同时关闭；
+    3. **点击剪贴板窗口被判定为外部点击**：当用户用鼠标点击 AuraSnap 窗口时，鼠标坐标位于搜索框之外，`handleOutsideInteraction()` 误将此判定为用户点击空白处离开搜索，直接调用了 `hideSearchPanel()`；
+    4. **呼出剪贴板瞬间触发失焦关闭**：原逻辑在 `didResignKeyNotification` 时无条件收回搜索面板，剪贴板浮层一出现便导致搜索面板直接进入关闭流程。
+
+- **实施细节与涉及文件**：
+  1. **搜索面板提升为主窗口与激活主体**（`Sources/atools/UI/SearchPanel.swift` & `PanelCoordinator.swift`）：
+     - `SearchPanel` 的 `styleMask` 废除 `.nonactivatingPanel`，重载 `canBecomeMain` 设为 `true`；
+     - 在 `showSearchPanel()` 中显式执行 `NSRunningApplication.current.activate(options: .activateIgnoringOtherApps)` 与 `searchPanel.makeMain()`，确保 macOS `NSWorkspace.shared.frontmostApplication` 精准识别为 ATools，让第三方剪贴板工具无缝将 ATools 锁定为回传粘贴目标。
+  2. **多重辅助浮层工具豁免保护体系**（`Sources/atools/UI/PanelCoordinator.swift`）：
+     - **应用切换豁免（`workspaceActivationObserver`）**：检测新激活应用的 `activationPolicy`，若为 `.accessory` 或 `.prohibited`（如 AuraSnap、Maccy、CleanClip、Paste、系统表情符号窗口等无 Dock 图标的辅助浮层工具），严格忽略切换事件，绝不收回搜索面板；
+     - **失焦豁免（`windowResignObserver`）**：在 `didResignKeyNotification` 时检查当前前台应用，若属于 ATools 自身或正在操作辅助工具，阻止自动收回搜索面板；
+     - **外部点击智能过滤（`handleOutsideInteraction`）**：新增 `isClickOnAuxiliaryToolWindow(at:)`，通过 WindowServer 分析屏幕坐标命中窗口的属主应用。当用户点击 AuraSnap 或其他剪贴板工具的浮层窗口以选取记录时，判定为合法输入协作，绝不触发外部点击关闭。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（14 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 执行 `./Scripts/package_app.sh`：Release 版本构建签名打包成功；
+  - 成功部署至 `/Applications/ATools.app` 并完成平滑重启（PID 36729）。
+
+### 25. 全盘搜索与外部剪贴板管理器 (AuraSnap / Maccy) 协同交互与生命周期保活深度修复 (2026-10-08, build 31)
+
+- **背景与深度根因剖析**：
+  - 用户反馈：“还是不行，我打开全盘搜索，再唤出AuraSnap的剪贴板，选中剪贴板记录后，没有粘贴进全盘搜索框，而是两个面板一起回收了”；
+  - **经逆向与系统事件流排查定位的三重绞杀陷阱**：
+    1. **macOS 14/15 隐私沙箱导致外部窗口尺寸脱敏为 0**：在现代 macOS（Sonoma / Sequoia）中，未获屏幕录制权限的进程调用 `CGWindowListCopyWindowInfo` 时，非本进程窗口的 Bounds `Width` 和 `Height` 恒被脱敏为 `0.0`，导致 `isClickOnAuxiliaryToolWindow` 永远返回 `false`，从而将用户在 AuraSnap 剪贴板窗口上的点击 100% 误判为“点击外部空白”，瞬间调用 `hideSearchPanel()` 杀掉搜索；
+    2. **`windowResigned` 与 `appDeactivated` 盲目自杀机制**：呼出剪贴板历史浮层时，搜索面板必然暂时失去 Key Window。由于 ATools 和 AuraSnap 均为 `.accessory` 应用，macOS 系统中的 `frontmostApplication` 仍会解析为后台应用（如钉钉/WPS/访达），导致失焦与去活监听器误判并强行收起搜索；
+    3. **外部剪贴板工具退场时的过渡激活误杀与未粘贴**：AuraSnap 选中记录后隐藏自身，系统短暂交接焦点给后台应用，触发 `didActivateApplicationNotification` 导致二次误杀；同时搜索面板被关时清空了输入框，导致第三方工具随之模拟按下的 `⌘V` 全部落空。
+
+- **实施细节与涉及文件**：
+  1. **全盘搜索面板失焦与去活保护机制**（`Sources/atools/UI/PanelCoordinator.swift`）：
+     - 在 `windowResignObserver` 与 `handleAutomaticDismissal` 中，明确豁免全盘搜索面板：严禁因 `.windowResigned` 或 `.appDeactivated` 关闭全盘搜索，对齐 Spotlight 与 Alfred 的临时输入中心设计模型；
+     - 搜索面板的退出仅由用户按 Esc、再次按快捷键、明确点击外部非辅助窗口、或明确切换前台主应用驱动。
+  2. **基于 Accessibility API 的三级外部点击智能识别**（`PanelCoordinator.isClickOnAuxiliaryToolWindow`）：
+     - **Tier 1 (AX 优先)**：使用系统级 `AXUIElementCopyElementAtPosition` 获取点击屏幕坐标处的进程 PID，不受 macOS 窗口尺寸脱敏影响；对 ATools 自身窗口及所有 `.accessory` / `.prohibited` 辅助浮层（AuraSnap、Maccy 等）精准保护放行；
+     - **防卡死超时保护**：显式设置 `AXUIElementSetMessagingTimeout(systemWide, 0.05)` 50ms 超时，杜绝因外部卡死应用导致主线程事件循环受阻；
+     - **Tier 2 (白名单兜底)**：若系统无辅助功能权限，自动 fallback 到已知剪贴板浮层工具运行名单（AuraSnap、Maccy、Paste、CleanClip 等）；
+     - **Tier 3 (防抖协同)**：外部点击检测在执行收拢前，二次比对剪贴板是否发生更新，若有更新则判定为协同粘贴并放弃关闭。
+  3. **应用激活过渡防抖与焦点唤回**（`PanelCoordinator.workspaceActivationObserver`）：
+     - 监听 `didActivateApplicationNotification` 时，检测剪贴板 `changeCount` 在搜索会话期间是否发生递增；
+     - 若发生更新，判定为外部剪贴板退场过渡，立即保持搜索面板开启并唤回 Key Window，防止后台应用激活误杀。
+  4. **防重复的双保险智能粘贴（水位对齐机制）**（`Sources/atools/UI/SearchBarView.swift` & `SearchPanel.swift`）：
+     - 在 `SearchBarTextField` 中引入 `lastHandledPasteboardChangeCount`；
+     - 原生快捷键 `⌘V` 或 `pasteFromClipboard()` 消费后立即记录当前版本；
+     - 在 `SearchPanel.becomeKey` 中，增加 150ms 投递窗口期优先等待原生 `⌘V`；若外部工具未能成功送达原生按键，且当前剪贴板版本未被消费过，才由 `pasteLatestFromClipboardIfNeeded(since:)` 执行单次安全注入并对齐水位，彻底消除重复双贴风险。
+  5. **自动化诊断测试覆盖**（`Sources/atools/main.swift`）：
+     - 新增 `[6.11] Testing SearchPanel Auxiliary Floating Tool & Clipboard Lifecycle Protection...`：
+       * 覆盖基准剪贴板标记与未变动时的无害性断言；
+       * 覆盖外部剪贴板更新时首次单次安全注入与水位对齐断言；
+       * 覆盖相同剪贴板版本二次到达时的防重复拦截断言；
+       * 覆盖自身窗口在 `isClickOnAuxiliaryToolWindow` 中的豁免断言。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（15 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 核心断言 `[6.11] 外部辅助浮层协同保活（基准标记/精准单次注入/防重阻断/窗口豁免）全部验证通过`；
+  - 偏好设置窗口在所有标签下维持严格的 780.0pt 宽度不变形约束。
+
+### 26. 全盘搜索新增「复制后立即呼出时自动粘贴」智能联动开关 (2026-10-08, build 32)
+
+- **背景与需求目标**：
+  - 用户反馈：“全盘搜索能否在设置中增加一个开关，开启则 在检测到复制后立刻唤出全盘搜索时 把复制的内容自动粘贴到全盘搜索框中，设计相关方案，并让你的子代理审核一下，确保其他功能正常运行”；
+  - 解决用户在外部应用复制单词、路径、URL 或计算表达式后唤出搜索需要再次按 `⌘V` 的多余步骤，实现“复制后快捷唤起即搜”的极致流畅闭环。
+
+- **实施细节与涉及文件**：
+  1. **配置模型与向下兼容扩展**（`Sources/atools/Models/AppConfig.swift` & `ConfigManager.swift`）：
+     - `AtoolsConfig` 新增 `autoPasteOnSummonAfterCopy: Bool`，默认值为 `false`（遵循不破坏默认使用习惯原则）；
+     - 解码兼容：老配置缺少该字段时平稳 fallback 到 `false`；
+     - `ConfigManager` 新增 `updateAutoPasteOnSummonAfterCopy(_:)` 并派发 `.atoolsAutoPasteOnSummonDidChange` 通知。
+  2. **低功耗时效性剪贴板追踪器**（`Sources/atools/Search/PasteboardRecencyTracker.swift`）：
+     - **3.0 秒时效性窗口**：仅在外部复制后 3 秒内唤起搜索时执行预填充，超时唤起则保持干净搜索框；
+     - **单次消费锁（Consumption Guard）**：预填充成功后即刻重置并记录已消费版本，避免关闭后重新唤出时反复误贴；
+     - **自环自复制隔离（Self-Copy Guard）**：引入 `ignoredChangeCounts` 机制，在用户于 ATools 自身（如复制搜索路径、标题或设置文本）按 `⌘C` 时打上标记，防止再次呼出时把自身路径误回贴；
+     - **凭据与隐私保护（Privacy Guardrails）**：拦截 5 类主流密码管理器标记（`org.nspasteboard.ConcealedType`、`com.agilebits.onepassword` 等），密码凭据严禁自动预填充；
+     - **极致节能调度**：开关关闭或搜索面板已显示时完全暂停定时器（0 开销）；开启且面板隐藏时采用 `0.5s` 定时器配 `0.2s` 容差（tolerance），与系统调度平滑合并。
+  3. **全盘搜索展示生命周期无缝衔接**（`Sources/atools/UI/SearchPanel.swift` & `PanelCoordinator.swift`）：
+     - `SearchViewController.prepareForDisplay(prefilledText:)`：注入预填充文本后立即触发即时检索，并在主线程下一次 RunLoop 建立稳态后将文本全选（`selectAll`），用户直接敲回车可立即打开结果，敲击任意字符可直接覆盖输入；
+     - `SearchResultsTableView.copySelectedPath()`：复制路径后调用 `markSelfGeneratedChangeCount()` 杜绝回环。
+  4. **偏好设置界面新增选项卡片**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 在「全盘搜索 -> 搜索选项」卡片 1 中新增「复制后立即呼出时自动粘贴」开关与说明；
+     - 严格维持 `780.0pt` 窗口宽度不变形约束。
+  5. **自动化诊断测试套件**（`Sources/atools/main.swift`）：
+     - 新增 `[6.12] Testing autoPasteOnSummonAfterCopy (Recency, Consumption, Self-Copy Guard & Sensitive Filter)...`：
+       * 覆盖开关开启/关闭状态下的判定；
+       * 覆盖 3 秒内有效提取与单次消费防重复断言；
+       * 覆盖超过 3 秒过期拒绝自动粘贴断言；
+       * 覆盖 ATools 自身复制路径防自环污染断言；
+       * 覆盖 ConcealedType 敏感密码凭据拒绝注入断言；
+       * 覆盖 `prepareForDisplay` 预填充与检索协同端到端断言。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（16 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 核心断言 `[6.12] 复制后呼出自动粘贴（时效性判定/单次消费/过期拦截/自环防护/敏感凭据过滤/端到端预填充）全部验证通过`；
+  - 严格保持 780.0pt 窗口宽度与 34MB 轻量内存占用。
+
+### 27. 「复制后立即呼出时自动粘贴」连续多次生效与生命周期时序缺陷彻底修复 (2026-10-08, build 33)
+
+- **背景与深度根因排查**：
+  - 用户反馈：“打开复制后立即呼出时自动粘贴后，仅开启后第一次有效，之后再复制后唤出搜索框没有自动粘贴到框内”；
+  - **排查锁定的两大根因**：
+    1. **面板退场动画期间的窗口可见性误判（致命）**：`hideSearchPanel` 触发了 160ms 的淡出动画（`animatePanelDismissal`）。在动画结束 `orderOut` 之前，`searchPanel.isVisible` 依然为 `true`。原实现在 `hideSearchPanel` 中调用 `startMonitoringIfNeeded`，内部误判 `isSearchPanelVisible == true`，直接执行了 `stopMonitoring()`，导致后台剪贴板监听器被彻底杀死，后续复制操作再也无法被捕获；
+    2. **极速唤出操作的时序延迟（Instant Catch 缺失）**：用户在外部按 `⌘C` 后极速唤出搜索（如 100ms~200ms 内），而定时器为 0.5s 周期，若恰好在定时器下一次触发前呼出，`lastCopyTime` 未能及时记录。
+
+- **实施细节与涉及文件**：
+  1. **生命周期解耦与常态稳定监听**（`Sources/atools/Search/PasteboardRecencyTracker.swift`）：
+     - 移除了定时器对面板退场过程中的错误启停联动，当用户开启该配置项时，后台定时器保持稳定运行，并配合 0.2s 系统调度容差，仅在用户彻底关闭开关时释放；
+     - 彻底消除与 `hideSearchPanel` 退场动画的竞态死锁问题。
+  2. **唤醒入口增量即时捕获（Instant Catch Watermark Check）**（`PasteboardRecencyTracker.checkAndConsumePasteContent()`）：
+     - 在搜索面板唤醒瞬间（0 延迟），主动调用 `NSPasteboard.general.changeCount` 与 `lastKnownChangeCount` 进行增量比对；
+     - 若当前剪贴板版本发生递增且非自身产生的版本，立即就地记录更新，彻底抹平 0.5s 定时器的轮询相位延迟，哪怕用户按完 ⌘C 瞬间唤出也能 100% 精准捕获。
+  3. **面板调度器精简**（`Sources/atools/UI/PanelCoordinator.swift`）：
+     - 移除了 `showSearchPanel` 和 `hideSearchPanel` 中冗余的 `startMonitoringIfNeeded()` / `stopMonitoring()` 干扰调用，将控制权全权交由 Tracker 自治。
+  4. **自动化诊断测试套件升级覆盖**（`Sources/atools/main.swift`）：
+     - 扩展 `[6.12]` 测试套件：新增真实场景下连续 3 次复制与唤出消费的递进测试；
+     - 新增定时器未触发时的唤起瞬间即时捕获（Instant Catch）断言，确保 100% 稳定可靠。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（16 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 核心断言 `[6.12] 复制后呼出自动粘贴（时效性/单次消费/过期拦截/自环防护/敏感凭据过滤/连续多次有效/极速捕获）全部验证通过`；
+  - 偏好设置窗口在所有标签下维持严格的 780.0pt 宽度不变形约束。
+

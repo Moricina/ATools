@@ -276,6 +276,7 @@ public struct AtoolsConfig: Codable {
     public var searchExcludeTrash: Bool           // 废纸篓与临时目录 (如 ~/.Trash, /tmp)
     public var searchExcludeUserLibrary: Bool     // 排除 ~/Library 根目录 (智能保留 iCloud 云盘与第三方网盘)
     public var customExcludedPaths: [String]      // 用户自定义排除目录 (绝对路径列表)
+    public var autoPasteOnSummonAfterCopy: Bool   // 复制后短时间内唤出全盘搜索自动粘贴
 
     // 关窗即退 (AutoQuit)：最后一个窗口关闭后延迟退出应用
     public var enableAutoQuit: Bool
@@ -346,6 +347,7 @@ public struct AtoolsConfig: Codable {
         searchExcludeTrash: Bool = true,
         searchExcludeUserLibrary: Bool = true,
         customExcludedPaths: [String] = [],
+        autoPasteOnSummonAfterCopy: Bool = false,
         enableAutoQuit: Bool = false,
         autoQuitMode: AutoQuitMode = .allApps,
         autoQuitAppRules: [String]? = nil,
@@ -392,6 +394,7 @@ public struct AtoolsConfig: Codable {
         self.searchExcludeTrash = searchExcludeTrash
         self.searchExcludeUserLibrary = searchExcludeUserLibrary
         self.customExcludedPaths = customExcludedPaths
+        self.autoPasteOnSummonAfterCopy = autoPasteOnSummonAfterCopy
         self.enableAutoQuit = enableAutoQuit
         self.autoQuitMode = autoQuitMode
         if let legacy = autoQuitAppRules {
@@ -420,6 +423,7 @@ public struct AtoolsConfig: Codable {
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
         case extraHotFolders, searchFilterOrder
         case searchExcludeCaches, searchExcludeLogs, searchExcludeDeveloper, searchExcludeHidden, searchExcludeTrash, searchExcludeUserLibrary, customExcludedPaths
+        case autoPasteOnSummonAfterCopy
         case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
@@ -470,6 +474,7 @@ public struct AtoolsConfig: Codable {
         self.searchExcludeTrash = (try? container.decode(Bool.self, forKey: .searchExcludeTrash)) ?? true
         self.searchExcludeUserLibrary = (try? container.decode(Bool.self, forKey: .searchExcludeUserLibrary)) ?? true
         self.customExcludedPaths = (try? container.decode([String].self, forKey: .customExcludedPaths)) ?? []
+        self.autoPasteOnSummonAfterCopy = (try? container.decode(Bool.self, forKey: .autoPasteOnSummonAfterCopy)) ?? false
 
         // AutoQuit: 缺字段落到安全默认（总开关关闭）；老配置向下兼容迁移
         self.enableAutoQuit = (try? container.decode(Bool.self, forKey: .enableAutoQuit)) ?? false

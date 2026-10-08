@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import ApplicationServices
 
 public enum PanelKind {
     case shelf   // 面板 A: Maye Nano 风格分类抽屉
@@ -114,6 +115,31 @@ public final class PanelCoordinator {
             guard let self = self else { return }
             let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             if activated?.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
+
+            // 关键保护：若激活的是无 Dock 图标的辅助浮层工具（如剪贴板管理器 AuraSnap、Maccy、系统表情面板等，activationPolicy != .regular），
+            // 绝不视为真正的切应用退出，保持全盘搜索面板开启并等待接收其回传粘贴内容！
+            if activated?.activationPolicy == .accessory || activated?.activationPolicy == .prohibited {
+                runtimeLog("[Panel] workspaceObserver: ignoring activation of accessory tool \(activated?.bundleIdentifier ?? "")")
+                return
+            }
+
+            // 关键保护：若全盘搜索可见，外部剪贴板工具退场时系统可能短暂将焦点切给原先的后台应用。
+            // 检查剪贴板是否在搜索会话期间发生了更新（changeCount 变化）。
+            if self.searchPanelCreated && self.searchPanel.isVisible {
+                let initialCount = self.searchPanel.summonPasteboardChangeCount
+                let currentCount = NSPasteboard.general.changeCount
+                if currentCount > initialCount {
+                    runtimeLog("[Panel] workspaceObserver: pasteboard changed during search session (\(initialCount) -> \(currentCount)), preserving search panel and bringing to front.")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                        if self.searchPanelCreated && self.searchPanel.isVisible {
+                            self.searchPanel.makeKeyAndOrderFront(nil)
+                            _ = self.searchPanel.searchViewController.searchBar.textField.pasteLatestFromClipboardIfNeeded(since: initialCount)
+                        }
+                    }
+                    return
+                }
+            }
+
             self.handleAutomaticDismissal(.appSwitched)
         }
 
@@ -128,6 +154,12 @@ public final class PanelCoordinator {
             // AppKit can briefly resign a panel key while opening a menu or
             // child sheet. Re-check after the current event is dispatched.
             DispatchQueue.main.async {
+                // 关键保护：全盘搜索面板作为系统级临时输入中心（类似 Spotlight），
+                // 绝不因暂时的 windowResigned（如呼出剪贴板历史 AuraSnap、Maccy、系统表情输入、输入法选词等）而自动关闭！
+                if self.searchPanelCreated && self.searchPanel.isVisible {
+                    runtimeLog("[Panel] windowResign: search panel is open, preserving panel for auxiliary input / clipboard tools.")
+                    return
+                }
                 self.handleAutomaticDismissal(.windowResigned)
             }
         }
@@ -156,6 +188,10 @@ public final class PanelCoordinator {
 
     private func handleAppResignedActive() {
         handleAutomaticDismissal(.appDeactivated)
+    }
+
+    public var isSearchPanelVisible: Bool {
+        return searchPanelCreated && searchPanel.isVisible
     }
 
     private var isAnyPanelShowing: Bool {
@@ -200,8 +236,12 @@ public final class PanelCoordinator {
             }
         }
 
-        // 如果全盘搜索可见，失焦时无条件收回全盘搜索
+        // 如果全盘搜索可见：严禁因 windowResigned 或 appDeactivated 关闭全盘搜索，仅在应用明确切换或外部点击时遵循收拢
         if searchPanelCreated && searchPanel.isVisible {
+            if reason == .windowResigned || reason == .appDeactivated {
+                runtimeLog("[Panel] autoDismiss(\(reason)) skipped: search panel preserves state for auxiliary floating tools.")
+                return
+            }
             hideSearchPanel(restoreFocus: false)
         }
 
@@ -288,14 +328,20 @@ public final class PanelCoordinator {
             hideShelfPanel(restoreFocus: false, animated: false)
         }
 
+        // 检查并消费外部剪贴板最近 3 秒内的复制内容
+        let prefilled = PasteboardRecencyTracker.shared.checkAndConsumePasteContent()
+
         AppHotspotIndex.shared.refreshIfStale()
-        searchPanel.prepareForDisplay()
+        searchPanel.prepareForDisplay(prefilledText: prefilled)
+        searchPanel.markSummonPasteboardState()
         positionPanelToScreenCenter(searchPanel)
         animatePanelEntrance(searchPanel)
+        NSRunningApplication.current.activate(options: .activateIgnoringOtherApps)
         NSApp.activate(ignoringOtherApps: true)
         searchPanel.makeKeyAndOrderFront(nil)
         searchPanel.orderFrontRegardless()
         searchPanel.makeKey()
+        searchPanel.makeMain()
 
         activePanel = .search
         installGlobalOutsideClickMonitor()
@@ -506,9 +552,21 @@ public final class PanelCoordinator {
         if searchPanelCreated && searchPanel.isVisible {
             let visibleFrame = (searchPanel as PanelVisibleFrameProviding).visiblePanelFrame
             if !NSPointInRect(clickLoc, visibleFrame) {
+                // 关键保护：若点击发生在辅助浮层工具（如剪贴板管理器 AuraSnap、Maccy 等窗口）上，绝不收回搜索面板，等待用户选取条目
+                if Self.isClickOnAuxiliaryToolWindow(at: clickLoc) {
+                    runtimeLog("[Panel] handleOutsideInteraction: click is on auxiliary/clipboard tool window, preserving search panel.")
+                    return
+                }
+
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     if self.isDraggingActive || NSApp.modalWindow != nil || self.isRightClickMenuOpen { return }
+                    // 再次检查此时是否发生了剪贴板协同变动
+                    let initialCount = self.searchPanel.summonPasteboardChangeCount
+                    if NSPasteboard.general.changeCount > initialCount {
+                        runtimeLog("[Panel] handleOutsideInteraction: pasteboard updated, preserving search panel.")
+                        return
+                    }
                     self.hideSearchPanel(restoreFocus: true)
                 }
             }
@@ -589,5 +647,58 @@ public final class PanelCoordinator {
         y = min(max(y, minY), maxY)
 
         return NSPoint(x: x, y: y)
+    }
+
+    private static let knownAuxiliaryToolIdentifiers: Set<String> = [
+        "com.dochi.AuraSnap",
+        "org.p0deje.Maccy",
+        "com.pasteapp.Paste",
+        "com.apptorium.Pastebot",
+        "com.clipy-app.Clipy",
+        "com.mzperx.CleanClip",
+        "com.knollsoft.AltTab"
+    ]
+
+    /// 检查点击的屏幕坐标是否落在辅助浮层工具（如 AuraSnap、Maccy、Paste、CleanClip 等无 Dock 图标的工具面板）的窗口范围内
+    internal static func isClickOnAuxiliaryToolWindow(at screenPoint: NSPoint) -> Bool {
+        let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 900
+        let quartzY = mainScreenHeight - screenPoint.y
+
+        // Tier 1: 优先尝试通过系统 Accessibility API (AXUIElement) 获取点击点所在的进程 PID
+        let systemWide = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(systemWide, 0.05) // 50ms 严格超时保护，绝不拖卡主线程
+        var element: AXUIElement?
+        let axErr = AXUIElementCopyElementAtPosition(systemWide, Float(screenPoint.x), Float(quartzY), &element)
+        if axErr == .success, let elem = element {
+            var pid: pid_t = 0
+            if AXUIElementGetPid(elem, &pid) == .success && pid > 0 {
+                if pid == ProcessInfo.processInfo.processIdentifier {
+                    return true // 自身窗口
+                }
+                if let app = NSRunningApplication(processIdentifier: pid) {
+                    let bundleID = app.bundleIdentifier ?? ""
+                    if bundleID == "com.apple.dock" || bundleID == "com.apple.controlcenter" || bundleID == "com.apple.systemuiserver" {
+                        return false
+                    }
+                    if app.activationPolicy == .accessory || app.activationPolicy == .prohibited {
+                        return true
+                    }
+                    if knownAuxiliaryToolIdentifiers.contains(bundleID) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        // Tier 2: 若 AX 降级或未命中，检查系统当前运行中是否处于活跃状态的已知辅助/剪贴板工具
+        for runningApp in NSWorkspace.shared.runningApplications {
+            if runningApp.activationPolicy == .accessory,
+               let bid = runningApp.bundleIdentifier,
+               knownAuxiliaryToolIdentifiers.contains(bid) {
+                return true
+            }
+        }
+
+        return false
     }
 }

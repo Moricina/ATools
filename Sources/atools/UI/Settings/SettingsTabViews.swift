@@ -1047,6 +1047,7 @@ public final class ShelfTabView: NSView {
 // MARK: - 3. Search Tab View
 public final class SearchTabView: NSView, NSTextFieldDelegate {
     private var diskSearchSwitch: NSSwitch!
+    private var autoPasteSwitch: NSSwitch!
     private var dictSwitch: NSSwitch!
     private var calcSwitch: NSSwitch!
     private var limitControl: NSSegmentedControl!
@@ -1133,7 +1134,18 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             subtitle: "控制全盘搜索中枢最大展示条目，避免过多项目占用视觉与内存",
             accessory: limitControl
         )
-        card1.addRow(rowLimit, isLast: true)
+        card1.addRow(rowLimit)
+
+        autoPasteSwitch = NSSwitch()
+        autoPasteSwitch.target = self
+        autoPasteSwitch.action = #selector(toggleAutoPaste(_:))
+        let rowAutoPaste = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "doc.on.clipboard"),
+            title: "复制后立即呼出时自动粘贴",
+            subtitle: "在外部复制文本后短时间（3 秒）内唤出全盘搜索，自动填入复制内容并开始检索",
+            accessory: autoPasteSwitch
+        )
+        card1.addRow(rowAutoPaste, isLast: true)
 
         NSLayoutConstraint.activate([
             sec1Title.topAnchor.constraint(equalTo: optionsScrollContent.topAnchor, constant: 14),
@@ -1514,6 +1526,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         reloadHotFolderRows()
         reloadCustomExclusionRows()
         diskSearchSwitch.state = cfg.enableFullDiskSearch ? .on : .off
+        autoPasteSwitch.state = cfg.autoPasteOnSummonAfterCopy ? .on : .off
         calcSwitch.state = cfg.enableCalculator ? .on : .off
         dictSwitch.state = cfg.enableDictionary ? .on : .off
 
@@ -1556,6 +1569,10 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
     @objc private func toggleDiskSearch(_ sender: NSSwitch) {
         ConfigManager.shared.updateEnableFullDiskSearch(sender.state == .on)
+    }
+
+    @objc private func toggleAutoPaste(_ sender: NSSwitch) {
+        ConfigManager.shared.updateAutoPasteOnSummonAfterCopy(sender.state == .on)
     }
 
     // MARK: - 自定义热目录列表

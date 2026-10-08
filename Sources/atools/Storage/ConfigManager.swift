@@ -278,6 +278,12 @@ public final class ConfigManager {
         save()
     }
 
+    public func updateAutoPasteOnSummonAfterCopy(_ enabled: Bool) {
+        self.config.autoPasteOnSummonAfterCopy = enabled
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoPasteOnSummonDidChange, object: nil)
+    }
+
     // MARK: - 自定义热目录
 
     public static let maxExtraHotFolders = 8
