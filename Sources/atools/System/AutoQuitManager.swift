@@ -449,6 +449,13 @@ public final class AutoQuitManager {
         // 安全防护 1：用户使用 Cmd+H 隐藏的应用绝不能自动退出
         guard !app.isHidden else { return }
 
+        // 安全防护 1.1：当前前台活跃正在使用的应用绝不能退出（切换回来或正在使用）
+        guard !app.isActive else {
+            recheckCounts.removeValue(forKey: pid)
+            cancelPendingQuitLocked(pid)
+            return
+        }
+
         // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，延后复查
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
@@ -493,9 +500,10 @@ public final class AutoQuitManager {
                     }
                 }
             } else {
-                // 超过 200ms 重试上限，淡出动画必已结束；AX 确证为 0，确认为关窗并调度退出
+                // 超过重试上限后，WindowServer 依然确证存在在屏标准窗口！这证明该窗口真实存在且未被用户关闭！
+                // 绝对不能退出！清除重试计数并撤销退出调度，安全保护后台运行或失焦的应用。
                 recheckCounts.removeValue(forKey: pid)
-                scheduleQuitLocked(pid, app: entry.app)
+                cancelPendingQuitLocked(pid)
             }
         } else if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
             recheckCounts.removeValue(forKey: pid)
@@ -552,6 +560,26 @@ public final class AutoQuitManager {
         // pid 槽位可能被新进程复用：必须用持有的 NSRunningApplication 对象做身份验证
         guard !app.isTerminated else { return }
         guard !app.isHidden else { return }
+
+        // 关键安全防御 1：用户已切换回该应用，或该应用正在前台使用，绝不退出！
+        guard !app.isActive else {
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is currently active in foreground.")
+            return
+        }
+
+        // 关键安全防御 2：检查是否有任何已最小化的窗口（Minimized in Dock），最小化绝不是关闭！
+        if let windows = axWindows(of: entry.axApp) {
+            let hasMinimized = windows.contains { w in
+                var minVal: CFTypeRef?
+                AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &minVal)
+                return (minVal as? Bool) == true
+            }
+            if hasMinimized {
+                runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): has minimized window in Dock.")
+                return
+            }
+        }
+
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
             runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): Space transition in progress.")
             return

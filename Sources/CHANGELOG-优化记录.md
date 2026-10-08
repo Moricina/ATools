@@ -953,3 +953,40 @@
   - 执行 `./Scripts/build.sh --test`：全套 13 大项综合诊断套件 100% 全部 PASS 通过（0 失败）；
   - 执行 `./Scripts/package_app.sh`：打包构建 Release 版本成功；
   - 部署并成功重启 `/Applications/ATools.app`（PID 11283）。
+### 22. 切换软件与后台失焦防误退全链路安全加固 (2026-10-08, build 30)
+
+- **背景与排查目标**：
+  - 用户反馈：“检查一下是否还存在切换软件退出软件的问题”；
+  - 核心排查与加固目标：针对用户开启“关窗即退”或使用 ATools 快捷搜索/抽屉面板时，深度排查用户在进行软件切换（如 `⌘Tab`、多虚拟桌面 Space 滑动切换、窗口最小化到 Dock、前后台切换）过程中，是否存在 ATools 自身被误退出或正在使用的第三方应用程序被误杀退出的隐患，全面消除误杀风险，确保系统级稳定性。
+
+- **深度排查结论与关键漏洞发现**：
+  1. **ATools 自身防退出机制验证**：
+     - 排查 `AppDelegate.swift` 与 `PanelCoordinator.swift`：失焦时无论用户点击屏幕任何区域，仅调用 `hideShelfPanel` 或 `dismissSearchPanel` 隐藏面板，绝不调用 `terminate`；
+     - `AutoQuitManager.shouldWatch` 内部严密排除了 `isSelf`（`Bundle.main.bundleIdentifier == "cc.atools.app"`），ATools 自身绝对不会被加入监控，绝不存在自身因失焦退出问题。
+  2. **发现并定位 AutoQuit 对第三方应用误杀的致命缺陷**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - **致命缺陷 1（重试超时强行杀进程）**：在 `evaluateAppWindowsLocked` 中，原逻辑判定当 `axCount == 0 && (wsCount ?? 0) > 0`（即 AX 偶发报 0 但 WindowServer 确认屏幕上有在屏窗口）时，重试 2 次（仅 200ms）后，直接进入了 `else` 分支调用 `scheduleQuitLocked`！如果某第三方应用在后台失焦或切换时 AX 响应出现短暂延迟（超 200ms），但在屏幕上仍有标准窗口，就会被 ATools 误判为已关闭全部窗口并直接杀死！
+     - **安全漏洞 2（缺乏前台激活态护城河）**：应用从后台切换至前台，或者用户正在该应用中交互时，若此前进入过退出调度队列，原逻辑在执行杀进程（`executePendingQuit`）时缺乏前台活跃态（`app.isActive`）校验，存在切回瞬间被执行杀退的竞态风险；
+     - **安全漏洞 3（Dock 栏最小化误判）**：当用户将窗口最小化到 Dock 栏时，屏幕上的窗口被移除（`kCGWindowIsOnscreen` 变 false），若 AX 属性未深层解析最小化状态，可能会被误判为零窗口。
+
+- **实施细节与涉及文件**：
+  1. **重构窗口超时判定逻辑，杜绝误杀**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 修复 `evaluateAppWindowsLocked`：当重试次数达到上限后，若 WindowServer 依然确证存在在屏标准窗口（`wsCount > 0`），证明窗口真实存在且未被用户关闭。将原有错误的 `scheduleQuitLocked` 彻底修正为：立即清除重试计数并执行 `cancelPendingQuitLocked(pid)`，安全撤销退出流程，保障后台运行应用绝对不被误退。
+  2. **前台活跃正在使用的应用绝对保护**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 在 `evaluateAppWindowsLocked` 与 `executePendingQuit` 入口处严密加入 `guard !app.isActive else { cancelPendingQuitLocked(pid); return }`；
+     - 凡是用户当前正在使用的、处于前台激活状态的应用，无论任何原因与状态，均绝对禁止触发自动退出。
+  3. **Dock 栏最小化窗口深度保护**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 在 `executePendingQuit` 终极执行前，深层检查 `axWindows` 中是否存在处于最小化状态（`kAXMinimizedAttribute == true`）的窗口；
+     - 只要用户是将窗口最小化至 Dock 栏而非关闭，立即终止退出流程，绝不杀死进程。
+
+- **兼容性与多重安全护城河**：
+  - 当前 ATools AutoQuit 已建立 5 重全链路安全护城河：
+    1. `!app.isHidden`（`⌘H` 隐藏应用安全放行）；
+    2. `!app.isActive`（前台活跃应用绝对放行）；
+    3. `!hasMinimized`（Dock 最小化窗口绝对放行）；
+    4. `wsCount > 0` 超时安全取消退出（真实窗口在屏绝对放行）；
+    5. `lastSpaceChangeDate` 2.0s 宽限期（虚拟桌面 Space 切换绝对放行）。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（13 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 执行 `./Scripts/package_app.sh`：Release 版本构建签名打包成功；
+  - 成功部署至 `/Applications/ATools.app` 并完成平滑重启。
