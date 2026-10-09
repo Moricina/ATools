@@ -1187,5 +1187,51 @@
   - 核心断言 `✓ 复制后呼出自动粘贴（.../持久化编解码）全部验证通过`；
   - 发布版本升级为 `v1.3.10 (build 35)`。
 
+### 30. 根治关窗即退滞后与切换软件/多空间误退双重缺陷 (2026-10-09, build 36)
+
+- **背景与现象**：
+  - 用户反馈 1：“排查一下为什么窗口退出很慢，没有立即退出”；
+  - 用户反馈 2：“目前又存在切换软件立刻退出的问题了”；
+  - 核心痛点矛盾：用户在偏好设置开启“最后一个窗口关闭后退出应用”并设置为“立即退出 (0s)”时，点击红叉关窗无即时响应，直到切走软件后才慢吞吞退出；而当在正常使用多窗口或后台办公时，切换到其他软件或滑动 Space 虚拟桌面，被切走的应用（如 WPS Office、QQ、钉钉等）却被瞬间强杀退出。
+
+- **根因剖析**：
+  1. **WindowServer 误杀根因（macOS 隐私权限阻断 + 切换软件 isOnScreen 丢失）**：
+     - 在 macOS 安全架构中，未授权「屏幕录制」权限的应用（ATools 仅申请辅助功能权限），系统在调用 `CGWindowListCopyWindowInfo` 时会**强制清空所有其他应用的窗口标题（`kCGWindowName` 为 nil）**；
+     - 此时所有窗口均落入无标题窗口分支；而当用户切换到其他软件或虚拟桌面（Space）时，后台应用（如 WPS）的真实文档窗口被系统标记为 `isOnScreen: false`；
+     - 原实现直接使用 `guard isOnScreen else { continue }`，导致即使用户打开着 1512x949 的真实表格文档，WindowServer 计数依然被误判为 0！
+  2. **AX 辅助功能树失焦清空陷阱（WPS / Qt / CEF 架构特有）**：
+     - 经实测深度探查：WPS Office、QQ 等混合架构应用在失焦进入后台时，其根级 `kAXWindowsAttribute` 数组会被其自身框架清空（返回 count=0）；
+     - 但此时该应用的 `kAXMainWindowAttribute`（主窗口）和 `kAXFocusedWindowAttribute`（焦点窗口）依然强引用着其在活的标准窗口（role="AXWindow"）；
+     - 原实现仅查询 `kAXWindowsAttribute`，取到 0 窗后即认为无窗，导致 AX 与 WindowServer 双双跌入虚假零窗陷阱！
+  3. **关窗极慢根因（前台活跃态逻辑死结）**：
+     - 为缓解此前切软件误杀，历史补丁在 `evaluateAppWindowsLocked` 与 `executePendingQuit` 入口处加入了 `guard !app.isActive else { return }`；
+     - 在 macOS 原生架构中，用户点击红叉关闭最后一个窗口时，系统绝不会自动将焦点转移给其他应用，该应用依然是当前前台活跃应用（`app.isActive == true`）；
+     - 关窗事件被 `guard !app.isActive` 当场注销丢弃，应用完全无法退出；直到用户手动点击其他应用失焦后，再干等慢轮询扫到它，才被动退出。
+
+- **实施细节与涉及文件**：
+  1. **重构 AX 窗口探测器（级联 MainWindow / FocusedWindow 兜底）**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 当 `kAXWindowsAttribute` 返回空数组时，级联查询 `kAXMainWindowAttribute` 与 `kAXFocusedWindowAttribute`；
+     - 只要其存在且 `role == "AXWindow"`，直接确认为有效在活窗口，彻底消除 WPS/QQ 失焦瞬态 AX 误报为 0 的问题。
+  2. **重构 WindowServer 窗口识别流（兼容无屏幕录制权限与跨 Space 状态）**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 对标准业务主层（Layer 0 标准文档窗口、Layer 3 模态弹窗），只要满足主窗体尺寸底线（width >= 180, height >= 120）且排除 AppKit/CEF 离屏缓存，**直接确认为有效业务窗口**；
+     - 绝不因 macOS 隐私策略清空标题或失焦跨 Space 导致 `isOnScreen == false` 而漏判，双重铁律全面保活后台运行应用。
+  3. **彻底移除错误的 `guard !app.isActive` 前台阻断**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 在已具备 WindowServer 与 AX 双重全空间权威核验、Dock 最小化防护（`kAXMinimizedAttribute`）、`⌘H` 隐藏防护（`app.isHidden`）及 Space 切换 2 秒宽限期等多重铁律的前提下，彻底移除 `evaluateAppWindowsLocked` 与 `executePendingQuit` 中的 `guard !app.isActive`；
+     - 用户点击红叉关窗后，双重校验确诊零窗，无论应用是否前台，均以毫秒级即刻触发退出，真正达成「立即退出 (0s)」零等待。
+  4. **轮询平滑与应用激活即时挂载**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 订阅 `NSWorkspace.didActivateApplicationNotification`：应用被激活时即刻挂载并刷新窗口销毁监听，补齐初始建窗延迟应用的状态；
+     - 兜底轮询间隔由 2.0s 优化为 1.0s，兼顾极低 CPU 开销与秒级兜底感知；
+     - 扩展 `fallbackPoll`：对启动时未建窗的应用（`!hadWindows`）在轮询中自动感知窗口创建并补充注册销毁监听。
+  5. **版本号升级**（`Scripts/package_app.sh`）：
+     - 版本升级为 `v1.3.11 (build 36)`。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套综合诊断套件（16 大项）**100% 全部 PASS 通过**（0 失败）；
+  - 实测 WindowServer 与 AX 计数探查：
+    * WPS Office（后台有文档且失焦）：`axCount` 由 0 恢复为 2（MainWindow 成功命中），`wsCount` 稳定识别，后台常驻不跳弹窗；
+    * 启动运行日志证实：`[AutoQuit] Watching WPS Office (windows: 2)`，彻底告别误判。
+  - 彻底根治“切软件/多空间误杀”与“关窗退出迟缓”两大痛点。
+
+
 
 

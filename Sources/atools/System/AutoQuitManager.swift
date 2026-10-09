@@ -89,6 +89,15 @@ public final class AutoQuitManager {
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self.detach(pid: app.processIdentifier)
         })
+        workspaceObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self = self, self.isRunning,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self.handleAppActivated(app)
+        })
         // 监听虚拟桌面 (Spaces) 切换：Space 切换时 WindowServer 与 AX 处于过渡态，设立保护宽限期防止误杀
         workspaceObservers.append(workspaceCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification,
@@ -232,9 +241,6 @@ public final class AutoQuitManager {
                   let height = bounds["Height"] as? Double,
                   width > 40, height > 40 else { continue }
 
-            // 关键：必须是在屏（On-Screen）有效窗口！已关闭/orderedOut 隐藏的窗口 isOnScreen 为 false
-            guard let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, isOnScreen else { continue }
-
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
             let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -245,24 +251,35 @@ public final class AutoQuitManager {
             if abs(width - 500) < 15 && abs(height - 372) < 15 { continue }
 
             if !trimmedName.isEmpty {
-                // 有标题的标准窗口（Safari 页面、Chrome 标签页、终端窗口、钉钉主窗口等）：
-                // 无论是否失焦、是否在其他 Space、是否被遮挡，一律确认为有效窗口！
+                // 有标题的标准窗口（Safari 页面、Chrome 标签页、终端窗口、钉钉主窗口、WPS 文档等）：
+                // 无论是否失焦、是否在其他 Space、是否被遮挡，一律确认为有效业务窗口！绝不误杀！
                 count += 1
                 continue
             }
 
             // 无标题窗口过滤（系统常驻残影、离屏缓冲、AppKit 占位层）
-            // 1. AppKit 500x500 占位层
-            if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
-            // 2. 菜单栏/工具栏横条 (height <= 48)
-            if height <= 48 { continue }
-            // 3. 小型代理/光标/状态图标
-            if width <= 80 && height <= 60 { continue }
-            // 4. CEF 离屏缓冲画布 (640x508, 600x600)
-            if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
-            if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
+            // 关键隐私与系统兼容防护：当 ATools 未取得系统「屏幕录制」权限时，macOS 会对其他进程的窗口标题返回 nil。
+            // 1. 若窗口属于标准业务主层（Layer 0 标准窗体，或 Layer 3 模态对话框），且尺寸达到正常应用窗口底线（width >= 180, height >= 120）：
+            //    排除 CEF 离屏缓冲与 AppKit 占位层后，直接确认为有效业务窗口！绝不因应用失焦或跨 Space 导致 isOnScreen==false 而被误杀！
+            if (layer == 0 || layer == 3) && width >= 180 && height >= 120 {
+                // 排除 AppKit 500x500 占位层
+                if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
+                // 排除 CEF 离屏缓冲画布 (640x508, 600x600)
+                if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
+                if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
 
-            // 具有合理尺寸的无标题真实窗口（如部分 Electron/Flutter/Java 无标题主窗体）
+                count += 1
+                continue
+            }
+
+            // 2. 非主层或小型无标题组件（如 Layer 8 浮层），要求必须是在屏（On-Screen）有效窗口
+            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
+            guard isOnScreen else { continue }
+
+            if height <= 48 { continue }
+            if width <= 80 && height <= 60 { continue }
+
+            // 具有合理尺寸的无标题真实在屏窗口（如部分 Electron/Flutter/Java 无标题主窗体）
             if width > 120 && height > 90 {
                 count += 1
             }
@@ -303,8 +320,8 @@ public final class AutoQuitManager {
         }
 
         // 兜底轮询：捕获不吐 AX 销毁事件的应用（部分 Electron/Java/CEF）。
-        // 仅扫 hadWindows 的应用，每 2.0s 一次轻量查询，代价可忽略。
-        let timer = Timer(timeInterval: 2.0, target: self, selector: #selector(fallbackPoll), userInfo: nil, repeats: true)
+        // 每 1.0s 一次轻量查询，兼顾即时性与低功耗。
+        let timer = Timer(timeInterval: 1.0, target: self, selector: #selector(fallbackPoll), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         fallbackTimer = timer
         runtimeLog("[AutoQuit] Started; watching \(watched.count) regular app(s).")
@@ -336,6 +353,31 @@ public final class AutoQuitManager {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         attachLocked(app)
+    }
+
+    private func handleAppActivated(_ app: NSRunningApplication) {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        let pid = app.processIdentifier
+        if watched[pid] == nil {
+            attachLocked(app)
+        } else if var entry = watched[pid] {
+            let axCount = axWindows(of: entry.axApp)?.count
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+            if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
+                entry.hadWindows = true
+                if let list = axWindows(of: entry.axApp) {
+                    for window in list {
+                        if !entry.registeredWindowRefs.contains(where: { CFEqual($0, window) }) {
+                            if AXObserverAddNotification(entry.observer, window, kAXUIElementDestroyedNotification as CFString, nil) == .success {
+                                entry.registeredWindowRefs.append(window)
+                            }
+                        }
+                    }
+                }
+                watched[pid] = entry
+            }
+        }
     }
 
     private func detach(pid: pid_t) {
@@ -449,13 +491,6 @@ public final class AutoQuitManager {
         // 安全防护 1：用户使用 Cmd+H 隐藏的应用绝不能自动退出
         guard !app.isHidden else { return }
 
-        // 安全防护 1.1：当前前台活跃正在使用的应用绝不能退出（切换回来或正在使用）
-        guard !app.isActive else {
-            recheckCounts.removeValue(forKey: pid)
-            cancelPendingQuitLocked(pid)
-            return
-        }
-
         // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，延后复查
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
@@ -516,13 +551,29 @@ public final class AutoQuitManager {
         guard isRunning else { return }
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
-        // 性能保护：仅扫描曾经有窗、且不在挂起退出或正在退出流程中的应用
-        let candidatePids = watched.keys.filter { pid in
-            guard let entry = watched[pid] else { return false }
-            return entry.hadWindows && pendingQuits[pid] == nil && !terminatingPids.contains(pid)
-        }
-        for pid in candidatePids {
-            evaluateAppWindowsLocked(pid: pid)
+        
+        let pids = Array(watched.keys)
+        for pid in pids {
+            guard var entry = watched[pid], pendingQuits[pid] == nil && !terminatingPids.contains(pid) else { continue }
+            if !entry.hadWindows {
+                let axCount = axWindows(of: entry.axApp)?.count
+                let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+                if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
+                    entry.hadWindows = true
+                    if let list = axWindows(of: entry.axApp) {
+                        for window in list {
+                            if !entry.registeredWindowRefs.contains(where: { CFEqual($0, window) }) {
+                                if AXObserverAddNotification(entry.observer, window, kAXUIElementDestroyedNotification as CFString, nil) == .success {
+                                    entry.registeredWindowRefs.append(window)
+                                }
+                            }
+                        }
+                    }
+                    watched[pid] = entry
+                }
+            } else {
+                evaluateAppWindowsLocked(pid: pid)
+            }
         }
     }
 
@@ -561,13 +612,7 @@ public final class AutoQuitManager {
         guard !app.isTerminated else { return }
         guard !app.isHidden else { return }
 
-        // 关键安全防御 1：用户已切换回该应用，或该应用正在前台使用，绝不退出！
-        guard !app.isActive else {
-            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is currently active in foreground.")
-            return
-        }
-
-        // 关键安全防御 2：检查是否有任何已最小化的窗口（Minimized in Dock），最小化绝不是关闭！
+        // 关键安全防御 1：检查是否有任何已最小化的窗口（Minimized in Dock），最小化绝不是关闭！
         if let windows = axWindows(of: entry.axApp) {
             let hasMinimized = windows.contains { w in
                 var minVal: CFTypeRef?
@@ -620,13 +665,34 @@ public final class AutoQuitManager {
     }
 
     /// 返回 nil 表示 AX 查询失败（状态未知），调用方必须跳过本轮判定；
-    /// 只有 `.success` 且能取出数组才返回真实窗口列表。
+    /// 只有成功查询且确知窗口状态才返回窗口列表。
     private func axWindows(of element: AXUIElement) -> [AXUIElement]? {
         AXUIElementSetMessagingTimeout(element, 0.15)
         var value: CFTypeRef?
         let err = AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value)
-        guard err == .success else { return nil }
-        guard let list = value as? [AXUIElement] else { return nil }
-        return list
+        var result: [AXUIElement] = (err == .success ? (value as? [AXUIElement] ?? []) : [])
+
+        // 关键防御：某些应用（如 WPS Office、部分 Qt/CEF 应用）失焦或置于后台时，
+        // 其 kAXWindowsAttribute 可能暂时返回空数组，但其 kAXMainWindowAttribute 或 kAXFocusedWindowAttribute 仍真实在活。
+        if result.isEmpty {
+            for attr in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+                var winVal: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, attr as CFString, &winVal) == .success, let win = winVal {
+                    let winEl = win as! AXUIElement
+                    var roleVal: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(winEl, kAXRoleAttribute as CFString, &roleVal) == .success,
+                       (roleVal as? String) == "AXWindow" {
+                        if !result.contains(where: { CFEqual($0, winEl) }) {
+                            result.append(winEl)
+                        }
+                    }
+                }
+            }
+        }
+
+        if err != .success && result.isEmpty {
+            return nil
+        }
+        return result
     }
 }
