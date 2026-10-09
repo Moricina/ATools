@@ -241,6 +241,9 @@ public final class AutoQuitManager {
                   let height = bounds["Height"] as? Double,
                   width > 40, height > 40 else { continue }
 
+            // 关键：必须是在屏（On-Screen）有效窗口！已关闭/orderedOut 隐藏的窗口 isOnScreen 为 false
+            guard let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, isOnScreen else { continue }
+
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
             let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -250,34 +253,26 @@ public final class AutoQuitManager {
             // 钉钉特定的常驻后台/隐形登录弹窗 (500x372)
             if abs(width - 500) < 15 && abs(height - 372) < 15 { continue }
 
+            // WPS Office 特定的常驻隐形弹窗底板/模板底板 (420x154)
+            if abs(width - 420) < 15 && abs(height - 154) < 15 { continue }
+
             if !trimmedName.isEmpty {
-                // 有标题的标准窗口（Safari 页面、Chrome 标签页、终端窗口、钉钉主窗口、WPS 文档等）：
-                // 无论是否失焦、是否在其他 Space、是否被遮挡，一律确认为有效业务窗口！绝不误杀！
+                // 有标题的标准在屏窗口（Safari 页面、Chrome 标签页、终端窗口、钉钉主窗口、WPS 文档等）：
+                // 无论是否失焦、是否被遮挡，一律确认为有效业务窗口！
                 count += 1
                 continue
             }
 
             // 无标题窗口过滤（系统常驻残影、离屏缓冲、AppKit 占位层）
-            // 关键隐私与系统兼容防护：当 ATools 未取得系统「屏幕录制」权限时，macOS 会对其他进程的窗口标题返回 nil。
-            // 1. 若窗口属于标准业务主层（Layer 0 标准窗体，或 Layer 3 模态对话框），且尺寸达到正常应用窗口底线（width >= 180, height >= 120）：
-            //    排除 CEF 离屏缓冲与 AppKit 占位层后，直接确认为有效业务窗口！绝不因应用失焦或跨 Space 导致 isOnScreen==false 而被误杀！
-            if (layer == 0 || layer == 3) && width >= 180 && height >= 120 {
-                // 排除 AppKit 500x500 占位层
-                if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
-                // 排除 CEF 离屏缓冲画布 (640x508, 600x600)
-                if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
-                if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
-
-                count += 1
-                continue
-            }
-
-            // 2. 非主层或小型无标题组件（如 Layer 8 浮层），要求必须是在屏（On-Screen）有效窗口
-            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
-            guard isOnScreen else { continue }
-
+            // 1. AppKit 500x500 占位层
+            if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
+            // 2. 菜单栏/工具栏横条 (height <= 48)
             if height <= 48 { continue }
+            // 3. 小型代理/光标/状态图标
             if width <= 80 && height <= 60 { continue }
+            // 4. CEF 离屏缓冲画布 (640x508, 600x600)
+            if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
+            if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
 
             // 具有合理尺寸的无标题真实在屏窗口（如部分 Electron/Flutter/Java 无标题主窗体）
             if width > 120 && height > 90 {

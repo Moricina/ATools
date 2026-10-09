@@ -1230,7 +1230,42 @@
   - 实测 WindowServer 与 AX 计数探查：
     * WPS Office（后台有文档且失焦）：`axCount` 由 0 恢复为 2（MainWindow 成功命中），`wsCount` 稳定识别，后台常驻不跳弹窗；
     * 启动运行日志证实：`[AutoQuit] Watching WPS Office (windows: 2)`，彻底告别误判。
-  - 彻底根治“切软件/多空间误杀”与“关窗退出迟缓”两大痛点。
+### 31. 修复日历、WPS 及原生 AppKit 应用点击关闭按钮无法自动退出缺陷 (2026-10-09, build 37)
+
+- **背景与现象**：
+  - 用户反馈：“虽然修复了 wps 切换窗口不会强制退出的问题，但是现在 wps 点关闭按钮不会强制退出了，我点日历的关闭按钮也不会强制退出了，它们都不在我的排除名单中，排查原因，看看还有没有别的 app 也是这种情况”。
+  - 核心痛点：build 36 为了防止切软件误退出，在 `windowServerStandardWindowCount` 中放宽了 `isOnScreen` 限制，导致用户点击红叉（或 `⌘W`）关闭最后一个窗口时，日历（Calendar）、WPS Office、备忘录、邮件等应用无法自动退出。
+
+- **根因剖析**：
+  1. **AppKit/Cocoa 原生窗口关闭机制（`orderOut:` 离屏保留）**：
+     - 在 macOS 原生架构中，AppKit 应用（日历、备忘录、邮件、地图、系统设置等）以及 WPS Office 在用户点击关闭按钮时，默认执行 `orderOut:` 将窗口隐藏移出屏幕以备下次秒开，窗口对象并未立即销毁；
+     - 此时在 WindowServer 层面：该窗口依然存在于全局窗口列表中，但其 `kCGWindowIsOnscreen` 被置为 `false`；
+     - 此时在 AX 辅助功能层面：该应用的主窗口树已彻底清空（`AXWindows` count=0，`AXMainWindow` 为 nil）；
+     - build 36 移除了 `guard isOnScreen else { continue }`，并在判断有标题窗口时未校验 `isOnScreen`，导致 WindowServer 依然把已关闭的“日历”（Bounds: 1140x598）和 WPS 已关闭的历史文档层计为在活窗口；
+     - 双权威校验函数 `isConfirmedZeroWindowCount` 检测到 `windowServerCount > 0`，判定窗口未关，直接拦截了退出流程。
+  2. **WPS 特有后台常驻 420x154 弹窗底板干扰**：
+     - WPS Office 启动后会常驻一个尺寸为 `420x154` 的无标题模态弹窗底层锚点（Memory: 2432 字节）；
+     - 若未针对性识别并排除该特殊底板，在所有文档窗口关闭后，WindowServer 依然会误将其视为有效业务窗口，导致 WPS 永远无法确诊零窗退出。
+  3. **其他受影响应用排查**：
+     - 经排查系统所有运行中应用，所有采用 `orderOut:` 隐藏特性的标准应用均会受此影响：包括日历（`com.apple.iCal`）、备忘录（`com.apple.Notes`）、邮件（`com.apple.mail`）、地图（`com.apple.Maps`）、系统设置（`com.apple.systempreferences`）、百度网盘（`com.baidu.netdisk` 隐藏的“同步空间”窗口）、微信、钉钉等。
+
+- **实施细节与涉及文件**：
+  1. **精确恢复在屏窗口校验规则（`guard isOnScreen`）**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 在 `windowServerStandardWindowCount` 中恢复 `guard let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, isOnScreen else { continue }`；
+     - 当应用窗口被用户关闭时，WindowServer 的 `isOnScreen` 准确变为 `false`，结合 AX 确证 0 窗，双重核验达成一致，即刻毫秒级触发退出；
+     - 当用户未关窗口仅切换到其他应用时，即使失焦或被其他窗口遮挡，该真实窗口在当前 Space 的 `isOnScreen` 依然为 `true`，配合 AX 级联探测，绝不发生误退。
+  2. **加入 WPS 420x154 隐形底板排除规则**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 补充 `if abs(width - 420) < 15 && abs(height - 154) < 15 { continue }`，精准排除 WPS Office 常驻后台的无标题弹窗锚点，确保所有文档关闭后顺畅退出。
+  3. **版本号升级**（`Scripts/package_app.sh`）：
+     - 升级至 `v1.3.12 (build 37)`。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 诊断套件 16 大项 100% 全部 PASS 通过；
+  - 针对日历与 WPS 的实测探查断言：
+    * 日历关窗后：`wsCount` 由 1 降为 0，AX 确证 0，即时退出；
+    * WPS 文档打开时：`wsCount` 为 1，AX 为 1，切换软件/失焦完全保活不退；
+    * WPS 文档关闭后：`wsCount` 过滤 420x154 底板后精准归 0，AX 确证 0，点击关闭按钮即刻退出。
+
 
 
 
