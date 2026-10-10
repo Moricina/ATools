@@ -1266,7 +1266,32 @@
     * WPS 文档打开时：`wsCount` 为 1，AX 为 1，切换软件/失焦完全保活不退；
     * WPS 文档关闭后：`wsCount` 过滤 420x154 底板后精准归 0，AX 确证 0，点击关闭按钮即刻退出。
 
+### 32. 修复百度网盘桌面常驻悬浮挂件阻碍自动退出缺陷 (2026-10-10, build 38)
 
+- **背景与现象**：
+  - 用户反馈：“百度网盘点击关闭也没有立刻退出”。
+  - 核心痛点：用户使用百度网盘完成文件下载/浏览后，点击主窗口（1100x700）红叉关闭窗口，百度网盘进程未按配置自动退出，Dock 图标仍常驻。
 
+- **根因剖析**：
+  1. **常驻桌面微型悬浮挂件（200x80）干扰**：
+     - 百度网盘默认或开启了“桌面悬浮窗/传输速度悬浮挂件”（尺寸 `200x80`，位于屏幕右边缘，Layer 100）；
+     - **在 AX 层面**：当主业务窗口关闭后，百度网盘的 AX 树中依然保留着该 `200x80` 的悬浮窗（`role=AXWindow, subrole=AXStandardWindow`，但 **`hasClose=false, hasMin=false`**）；
+     - **在 WindowServer 层面**：该悬浮窗处于在屏显示态（`isOnScreen=true`），此前 `(0...150).contains(layer)` 错误地把 Layer 100 的浮层小挂件计入了有效业务窗口；
+     - 导致 AX 认为窗口数=1，WindowServer 认为窗口数=1，双向确诊非零，完全拦截了主窗口关闭后的退出流程。
 
+- **实施细节与涉及文件**：
+  1. **AX 探测层智能过滤无控制按钮的常驻小挂件**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 在 `axWindows` 中引入 `isStandardBusinessWindow` 甄别器：仅认可具备关闭按钮（`AXCloseButton`）、最小化按钮（`AXMinimizeButton`）、模态对话框（`AXDialog/AXSheet`）或主业务窗体尺寸底线（width > 320 && height > 200）的窗口；
+     - 精准剔除既无关闭按钮又无最小化按钮且尺寸微小的常驻悬浮球/挂件（如百度网盘 200x80 悬浮窗、迅雷悬浮球），使主窗口关闭后 AX 准确认定零业务窗口。
+  2. **WindowServer 层级严格限定在标准业务层（0...15）**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 将 `windowServerStandardWindowCount` 中的图层范围由宽松的 `(0...150)` 收敛为苹果标准窗口层级 `(0...15)`（Layer 0 普通文档窗口，Layer 3/8 浮动面板与模态对话框）；
+     - 彻底过滤 Layer 20（程序坞）、Layer 24（状态栏）以及 Layer 100+（桌面悬浮挂件、提示浮层）。
+  3. **版本号升级**（`Scripts/package_app.sh`）：
+     - 升级至 `v1.3.13 (build 38)`。
 
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 诊断套件 16 大项 100% 全部 PASS 通过；
+  - 针对百度网盘实测探查断言：
+    * 主窗口打开时：`raw AX: 2, filtered AX: 1`，WindowServer 识别 1 个 Layer 0 窗口，应用正常保活；
+    * 主窗口关闭后：`raw AX: 1, filtered AX: 0`，WindowServer Layer 0...15 窗口归 0，双向一致确认零窗，毫秒级即刻触发退出；
+    * 访达、微信、钉钉、WPS、日历等常用应用过滤结果全部符合预期，无任何副作用。

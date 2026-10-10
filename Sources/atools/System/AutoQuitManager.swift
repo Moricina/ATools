@@ -234,7 +234,8 @@ public final class AutoQuitManager {
         var count = 0
         for w in list {
             guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            guard let layer = w[kCGWindowLayer as String] as? Int, (0...150).contains(layer) else { continue }
+            // 限制在标准业务窗体层级（Layer 0 普通窗口，Layer 3/8 浮动面板与模态对话框；排除 Layer 20 程序坞、Layer 24 状态栏及 Layer 100+ 桌面悬浮球/挂件）
+            guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
             guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
                   let width = bounds["Width"] as? Double,
@@ -688,6 +689,44 @@ public final class AutoQuitManager {
         if err != .success && result.isEmpty {
             return nil
         }
-        return result
+        // 关键过滤：排除桌面常驻小挂件（如百度网盘 200x80 桌面传输挂件、迅雷悬浮球等），
+        // 仅将具备关闭/最小化按钮、或模态对话框、或达到主业务窗口尺寸底线（> 320x200）的窗口作为有效在活窗口。
+        return result.filter { isStandardBusinessWindow($0) }
+    }
+
+    /// 判断是否为用户可操作/可关闭的主业务窗口或对话框，
+    /// 排除百度网盘悬浮窗、迅雷悬浮球等常驻桌面但无红绿灯控制按钮的小挂件。
+    private func isStandardBusinessWindow(_ w: AXUIElement) -> Bool {
+        var closeVal: CFTypeRef?
+        let hasClose = (AXUIElementCopyAttributeValue(w, kAXCloseButtonAttribute as CFString, &closeVal) == .success && closeVal != nil)
+        var minVal: CFTypeRef?
+        let hasMin = (AXUIElementCopyAttributeValue(w, kAXMinimizeButtonAttribute as CFString, &minVal) == .success && minVal != nil)
+        if hasClose || hasMin {
+            return true
+        }
+
+        var subroleVal: CFTypeRef?
+        AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &subroleVal)
+        let subrole = (subroleVal as? String) ?? ""
+        if subrole == "AXDialog" || subrole == "AXSystemDialog" || subrole == "AXSheet" {
+            return true
+        }
+
+        var modalVal: CFTypeRef?
+        if AXUIElementCopyAttributeValue(w, "AXModal" as CFString, &modalVal) == .success, (modalVal as? Bool) == true {
+            return true
+        }
+
+        var sizeVal: CFTypeRef?
+        if AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sizeVal) == .success, let s = sizeVal {
+            var size: CGSize = .zero
+            if AXValueGetValue(s as! AXValue, .cgSize, &size) {
+                if size.width > 320 && size.height > 200 {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 }
