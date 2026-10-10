@@ -1295,3 +1295,32 @@
     * 主窗口打开时：`raw AX: 2, filtered AX: 1`，WindowServer 识别 1 个 Layer 0 窗口，应用正常保活；
     * 主窗口关闭后：`raw AX: 1, filtered AX: 0`，WindowServer Layer 0...15 窗口归 0，双向一致确认零窗，毫秒级即刻触发退出；
     * 访达、微信、钉钉、WPS、日历等常用应用过滤结果全部符合预期，无任何副作用。
+
+### 33. 修复夸克网盘 40x40 桌面悬浮球伪装系统对话框阻碍自动退出缺陷 (2026-10-10, build 39)
+
+- **背景与现象**：
+  - 用户反馈：“夸克网盘点击关闭也没有立刻退出”。
+  - 核心痛点：用户使用夸克网盘后，点击主窗口（1209x699）红叉关闭窗口，夸克网盘进程并未自动退出，Dock 图标仍常驻。
+
+- **根因剖析**：
+  1. **夸克桌面微型悬浮球（40x40）伪装 `AXSystemDialog` 绕过检测**：
+     - 夸克网盘（`com.quark.desktop`）启动后在屏幕右侧常驻一个极小的悬浮快捷球（`40x40` 像素，Layer 28）；
+     - 该悬浮球既无关闭按钮也无最小化按钮（`hasClose=false, hasMin=false`），但其辅助功能子角色被夸克标记为 **`subrole: AXSystemDialog`**；
+     -此前 `isStandardBusinessWindow` 甄别器对 `subrole == AXSystemDialog` 缺乏最小尺寸底线约束，导致该 40x40 桌面小图标被误当作“系统模态对话框”保留；
+     - 主窗口关闭后，AX 仍向 AutoQuit 返回窗口数=1，导致自动退出被完全拦截。
+
+- **实施细节与涉及文件**：
+  1. **AX 探测层建立主业务窗口与对话框的尺寸安全底线**（`Sources/atools/System/AutoQuitManager.swift`）：
+     - 在 `isStandardBusinessWindow` 中增加核心物理尺寸防线：对提取到有效尺寸的窗口，强制要求 **`size.width >= 160 && size.height >= 90`**；
+     - 无论其 subrole 标记为 `AXSystemDialog` 还是 `AXStandardWindow`，只要尺寸小于 `160x90`（如夸克 40x40 悬浮球、百度网盘 200x80 挂件），一律直接判定为桌面非业务微型辅助挂件，予以完全剔除；
+     - 主窗口（1209x699）关闭后，AX 准确认定在活业务窗口数为 0，配合 WindowServer 双重零窗确诊，即刻毫秒级触发退出。
+  2. **版本号升级**（`Scripts/package_app.sh`）：
+     - 升级至 `v1.3.14 (build 39)`。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 诊断套件 16 大项 100% 全部 PASS 通过；
+  - 针对夸克网盘实测探查断言：
+    * 主窗口打开时：`raw AX: 2, filtered AX: 1`（主窗口 1209x699 命中，40x40 悬浮球精准丢弃），正常保活；
+    * 主窗口关闭后：`raw AX: 1, filtered AX: 0`，WindowServer 在屏窗口为 0，双向确诊零窗，即刻触发退出；
+    * 访达、微信、钉钉、QQ、Antigravity 等应用过滤正常，无任何误伤。
+

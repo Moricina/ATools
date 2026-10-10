@@ -11,8 +11,8 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-VERSION="${ATOOLS_VERSION:-1.3.13}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-38}"
+VERSION="${ATOOLS_VERSION:-1.3.14}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-39}"
 SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
 # 签名身份解析：
 # ① 显式指定（ATOOLS_SIGNING_IDENTITY="-" 可强制 ad-hoc，见 RELEASING.md 迁移说明）

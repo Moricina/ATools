@@ -697,6 +697,18 @@ public final class AutoQuitManager {
     /// 判断是否为用户可操作/可关闭的主业务窗口或对话框，
     /// 排除百度网盘悬浮窗、迅雷悬浮球等常驻桌面但无红绿灯控制按钮的小挂件。
     private func isStandardBusinessWindow(_ w: AXUIElement) -> Bool {
+        var sizeVal: CFTypeRef?
+        var size: CGSize = .zero
+        if AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sizeVal) == .success, let s = sizeVal {
+            _ = AXValueGetValue(s as! AXValue, .cgSize, &size)
+        }
+
+        // 核心安全底线：过滤微型图标/常驻悬浮挂件（如夸克 40x40 桌面悬浮球、百度网盘 200x80 挂件、迅雷悬浮球）
+        // 任何真实的主业务窗口或系统模态对话框尺寸均不会小于 160x90
+        if size != .zero && (size.width < 160 || size.height < 90) {
+            return false
+        }
+
         var closeVal: CFTypeRef?
         let hasClose = (AXUIElementCopyAttributeValue(w, kAXCloseButtonAttribute as CFString, &closeVal) == .success && closeVal != nil)
         var minVal: CFTypeRef?
@@ -717,14 +729,8 @@ public final class AutoQuitManager {
             return true
         }
 
-        var sizeVal: CFTypeRef?
-        if AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sizeVal) == .success, let s = sizeVal {
-            var size: CGSize = .zero
-            if AXValueGetValue(s as! AXValue, .cgSize, &size) {
-                if size.width > 320 && size.height > 200 {
-                    return true
-                }
-            }
+        if size.width > 320 && size.height > 200 {
+            return true
         }
 
         return false
