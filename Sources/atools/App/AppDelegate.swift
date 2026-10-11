@@ -255,7 +255,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showAbout() {
         let alert = NSAlert()
         let config = ConfigManager.shared.config
-        alert.messageText = "ATools for Mac"
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? UpdateManager.shared.currentAppVersion
+        alert.messageText = "ATools for Mac (v\(version))"
         alert.informativeText = """
         极轻量分类启动台 & 毫秒级全盘搜索中心
 

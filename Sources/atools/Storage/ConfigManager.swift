@@ -251,11 +251,11 @@ public final class ConfigManager {
     }
 
     public func updateShelfIconScale(_ scale: Double) {
-        let clamped = max(0.70, min(1.30, scale))
+        let clamped = max(0.70, min(1.10, scale))
         self.config.shelfIconScale = clamped
         if clamped <= 0.85 {
             self.config.shelfIconSize = .small
-        } else if clamped >= 1.15 {
+        } else if clamped >= 1.05 {
             self.config.shelfIconSize = .large
         } else {
             self.config.shelfIconSize = .medium

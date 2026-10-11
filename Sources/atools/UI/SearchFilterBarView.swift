@@ -77,6 +77,16 @@ public final class SearchSyntaxPillButton: NSButton {
         isHovered = false
     }
 
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearance()
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
     public func updateAppearance() {
         let isDark = glassIsDark
         let font = NSFont.systemFont(ofSize: 12, weight: isHighlightedPill ? .semibold : .medium)
@@ -92,23 +102,23 @@ public final class SearchSyntaxPillButton: NSButton {
                 ? NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.45).cgColor
                 : NSColor(red: 0.1, green: 0.45, blue: 0.95, alpha: 0.30).cgColor
         } else if isHovered {
-            textColor = GlassPalette.textPrimary(isDark: isDark)
+            textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
             layer?.backgroundColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.08).cgColor
-                : NSColor(white: 0.0, alpha: 0.04).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.12).cgColor
                 : NSColor(white: 0.0, alpha: 0.06).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = isDark
+                ? NSColor(white: 1.0, alpha: 0.20).cgColor
+                : NSColor(white: 0.0, alpha: 0.12).cgColor
         } else {
-            textColor = GlassPalette.textSecondary(isDark: isDark)
+            textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
             layer?.backgroundColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.05).cgColor
                 : NSColor(white: 0.0, alpha: 0.03).cgColor
             layer?.borderWidth = 0.5
             layer?.borderColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.08).cgColor
-                : NSColor(white: 0.0, alpha: 0.04).cgColor
+                ? NSColor(white: 1.0, alpha: 0.10).cgColor
+                : NSColor(white: 0.0, alpha: 0.06).cgColor
         }
 
         contentTintColor = textColor
@@ -277,34 +287,48 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
         barView?.pillDidEndDragging(self, operation: operation)
     }
 
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearance()
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearance()
+    }
+
     public func updateAppearance() {
         let isDark = glassIsDark
         let font = NSFont.systemFont(ofSize: 12, weight: isPillSelected ? .semibold : .medium)
         let textColor: NSColor
 
         if isPillSelected {
-            textColor = isDark ? NSColor(white: 0.95, alpha: 1.0) : NSColor(white: 0.15, alpha: 1.0)
+            textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.05, alpha: 1.0)
             layer?.backgroundColor = isDark
-                ? NSColor.white.withAlphaComponent(0.15).cgColor
-                : NSColor.black.withAlphaComponent(0.08).cgColor
+                ? NSColor.white.withAlphaComponent(0.20).cgColor
+                : NSColor.black.withAlphaComponent(0.10).cgColor
             layer?.borderWidth = 0.5
             layer?.borderColor = isDark
-                ? NSColor.white.withAlphaComponent(0.22).cgColor
-                : NSColor.black.withAlphaComponent(0.12).cgColor
+                ? NSColor.white.withAlphaComponent(0.32).cgColor
+                : NSColor.black.withAlphaComponent(0.18).cgColor
         } else if isHovered {
-            textColor = GlassPalette.textPrimary(isDark: isDark)
+            textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
             layer?.backgroundColor = isDark
-                ? NSColor.white.withAlphaComponent(0.08).cgColor
-                : NSColor.black.withAlphaComponent(0.04).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
                 ? NSColor.white.withAlphaComponent(0.12).cgColor
                 : NSColor.black.withAlphaComponent(0.06).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = isDark
+                ? NSColor.white.withAlphaComponent(0.20).cgColor
+                : NSColor.black.withAlphaComponent(0.12).cgColor
         } else {
-            textColor = GlassPalette.textSecondary(isDark: isDark)
-            layer?.backgroundColor = NSColor.clear.cgColor
-            layer?.borderWidth = 0
-            layer?.borderColor = NSColor.clear.cgColor
+            textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
+            layer?.backgroundColor = isDark
+                ? NSColor.white.withAlphaComponent(0.05).cgColor
+                : NSColor.black.withAlphaComponent(0.03).cgColor
+            layer?.borderWidth = 0.5
+            layer?.borderColor = isDark
+                ? NSColor.white.withAlphaComponent(0.10).cgColor
+                : NSColor.black.withAlphaComponent(0.06).cgColor
         }
 
         contentTintColor = textColor
@@ -377,7 +401,21 @@ public final class SearchFilterBarView: NSView {
         NotificationCenter.default.removeObserver(self)
     }
 
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updatePillsAppearance()
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updatePillsAppearance()
+    }
+
     @objc private func handleThemeChanged() {
+        updatePillsAppearance()
+    }
+
+    public func updatePillsAppearance() {
         for btn in pillButtons {
             btn.updateAppearance()
         }

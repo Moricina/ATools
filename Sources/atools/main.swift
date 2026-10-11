@@ -122,14 +122,16 @@ if CommandLine.arguments.contains("--test") {
     TestAssertions.expect(ConfigManager.shared.config.theme == .liquidLight, "Theme should update to .liquidLight")
 
     // Test shelfIconScale
-    ConfigManager.shared.updateShelfIconScale(1.15)
-    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.15, "shelfIconScale should update to 1.15")
-    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .large, "Scale 1.15 should map to .large")
+    ConfigManager.shared.updateShelfIconScale(1.10)
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.10, "shelfIconScale should update to 1.10")
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .large, "Scale 1.10 should map to .large")
     ConfigManager.shared.updateShelfIconScale(0.85)
     TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 0.85, "shelfIconScale should update to 0.85")
     TestAssertions.expect(ConfigManager.shared.config.shelfIconSize == .small, "Scale 0.85 should map to .small")
-    ConfigManager.shared.updateShelfIconScale(1.40) // should clamp to 1.30
-    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.30, "shelfIconScale clamped to 1.30")
+    ConfigManager.shared.updateShelfIconScale(1.40) // should clamp to 1.10
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.10, "shelfIconScale clamped to 1.10")
+    ConfigManager.shared.updateShelfIconScale(0.50) // should clamp to 0.70
+    TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 0.70, "shelfIconScale clamped to 0.70")
     ConfigManager.shared.updateShelfIconScale(1.0)
     TestAssertions.expect(ConfigManager.shared.config.shelfIconScale == 1.0, "shelfIconScale should reset to 1.0")
 
@@ -1298,6 +1300,25 @@ if CommandLine.arguments.contains("--test") {
                     if let pngData = rep.representation(using: .png, properties: [:]) {
                         try? pngData.write(to: URL(fileURLWithPath: "/tmp/settings_tab_\(item.rawValue).png"))
                     }
+                    if item == .shelf {
+                        // Also preview page 2 (Classification & Layout)
+                        if let tabHost = contentView.subviews.first(where: { !($0 is SettingsSidebarView) }),
+                           let shelfTab = tabHost.subviews.first(where: { $0 is ShelfTabView }) as? ShelfTabView {
+                            shelfTab.headerView.segmentedControl.selectedSegment = 2
+                            shelfTab.showPage(2)
+                            win.displayIfNeeded()
+                            contentView.layoutSubtreeIfNeeded()
+                            if let rep2 = contentView.bitmapImageRepForCachingDisplay(in: contentView.bounds) {
+                                contentView.cacheDisplay(in: contentView.bounds, to: rep2)
+                                if let pngData2 = rep2.representation(using: .png, properties: [:]) {
+                                    try? pngData2.write(to: URL(fileURLWithPath: "/tmp/settings_tab_shelf_layout.png"))
+                                    print("      ✓ Saved shelf layout preview to /tmp/settings_tab_shelf_layout.png")
+                                }
+                            }
+                            shelfTab.headerView.segmentedControl.selectedSegment = 0
+                            shelfTab.showPage(0)
+                        }
+                    }
                 }
             }
         }
@@ -1461,6 +1482,24 @@ if CommandLine.arguments.contains("--test") {
                 print("      ✓ Saved expanded search preview to /tmp/search_expanded_preview.png")
             }
         }
+
+        // Test Dark Theme Rendering for SearchPanel & Capsule Bar
+        let prevTheme = ConfigManager.shared.config.theme
+        ConfigManager.shared.updateTheme(.liquidDark)
+        searchPanel.appearance = NSAppearance(named: .darkAqua)
+        searchVC.filterBar.updatePillsAppearance()
+        searchPanel.displayIfNeeded()
+        searchContent.layoutSubtreeIfNeeded()
+        if let darkRep = searchContent.bitmapImageRepForCachingDisplay(in: searchContent.bounds) {
+            searchContent.cacheDisplay(in: searchContent.bounds, to: darkRep)
+            if let darkPng = darkRep.representation(using: .png, properties: [:]) {
+                try? darkPng.write(to: URL(fileURLWithPath: "/tmp/search_dark_preview.png"))
+                print("      ✓ Saved dark expanded search preview to /tmp/search_dark_preview.png")
+            }
+        }
+        ConfigManager.shared.updateTheme(prevTheme)
+        searchPanel.appearance = NSAppearance(named: prevTheme.isDark ? .darkAqua : .aqua)
+        searchVC.filterBar.updatePillsAppearance()
     }
 
     // 11. Test ShelfPanel Topmost Level & UpdateManager Semantic Versioning

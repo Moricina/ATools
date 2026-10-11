@@ -519,3 +519,76 @@ public final class SettingsPillButton: NSButton {
         alphaValue = isEnabled ? 1.0 : 0.45
     }
 }
+
+/// 紧凑型「恢复默认」小按钮：高度 22pt，圆角 11pt，11pt Medium 字体，带 Hover 动效，自动支持深浅色与禁用态
+public final class SettingsResetButton: NSButton {
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false {
+        didSet { if oldValue != isHovered { updateAppearanceStyles() } }
+    }
+
+    public init(title: String = "恢复默认", target: AnyObject?, action: Selector?) {
+        super.init(frame: .zero)
+        self.title = title
+        self.target = target
+        self.action = action
+        setButtonType(.momentaryChange)
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 11
+        font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        translatesAutoresizingMaskIntoConstraints = false
+        setContentHuggingPriority(.required, for: .horizontal)
+        updateAppearanceStyles()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override public var intrinsicContentSize: NSSize {
+        let base = super.intrinsicContentSize
+        return NSSize(width: max(64, ceil(base.width) + 16), height: 22)
+    }
+
+    override public var isEnabled: Bool {
+        didSet { updateAppearanceStyles() }
+    }
+
+    override public func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area = trackingArea { removeTrackingArea(area) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override public func mouseEntered(with event: NSEvent) {
+        if isEnabled { isHovered = true }
+    }
+
+    override public func mouseExited(with event: NSEvent) {
+        isHovered = false
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateAppearanceStyles()
+    }
+
+    private func updateAppearanceStyles() {
+        guard let layer = layer else { return }
+        let isDark = glassIsDark
+        if !isEnabled {
+            layer.backgroundColor = (isDark ? NSColor.white.withAlphaComponent(0.04) : NSColor.black.withAlphaComponent(0.03)).cgColor
+            let textColor = isDark ? NSColor.white.withAlphaComponent(0.28) : NSColor.black.withAlphaComponent(0.25)
+            attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: textColor, .font: font!])
+        } else if isHovered {
+            layer.backgroundColor = (isDark ? NSColor.white.withAlphaComponent(0.14) : NSColor.black.withAlphaComponent(0.10)).cgColor
+            let textColor = isDark ? NSColor.white.withAlphaComponent(0.95) : NSColor.black.withAlphaComponent(0.85)
+            attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: textColor, .font: font!])
+        } else {
+            layer.backgroundColor = (isDark ? NSColor.white.withAlphaComponent(0.08) : NSColor.black.withAlphaComponent(0.05)).cgColor
+            let textColor = isDark ? NSColor.white.withAlphaComponent(0.75) : NSColor.black.withAlphaComponent(0.65)
+            attributedTitle = NSAttributedString(string: title, attributes: [.foregroundColor: textColor, .font: font!])
+        }
+    }
+}

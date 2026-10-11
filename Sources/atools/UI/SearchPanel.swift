@@ -160,6 +160,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         searchBar.setSyntaxCommand(nil)
         filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
+        filterBar.updatePillsAppearance()
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
         searchBar.focus()

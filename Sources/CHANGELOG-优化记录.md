@@ -1324,3 +1324,220 @@
     * 主窗口关闭后：`raw AX: 1, filtered AX: 0`，WindowServer 在屏窗口为 0，双向确诊零窗，即刻触发退出；
     * 访达、微信、钉钉、QQ、Antigravity 等应用过滤正常，无任何误伤。
 
+### 34. 修复深色主题下搜索分类胶囊显示不清及鼠标悬停跳变缺陷 (2026-10-11, build 39)
+
+- **背景与现象**：
+  - 用户反馈：“检查深色主题胶囊分类显示不清，鼠标移到胶囊上字体才变成白色的问题，修改完毕后部署重启应用，我看看效果”。
+  - 核心痛点：在深色主题（`liquidDark`）下，唤出全盘搜索中枢后，顶部的分类胶囊（全部、文件夹、应用、压缩包、图片、媒体、代码等）文本与图标呈半透明暗黑色，几乎融在深色液态毛玻璃面板中难以辨识；只有当鼠标指针移到某个胶囊上方（Hover）时，该胶囊字体才瞬间跳变成白色。
+
+- **根因剖析**：
+  1. **孤立视图创建期间的系统外观继承陷阱（根本诱因）**：
+     - 在 `SearchViewController` 实例化时，属性 `filterBar = SearchFilterBarView()` 即刻完成初始化并调用 `loadPills()` 批量创建 `SearchFilterPillButton`；
+     - 此时所有分类胶囊按钮还未挂载到任何 `NSWindow` 上。在 AppKit 机制中，未挂载视图的 `effectiveAppearance` 会直接回退到系统全局外观（若系统偏好为浅色模式或 aqua）；
+     - `GlassPalette.swift` 中的 `glassIsDark` 原先仅读取 `effectiveAppearance`，在 view 未入窗时误判为浅色模式（`false`），导致按钮使用 `GlassPalette.textSecondary(isDark: false)`（50% 黑色文字）生成了固化的 `NSAttributedString`。
+  2. **缺少视图生命周期外观通知监听（状态固化）**：
+     - 当 `SearchPanel` 设置为 `.darkAqua` 外观并显示到屏幕时，`SearchFilterPillButton`、`SearchSyntaxPillButton` 及 `SearchFilterBarView` 均未重写 `viewDidMoveToWindow()` 和 `viewDidChangeEffectiveAppearance()`；
+     - 导致胶囊内文字一直停留在初始化阶段计算出的半透明黑字；只有在用户鼠标移入胶囊触发 `mouseEntered` 时，才执行了 `updateAppearance()`，此时由于已在深色窗口内部，字体才瞬间跳变成亮白。
+  3. **未选中态缺乏胶囊轮廓与毛玻璃微反光**：
+     - 未选中胶囊原先背景设为 `clear`，在深色半透明毛玻璃面板上，低透明度文字极易与背景纹理混淆，缺乏精致的胶囊容器感与视觉边界。
+
+- **实施细节与涉及文件**：
+  1. **强化 `glassIsDark` 全局判定与配置精准兜底**（`Sources/atools/UI/GlassPalette.swift`）：
+     - 优先获取 `window?.appearance ?? window?.effectiveAppearance`；若视图尚未挂载到任何窗口，自动回退到 `ConfigManager.shared.config.theme.isDark` 作为精准兜底，确保在应用配置为深色主题时，无论在何时何地构建视图，均准确初始化为深色模式样式，绝不再被误染成黑字。
+  2. **补全视图生命周期外观响应机制**（`Sources/atools/UI/SearchFilterBarView.swift` & `SearchPanel.swift`）：
+     - 在 `SearchFilterPillButton`、`SearchSyntaxPillButton` 与 `SearchFilterBarView` 中统一重写 `viewDidMoveToWindow()` 与 `viewDidChangeEffectiveAppearance()`，视图加入窗口或外观发生变化时即刻自动刷新外观；
+     - 在 `SearchPanel.prepareForDisplay()` 及 `setPanelExpanded()` 展开阶段，主动调用 `filterBar.updatePillsAppearance()`，确保每次唤出搜索面板时胶囊状态 100% 保持最新。
+  3. **精致化深色与浅色双模式胶囊视觉层级（免硬编码、高自适应）**（`Sources/atools/UI/SearchFilterBarView.swift`）：
+     - **未选中默认态**：深色模式下采用 `0.92` 亮白文字（`0.88` alpha）与 `0.05` 微白毛玻璃底色、`0.10` 精细微边框；浅色模式下采用 `0.15` 墨黑文字与 `0.03` 微黑底色，清晰典雅、层次分明；
+     - **鼠标悬停态**：深色模式采用 100% 亮白文字、`0.12` 发光底色与 `0.20` 亮边框，动效柔和自然，彻底消除“黑字突变白字”的视觉跳跃感；
+     - **选中高亮态**：保持 `0.20` 饱满毛玻璃高光与加粗纯白文字，状态鲜明。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 全部 16 大项（包括热键、搜索协同、胶囊排序、780pt 几何不变性等）**100% 全部 PASS 通过**；
+    * 诊断套件中自动生成浅色模式预览 `/tmp/search_expanded_preview.png` 与深色模式预览 `/tmp/search_dark_preview.png` 验证无误；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、部署覆盖到 `/Applications/ATools.app` 并重启应用；
+  - 实机呼出全盘搜索并触发展开测试：截屏 `/tmp/live_search_expanded_done.png` 证实深色主题下所有分类胶囊默认态文字与图标清晰明亮，对比度极高，毛玻璃质感优雅，鼠标悬停与选中过渡丝滑顺畅。
+
+### 35. 偏好设置「应用抽屉」三模块多页化与「关窗退出」单页精简重构 (2026-10-11, build 39)
+
+- **背景与现象**：
+  - 用户反馈：“请把应用抽屉中的三个模块做成切换页，关闭窗口一页就能放下所有相关设置的情况就去掉切换页选项，完成后部署并重启应用”。
+  - 核心诉求：
+    1. 「应用抽屉」原实现将三个模块（启用与唤出触发、驻留形态与关闭行为、分类与视觉排版）全部堆叠在同一个长 ScrollView 中，需要长距离滚动，且顶部仅有一个孤立的「抽屉设置与唤出」单选分段；
+    2. 「关窗退出」整体内容非常精简紧凑（仅两张设置卡片），顶部却保留了孤立的「退出行为与规则」切换分段，造成界面冗余。
+
+- **实施细节与涉及文件**：
+  1. **应用抽屉 Tab 三模块多页化重构**（`Sources/atools/UI/Settings/SettingsTabViews.swift` - `ShelfTabView`）：
+     - 将原先顶部的单一分段升级为三模块切换页：`tabs: ["启用与唤出触发", "驻留形态与关闭行为", "分类与视觉排版"]`；
+     - 引入 `pageContainer` 与 `pages` 数组架构，将 3 个大模块拆分为 3 个独立的自包含子页面（`triggerPage`、`behaviorPage`、`layoutPage`）；
+     - 每个子页面独立配备专属 `makeTabScrollView`，通过 `headerView.onSegmentChanged` 切换 `page.isHidden`，内容紧凑聚焦，彻底告别单页长滚动；
+     - 完整保留并无缝适配 `refresh()` 绑定逻辑，所有开关、快捷键录制器、触控板手势、布局方向与尺寸滑块等交互状态保持 100% 连贯。
+  2. **关窗退出 Tab 单页精简与多余分段清理**（`Sources/atools/UI/Settings/AutoQuitTabView.swift`）：
+     - 将 `headerView` 的 `tabs` 设为空列表 `[]`；
+     - 利用 `SettingsHeaderView` 内部自适应特性，自动移除顶部单选分段控制器，释放垂直间距；
+     - 「关窗退出总开关与模式」和「规则与应用过滤」两张卡片直接一屏舒展呈现，整洁雅致。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 严格验证 `[8/8] Testing SettingsWindowController Layout...`：应用抽屉与关窗退出等全部 7 个 Tab 均严格维持 `780.0pt` 窗口宽度绝对不变性（Strict 780.0pt Width Invariance）；
+    * 16 大项诊断测试全部 PASS；
+### 36. 优化关于 ATools 界面：应用名称旁动态标注当前版本号 (2026-10-11, build 39)
+
+- **背景与现象**：
+  - 用户反馈：“优化关于 ATools 界面，在应用名旁边写上（当前版本号）”。
+  - 核心诉求：
+    1. 在状态栏菜单点击「关于 ATools」弹出的信息弹窗中，原先标题仅写有 `ATools for Mac`，缺少直观的版本标识；
+    2. 用户希望在应用名称旁边清晰展示当前版本号（如 `ATools for Mac (v1.3.14)`），便于一目了然确认当前软件版本，无需再到复杂设置中逐层翻找。
+
+- **实施细节与涉及文件**：
+  1. **关于 ATools 弹窗动态注入版本号**（`Sources/atools/App/AppDelegate.swift`）：
+     - 在 `showAbout()` 中，通过 `Bundle.main.infoDictionary?["CFBundleShortVersionString"]` 动态获取当前版本号，并安全回退到 `UpdateManager.shared.currentAppVersion`；
+     - 将弹窗主标题 `alert.messageText` 更新为：`ATools for Mac (v\(version))`，实现免硬编码的动态版本自适应感知。
+  2. **偏好设置关于 Tab 协同优化**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 在偏好设置「关于 ATools」Tab 的软件版本与更新卡片首行中，将应用名称标题同步更新为 `ATools for macOS (v\(currentVer))`；
+     - 保持弹窗与偏好设置关于界面的视觉规范与语义高度统一。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 16 大项（包括 CalculatorEngine、SystemActions、ConfigManager、SearchCoordinator、Settings 780.0pt 绝对宽度不变性、UpdateManager 语义化版本等）**100% 全部 PASS 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、部署覆盖到 `/Applications/ATools.app` 并重启应用；
+  - 实机呼出「关于 ATools」弹窗截图实测验证（`/tmp/about_axpress.png`）：
+    * 弹窗大标题完美呈现 `ATools for Mac (v1.3.14)`；
+    * 偏好设置关于页同步呈现 `ATools for macOS (v1.3.14)`，文字排版清晰自然。
+
+### 37. 偏好设置全盘排除范围紧凑化、滑块比例节点与右对齐、授权按钮左对齐及空格键中文标注优化 (2026-10-11, build 39)
+
+- **背景与现象**：
+  - 用户反馈 4 项核心视觉与体验痛点：
+    1. 「全盘搜索 -> 排除范围」：自定义排除目录卡片内存在多余空白，整体高度超标导致右侧出现垂直滑动条（滚动条），无法一屏完整查看；
+    2. 「应用抽屉 -> 分类与视觉排版」：应用图标大小比例滑动条未贴齐右侧边缘，且缺少了比例刻度节点；
+    3. 「关窗退出 -> 规则与应用过滤」：下方的「前往授权...」按钮与上方的「编辑排除名单...」按钮未垂直左对齐，造成界面参差凌乱；
+    4. 「快捷键录制」：设置 `Command + 空格` 时，快捷键栏只显示修饰符 `⌘`，空格键因转换成不可见空白字符未能标注显示。
+
+- **实施细节与涉及文件**：
+  1. **快捷键空格键中文标注支持**（`Sources/atools/Models/HotkeyDisplayFormatter.swift` & `AppConfig.swift`）：
+     - 将 `switch keyCode` 特殊硬件按键映射逻辑前置于 `translate` 调用之前，阻断 `UCKeyTranslate` 将 Space（49）翻译成普通不可见字符 `" "` 的问题；
+     - 显式将 `keyCode == 49` 映射为中文 `"空格"`；对 `translate` 结果增加空白符修剪保护；
+     - 录制 `Command + 空格` 时在控件中清晰展示为 `⌘空格`，全盘搜索与应用抽屉全局快捷键显示逻辑完全一致，契合 Apple 官方规范。
+  2. **应用图标大小比例滑块刻度恢复与绝对右对齐**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 为 `iconSizeSlider` 补齐 7 个比例节点刻度：`numberOfTickMarks = 7` 与 `allowsTickMarkValuesOnly = false`（对应 80% 到 140% 各比例关键点）；
+     - 重构 `sliderContainer` 布局约束：`iconSizeBadge` 设置固定 76pt 宽度并靠右贴齐容器 trailing（距离卡片右边缘 16pt），滑块自动填充左侧剩余宽度，与上一行分段控件、下一行开关实现严格的垂直右对齐。
+  3. **关窗退出交互控件等宽与左对齐规整**（`Sources/atools/UI/Settings/AutoQuitTabView.swift`）：
+     - 将「编辑名单...」（`autoQuitRulesButton`）与「前往授权...」（`openPermBtn`）统一设定等宽（`148pt`），右对齐贴边，实现上下两行按钮**左右双向垂直严格对齐**；
+     - 权限状态标签「已授权」设为右对齐，紧贴授权按钮左侧；
+     - 上方卡片的「生效模式」与「关闭后延迟退出」两个 PopUp 菜单同样设置等宽（`184pt`），实现全页交互控件的垂直秩序美感。
+  4. **全盘搜索排除范围空间紧凑化与滑动条消除**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 重构 `reloadCustomExclusionRows()`：当无自定义排除目录时，直接在 `makeAddCustomExclusionRow` 中展示状态副标题，移除冗余的独立空行占位，消除大面积多余留白；
+     - 优化标题与卡片的垂直外边距（Section 间距 20pt -> 12pt，Card 间距 8pt -> 6pt，Tip 底部间距 28pt -> 12pt）；
+     - 整体内容高度收束至约 410pt，远低于内容区 562pt 视窗高度，**彻底消除垂直滚动条**，所有设置一屏舒展呈现。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 16 大项（包括 CalculatorEngine、SystemActions、ConfigManager、SearchCoordinator、Settings 780.0pt 绝对宽度不变性、UpdateManager 语义化版本等）**100% 全部 PASS 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、部署覆盖到 `/Applications/ATools.app` 并重启应用；
+  - 实机截屏严格核验：
+    * `/tmp/verify_autoquit.png`：关窗退出按钮等宽左对齐，下拉框等宽左对齐；
+    * `/tmp/verify_shelf_page1.png`：全局快捷键框内明确标注 `⌘空格`；
+    * `/tmp/verify_shelf_page3.png`：图标大小滑块精准呈现 7 个比例节点刻度，右侧百分比数字严格贴齐卡片右边框；
+    * `/tmp/verify_search_exclusion.png`：全盘搜索排除范围一屏完整呈现，无空白截断，**滚动条彻底消失**。
+
+
+
+
+### 38. 偏好设置应用图标大小滑块紧凑消除空白、左边缘对齐与 60%~120% 缩放范围优化 (2026-10-11, build 39)
+
+- **背景与现象**：
+  - 用户反馈「偏好设置 -> 应用抽屉 -> 分类与视觉排版」子页中，图标缩放控件存在以下体验与排版问题：
+    1. **滑块与数值间距过大**：原先数值文本框固定宽度 76pt 且右对齐，导致滑块右端与 `87%` 百分比之间留存了大片无意义的空白红框区域；
+    2. **比例条未左对齐**：上一行分段控件宽度为 180pt，而滑块容器为 240pt，滑块左边缘往左突出，两行未能垂直左对齐；
+    3. **缩放范围需求调整**：用户希望将比例范围精准收敛至 `60% ~ 120%`（此前为 80% ~ 140%），且比例节点清晰可见。
+
+- **实施细节与涉及文件**：
+  1. **滑块布局容器等宽与双向对齐规整**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 将滑块容器 `sliderContainer` 宽度统一设置为与上一行分段控件完全相同的 `180pt`；
+     - 滑块从容器左端开始（`iconSizeSlider.leadingAnchor == sliderContainer.leadingAnchor`），滑块左边缘与上一行「水平顶部」控件左边缘**绝对垂直严格左对齐**；
+     - 容器右边缘与卡片 Accessory 右边框垂直严格对齐，实现上下两行左右双向完美对齐。
+  2. **消除中间空白与百分比紧贴**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 滑块宽度设定为 `136pt`，右侧紧贴百分比标签 `iconSizeBadge`，间隙精准控制为 `6pt`；
+     - `iconSizeBadge` 文本设为左对齐（`alignment = .left`），百分比字符统一格式化为简洁直观的 `"\(pct)%"`；
+     - 彻底消除了原先 50pt+ 的冗余空白，滑块拖动时数字与滑块端点如影随形、紧凑精致。
+  3. **比例范围调整为 60% ~ 120% 与 7 节点刻度**（`Sources/atools/UI/Settings/SettingsTabViews.swift` & `ConfigManager.swift` & `main.swift`）：
+     - 更新 `iconSizeSlider`：`minValue = 60`，`maxValue = 120`，保留 7 个比例刻度（`numberOfTickMarks = 7`，每 10% 一个比例节点）；
+     - `ConfigManager.updateShelfIconScale` 范围 clamp 防护策略同步更新为 `max(0.60, min(1.20, scale))`；
+     - 行副标题清晰注明：`"自由缩放应用抽屉网格内图标和文字尺寸 (60% ~ 120%，默认 100%)"`；
+     - 单元测试与诊断用例中对 `0.60` 下限与 `1.20` 上限的截断断言全面更新通过。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 16 大项（包括 CalculatorEngine、SystemActions、ConfigManager 60%-120% 缩放下限上限、Settings 780.0pt 绝对宽度不变性等）**100% 全部 PASS 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、部署覆盖到 `/Applications/ATools.app` 并重启应用；
+  - 自动渲染并核验快照（`/tmp/settings_tab_shelf_layout.png`）：
+    * 滑块左边沿与上方分段控件左边缘严格垂直左对齐；
+    * 滑块右端与 `100%` 之间间距紧凑贴合（仅 6pt），大空白彻底消除；
+    * 刻度节点分布清晰，副标题说明完整明确。
+
+### 39. 偏好设置「常规」Tab 平铺整合与子切换页去除 (2026-10-11, build 39)
+
+- **背景与现象**：
+  - 用户反馈「常规」偏好设置中只有两个小型卡片（「通用与启动」与「系统权限」），通过顶部二级分段胶囊 Tab（切换页）拆分反而增加了不必要的点击层级，下方留白过多，交互体验割裂；
+  - 诉求：将「系统安全与隐私权限」卡片直接移至「基础与系统」卡片下方平铺展示，去除顶部切换页分段控件，实现一屏完整浏览与管理。
+
+- **实施细节与涉及文件**：
+  1. **移除二级分段切换页与层级扁平化**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 将 `headerView = SettingsHeaderView(title: "常规", iconName: "gearshape")` 的 `tabs` 移除，隐藏二级分段控件；
+     - 彻底精简并移除 `launchPage`、`permPage`、`pages`、`pageContainer`、`showPage` 等子页嵌套层；
+  2. **垂直流式排版整合与一屏直出**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 统一挂载至单一 `scrollView & scrollContent`：
+       * 第 1 模块：**基础与系统**（开机自启、失焦时自动关闭）；
+       * 第 2 模块：**系统安全与隐私权限**（辅助功能权限、完全磁盘访问权限、前往授权按钮）；
+       * 底部：**权限与本地隐私安全说明**（零网络上传、完全本地运行）；
+     - 整体内容垂直高度约 320pt，远低于 562pt 视窗高度，**彻底无需垂直滚动条**，界面舒展大方。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 16 大项（包括 CalculatorEngine、SystemActions、ConfigManager、Settings 780.0pt 绝对宽度不变性等）**100% 全部 PASS 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、部署覆盖到 `/Applications/ATools.app` 并重启应用；
+  - 自动渲染并核验快照（`/tmp/settings_tab_0.png`）：
+    * 顶部分段切换页已彻底移除，大标题干净现代；
+    * 「基础与系统」与「系统安全与隐私权限」卡片上下平铺，左右边界严格对齐；
+    * 零滚动条，一览无余。
+
+### 40. 应用抽屉图标比例范围收束至 70%~110%、透明度滑块防抖固定及双向「恢复默认」按钮支持 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户提出 3 项关键交互与美观性诉求：
+    1. **抽屉图标缩放范围微调**：将应用抽屉图标比例控制在更合理的 `70% ~ 110%` 黄金区间（默认 100%），避免极端过小或过大；
+    2. **面板透明度滑块动态伸缩缺陷修复**：原先「外观与主题」中透明度滑块的数值 Badge 容器未固定宽度，当处于 90%（文案为“90%（默认）”）与 85%（文案为“85%”）切换时文本长度跳变，带动左侧滑块轨道产生视觉伸缩跳动；
+    3. **空间与美观性评估并增设「恢复默认」按钮**：在图标缩放与透明度滑块旁评估合适位置，增设一键「恢复默认」交互按钮。
+
+- **空间与美观性评估与设计决策**：
+  - **位置选择（右侧紧随 vs 下方折行）**：
+    * 下方折行方案：会导致单行卡片高度由 46pt 暴增至 70pt+，上下留白突兀，打破 macOS 原生偏好设置一贯的单行紧凑节奏；
+    * 右侧紧随方案（采纳）：卡片右侧 Accessory 具有 240~260pt 的宽裕空间。将结构设计为 `[ 滑块(120pt) ] + [ 数值(38pt) ] + [ 恢复默认按钮(68pt) ]`，总宽度精确为 `240pt`；
+    * 上方的分段控件同步设为 `240pt`，上下两行左右双向严格垂直对齐，秩序感与平衡感极强。
+  - **组件形态与状态感知**：
+    * 封装 `SettingsResetButton` 紧凑型胶囊按钮（高度 22pt，圆角 11pt，11pt Medium 字体）；
+    * 状态联动：当前值处于默认值（图标 100%，透明度 90%）时，呈现微淡精致的禁用态；拖动偏离默认值时自动点亮激活；点击瞬间平滑复位并变淡。
+
+- **实施细节与涉及文件**：
+  1. **应用抽屉图标缩放范围与刻度节点优化**（`Sources/atools/UI/Settings/SettingsTabViews.swift` & `ConfigManager.swift` & `main.swift`）：
+     - 滑块参数更新为：`minValue = 70`，`maxValue = 110`，5 个均匀刻度节点（`numberOfTickMarks = 5`，对应 70%, 80%, 90%, 100%, 110%）；
+     - `ConfigManager.updateShelfIconScale` 范围防护收敛至 `max(0.70, min(1.10, scale))`，1.05 以上自动映射为 `.large`；
+     - 副标题更新为：`"自由缩放应用抽屉网格内图标和文字尺寸 (70% ~ 110%，默认 100%)"`；
+     - 增加 `resetScaleToDefault()` 触发方法与 `resetScaleButton` 状态绑定。
+  2. **面板透明度滑块固定宽度与彻底防抖**（`Sources/atools/UI/Settings/SettingsTabViews.swift`）：
+     - 移除引起弹性伸缩的未定宽 `badgeContainer`；
+     - `opacitySlider` 显式施加 `widthAnchor.constraint(equalToConstant: 120)`，宽度绝对固定，拖动滑块时轨道**绝对恒定不发生任何伸缩**；
+     - `opacityBadge` 设定固定 38pt 宽度左对齐，数值清晰变化；
+     - 增加 `resetOpacityButton` 恢复默认按钮，点击一键复位至 90%。
+  3. **全局新增紧凑型复位组件**（`Sources/atools/UI/Settings/SettingsComponents.swift`）：
+     - 新增 `SettingsResetButton` 类，内建深浅色自适应、鼠标悬浮高亮、禁用态透明度保护。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 16 大项（包括 CalculatorEngine、SystemActions、ConfigManager 0.70~1.10 缩放边界等）**100% 全部 PASS 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、部署覆盖到 `/Applications/ATools.app` 并平滑重启；
+  - 实机渲染快照核验：
+    * `/tmp/settings_tab_shelf_layout.png`：应用抽屉图标滑块 70%~110% 刻度舒展，右侧「恢复默认」按钮与分段控件上下垂直对齐；
+    * `/tmp/settings_tab_4.png`：外观与主题透明度滑块绝对固定 120pt，右侧「恢复默认」完美对齐，伸缩抖动彻底根除。

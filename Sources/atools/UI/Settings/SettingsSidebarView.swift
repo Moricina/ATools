@@ -5,7 +5,7 @@ public enum SettingsSidebarItem: Int, CaseIterable {
     case general = 0
     case shelf = 1
     case search = 2
-    case hotkeys = 3
+    case autoQuit = 3
     case theme = 4
     case performance = 5
     case about = 6
@@ -15,7 +15,7 @@ public enum SettingsSidebarItem: Int, CaseIterable {
         case .general: return "常规"
         case .shelf: return "应用抽屉"
         case .search: return "全盘搜索"
-        case .hotkeys: return "全局快捷键"
+        case .autoQuit: return "关窗退出"
         case .theme: return "外观与主题"
         case .performance: return "运行与性能"
         case .about: return "关于"
@@ -27,7 +27,7 @@ public enum SettingsSidebarItem: Int, CaseIterable {
         case .general: return "gearshape"
         case .shelf: return "square.grid.2x2"
         case .search: return "magnifyingglass"
-        case .hotkeys: return "keyboard"
+        case .autoQuit: return "door.left.hand.open"
         case .theme: return "paintbrush"
         case .performance: return "gauge.with.dots.needle.bottom.50percent"
         case .about: return "info.circle"

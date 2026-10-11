@@ -21,20 +21,11 @@ public enum HotkeyDisplayFormatter {
     }
 
     public static func keyName(keyCode: UInt32, characters: String? = nil) -> String {
-        if let translated = translate(keyCode: keyCode), !translated.isEmpty {
-            return translated.uppercased()
-        }
-        if let chars = characters?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !chars.isEmpty,
-           chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
-            return chars.uppercased()
-        }
-
-        // Named keys are hardware/layout independent; printable keys use the active layout above.
+        // Named keys are hardware/layout independent; checked first to avoid whitespace/control characters
         switch keyCode {
         case 36: return "Return"
         case 48: return "Tab"
-        case 49: return "Space"
+        case 49: return "空格"
         case 51, 117: return "Delete"
         case 53: return "Esc"
         case 96: return "F5"
@@ -53,8 +44,22 @@ public enum HotkeyDisplayFormatter {
         case 124: return "→"
         case 125: return "↓"
         case 126: return "↑"
-        default: return "Key(\(keyCode))"
+        default: break
         }
+
+        if let translated = translate(keyCode: keyCode) {
+            let trimmed = translated.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                return trimmed.uppercased()
+            }
+        }
+        if let chars = characters?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !chars.isEmpty,
+           chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
+            return chars.uppercased()
+        }
+
+        return "Key(\(keyCode))"
     }
 
     private static func translate(keyCode: UInt32) -> String? {

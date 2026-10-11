@@ -50,7 +50,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     private var generalView: GeneralTabView?
     private var shelfView: ShelfTabView?
     private var searchView: SearchTabView?
-    private var hotkeysView: HotkeysTabView?
+    private var autoQuitView: AutoQuitTabView?
     private var themeView: ThemeTabView?
     private var performanceView: PerformanceTabView?
     private var aboutView: AboutTabView?
@@ -88,6 +88,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         win.setContentSize(NSSize(width: 780, height: 620))
         win.center()
         win.makeKeyAndOrderFront(nil)
+        win.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         switchToTab(sidebarView.selectedItem)
     }
@@ -97,26 +98,22 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func windowWillClose(_ notification: Notification) {
-        hotkeysView?.shelfRecorder.stopRecording()
-        hotkeysView?.searchRecorder.stopRecording()
+        shelfView?.shelfRecorder?.stopRecording()
+        searchView?.searchRecorder?.stopRecording()
         performanceView?.stopMonitor()
 
         // AutoQuit 名单编辑 sheet 挂在本窗口；先把 sheet 收起，避免其数据源
-        // 随下方 generalView 一起释放后出现悬垂回调。
+        // 随下方 autoQuitView 一起释放后出现悬垂回调。
         if let sheet = window?.attachedSheet {
             window?.endSheet(sheet)
         }
 
-        // Release every cached tab view. They are plain config-driven forms that
-        // are rebuilt lazily by switchToTab on the next open; keeping all seven
-        // alive forever pinned several MB of views, tracking areas and AutoLayout
-        // objects for a window that is opened rarely.
         currentActiveView?.removeFromSuperview()
         currentActiveView = nil
         generalView = nil
         shelfView = nil
         searchView = nil
-        hotkeysView = nil
+        autoQuitView = nil
         themeView = nil
         performanceView = nil
         aboutView = nil
@@ -166,6 +163,12 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             currentActiveView = nil
         }
 
+        shelfView?.shelfRecorder?.stopRecording()
+        searchView?.searchRecorder?.stopRecording()
+        if let sheet = window?.attachedSheet {
+            window?.endSheet(sheet)
+        }
+
         let targetView: NSView
         switch item {
         case .general:
@@ -180,10 +183,10 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             if searchView == nil { searchView = SearchTabView() }
             searchView?.refresh()
             targetView = searchView!
-        case .hotkeys:
-            if hotkeysView == nil { hotkeysView = HotkeysTabView() }
-            hotkeysView?.refresh()
-            targetView = hotkeysView!
+        case .autoQuit:
+            if autoQuitView == nil { autoQuitView = AutoQuitTabView() }
+            autoQuitView?.refresh()
+            targetView = autoQuitView!
         case .theme:
             if themeView == nil { themeView = ThemeTabView() }
             themeView?.refresh()

@@ -46,46 +46,13 @@ func makeSectionHeader(title: String) -> NSTextField {
 
 // MARK: - 1. General Tab View
 public final class GeneralTabView: NSView {
-    private var shelfSwitch: NSSwitch!
-    private var searchSwitch: NSSwitch!
-    private var mutualExclusionHint: NSTextField!
     private var launchOnLoginSwitch: NSSwitch!
-    private var pinSwitch: NSSwitch!
-    private var pageContainer: NSView!
-    private var pages: [NSView] = []
-    private var headerView: SettingsHeaderView!
-    private var sec1TitleTopConstraint: NSLayoutConstraint?
-
-    // 「窗口退出」页控件
-    private var autoQuitSwitch: NSSwitch!
-    private var autoQuitModePopUp: NSPopUpButton!
-    private var autoQuitDelayPopUp: NSPopUpButton!
-    private var autoQuitRulesButton: SettingsPillButton!
-    private var autoQuitPermissionLabel: NSTextField!
-    private var autoQuitChangeObserver: NSObjectProtocol?
-    private let autoQuitDelayOptions: [(title: String, seconds: Int)] = [
-        ("立即退出", 0), ("1 秒", 1), ("2 秒 (推荐)", 2), ("3 秒", 3), ("5 秒", 5)
-    ]
+    private var autoCloseDeactivateSwitch: NSSwitch!
 
     public init() {
         super.init(frame: .zero)
         setupUI()
         refresh()
-        // 状态栏菜单或名单 sheet 改配置时同步本页控件（页内分段切换不触发 refresh，
-        // 所以必须自己监听配置变更）。
-        autoQuitChangeObserver = NotificationCenter.default.addObserver(
-            forName: .atoolsAutoQuitDidChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.refresh()
-        }
-    }
-
-    deinit {
-        if let token = autoQuitChangeObserver {
-            NotificationCenter.default.removeObserver(token)
-        }
     }
 
     required init?(coder: NSCoder) { super.init(coder: coder) }
@@ -93,7 +60,180 @@ public final class GeneralTabView: NSView {
     private func setupUI() {
         translatesAutoresizingMaskIntoConstraints = false
 
-        headerView = SettingsHeaderView(title: "常规", iconName: "gearshape", tabs: ["通用与启动", "面板开关", "系统权限", "窗口退出"])
+        let headerView = SettingsHeaderView(title: "常规", iconName: "gearshape")
+        addSubview(headerView)
+
+        let scrollContent = NSView()
+        scrollContent.translatesAutoresizingMaskIntoConstraints = false
+
+        let scrollView = makeTabScrollView(contentView: scrollContent)
+        addSubview(scrollView)
+
+        NSLayoutConstraint.activate([
+            headerView.topAnchor.constraint(equalTo: topAnchor),
+            headerView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
+        // 1. 基础与系统
+        let sec1Title = makeSectionHeader(title: "基础与系统")
+        scrollContent.addSubview(sec1Title)
+
+        let card1 = SettingsCardView()
+        card1.translatesAutoresizingMaskIntoConstraints = false
+        scrollContent.addSubview(card1)
+
+        launchOnLoginSwitch = NSSwitch()
+        launchOnLoginSwitch.target = self
+        launchOnLoginSwitch.action = #selector(toggleLaunchOnLogin(_:))
+        let rowLaunch = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "power"),
+            title: "开机自启",
+            subtitle: "登录 macOS 后自动启动 ATools 并驻留在右上角菜单栏",
+            accessory: launchOnLoginSwitch
+        )
+        card1.addRow(rowLaunch)
+
+        autoCloseDeactivateSwitch = NSSwitch()
+        autoCloseDeactivateSwitch.target = self
+        autoCloseDeactivateSwitch.action = #selector(toggleAutoCloseDeactivate(_:))
+        let rowCloseDeactivate = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "macwindow.badge.plus"),
+            title: "失焦时自动关闭",
+            subtitle: "点击面板外部任意工作区或切换应用时自动收起窗口",
+            accessory: autoCloseDeactivateSwitch,
+            minHeight: 46
+        )
+        card1.addRow(rowCloseDeactivate, isLast: true)
+
+        // 2. 系统安全与隐私权限（直接平铺展示在下方）
+        let sec2Title = makeSectionHeader(title: "系统安全与隐私权限")
+        scrollContent.addSubview(sec2Title)
+
+        let card2 = SettingsCardView()
+        card2.translatesAutoresizingMaskIntoConstraints = false
+        scrollContent.addSubview(card2)
+
+        let axBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openAccessibilitySettings))
+        let rowAx = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.raised"),
+            title: "辅助功能权限 (Accessibility)",
+            subtitle: "用于快捷键全局监听、关窗退出窗口感知等系统特性",
+            accessory: axBtn
+        )
+        card2.addRow(rowAx)
+
+        let fdaBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openFullDiskAccessSettings))
+        let rowFDA = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "lock.shield"),
+            title: "完全磁盘访问权限 (Full Disk Access)",
+            subtitle: "若搜不到“下载”或“文稿”等受 TCC 保护的目录文件，请前往系统设置授权",
+            accessory: fdaBtn
+        )
+        card2.addRow(rowFDA, isLast: true)
+
+        let permTip = NSTextField(labelWithString: "权限提示：本软件所有功能均在本地运行，零网络上传，完全尊重您的隐私与系统安全。")
+        permTip.translatesAutoresizingMaskIntoConstraints = false
+        permTip.font = NSFont.systemFont(ofSize: 11)
+        permTip.textColor = .secondaryLabelColor
+        permTip.cell?.wraps = true
+        permTip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        scrollContent.addSubview(permTip)
+
+        NSLayoutConstraint.activate([
+            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
+            sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
+
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
+            card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
+
+            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 18),
+            sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
+
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
+            card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
+
+            permTip.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 12),
+            permTip.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
+            permTip.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
+            permTip.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
+        ])
+    }
+
+    public func refresh() {
+        let cfg = ConfigManager.shared.config
+        launchOnLoginSwitch.state = LaunchAtLoginController.shared.isEnabled ? .on : .off
+        autoCloseDeactivateSwitch.state = cfg.autoCloseOnDeactivate ? .on : .off
+    }
+
+    @objc private func toggleLaunchOnLogin(_ sender: NSSwitch) {
+        do {
+            try LaunchAtLoginController.shared.setEnabled(sender.state == .on)
+        } catch {
+            sender.state = (sender.state == .on) ? .off : .on
+            let alert = NSAlert()
+            alert.messageText = "设置开机自启失败"
+            alert.informativeText = error.localizedDescription
+            alert.runModalAboveFloatingWindows()
+        }
+    }
+
+    @objc private func toggleAutoCloseDeactivate(_ sender: NSSwitch) {
+        ConfigManager.shared.updateAutoCloseOnDeactivate(sender.state == .on)
+    }
+
+    @objc private func openAccessibilitySettings() {
+        HotkeyManager.openAccessibilitySettings()
+    }
+
+    @objc private func openFullDiskAccessSettings() {
+        if #available(macOS 13.0, *), let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            if NSWorkspace.shared.open(url) { return }
+        }
+        let script = "tell application \"System Settings\"\nactivate\nend tell"
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+}
+
+// MARK: - 2. Shelf Tab View
+public final class ShelfTabView: NSView {
+    public private(set) var shelfRecorder: HotkeyRecorderControl?
+    private var shelfSwitch: NSSwitch!
+    private var trackpadGesturePopUp: NSPopUpButton!
+    private var pinSwitch: NSSwitch!
+    private var autoCloseLaunchSwitch: NSSwitch!
+    private var autoCloseMouseExitSwitch: NSSwitch!
+    private var orientationControl: NSSegmentedControl!
+    private var iconSizeSlider: NSSlider!
+    private var iconSizeBadge: NSTextField!
+    private var resetScaleButton: SettingsResetButton!
+    private var favoritesSwitch: NSSwitch!
+    public var headerView: SettingsHeaderView!
+    private var pageContainer: NSView!
+    private var pages: [NSView] = []
+
+    public init() {
+        super.init(frame: .zero)
+        setupUI()
+        refresh()
+    }
+
+    required init?(coder: NSCoder) { super.init(coder: coder) }
+
+    private func setupUI() {
+        translatesAutoresizingMaskIntoConstraints = false
+
+        headerView = SettingsHeaderView(title: "应用抽屉", iconName: "square.grid.2x2", tabs: ["启用与唤出触发", "驻留形态与关闭行为", "分类与视觉排版"])
         addSubview(headerView)
 
         pageContainer = NSView()
@@ -111,141 +251,24 @@ public final class GeneralTabView: NSView {
             pageContainer.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        // Page 0: 通用与启动
-        let launchPage = NSView()
-        let launchScrollContent = NSView()
-        let launchScroll = makeTabScrollView(contentView: launchScrollContent)
-        launchPage.addSubview(launchScroll)
+        // Page 0: 启用与唤出触发
+        let triggerPage = NSView()
+        let triggerScrollContent = NSView()
+        let triggerScroll = makeTabScrollView(contentView: triggerScrollContent)
+        triggerPage.addSubview(triggerScroll)
         NSLayoutConstraint.activate([
-            launchScroll.topAnchor.constraint(equalTo: launchPage.topAnchor),
-            launchScroll.leadingAnchor.constraint(equalTo: launchPage.leadingAnchor),
-            launchScroll.trailingAnchor.constraint(equalTo: launchPage.trailingAnchor),
-            launchScroll.bottomAnchor.constraint(equalTo: launchPage.bottomAnchor)
+            triggerScroll.topAnchor.constraint(equalTo: triggerPage.topAnchor),
+            triggerScroll.leadingAnchor.constraint(equalTo: triggerPage.leadingAnchor),
+            triggerScroll.trailingAnchor.constraint(equalTo: triggerPage.trailingAnchor),
+            triggerScroll.bottomAnchor.constraint(equalTo: triggerPage.bottomAnchor)
         ])
 
-        let sec1Title = makeSectionHeader(title: "基础与系统")
-        launchScrollContent.addSubview(sec1Title)
+        let sec1Title = makeSectionHeader(title: "启用与唤出触发")
+        triggerScrollContent.addSubview(sec1Title)
 
         let card1 = SettingsCardView()
         card1.translatesAutoresizingMaskIntoConstraints = false
-        launchScrollContent.addSubview(card1)
-
-        let welcomeBanner: WelcomeGuideBannerView?
-        if !WelcomeGuideBannerView.hasDismissed {
-            let banner = WelcomeGuideBannerView()
-            banner.translatesAutoresizingMaskIntoConstraints = false
-            launchScrollContent.addSubview(banner)
-            NSLayoutConstraint.activate([
-                banner.topAnchor.constraint(equalTo: launchScrollContent.topAnchor, constant: 14),
-                banner.leadingAnchor.constraint(equalTo: launchScrollContent.leadingAnchor, constant: 28),
-                banner.trailingAnchor.constraint(equalTo: launchScrollContent.trailingAnchor, constant: -28)
-            ])
-            welcomeBanner = banner
-        } else {
-            welcomeBanner = nil
-        }
-
-        launchOnLoginSwitch = NSSwitch()
-        launchOnLoginSwitch.target = self
-        launchOnLoginSwitch.action = #selector(toggleLaunchOnLogin(_:))
-        let rowLaunch = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "power"),
-            title: "开机自启",
-            subtitle: "登录 macOS 后自动启动 ATools 并驻留在右上角菜单栏",
-            accessory: launchOnLoginSwitch
-        )
-        card1.addRow(rowLaunch)
-
-        let autoCloseLaunchSwitch = NSSwitch()
-        autoCloseLaunchSwitch.target = self
-        autoCloseLaunchSwitch.action = #selector(toggleAutoCloseLaunch(_:))
-        autoCloseLaunchSwitch.state = ConfigManager.shared.config.autoCloseOnLaunch ? .on : .off
-        let rowCloseLaunch = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.down.right.and.arrow.up.left"),
-            title: "点击应用后自动关闭面板",
-            subtitle: "在应用分类抽屉中点击启动后，立即自动隐藏窗口",
-            accessory: autoCloseLaunchSwitch
-        )
-        card1.addRow(rowCloseLaunch)
-
-        let autoCloseMouseExitSwitch = NSSwitch()
-        autoCloseMouseExitSwitch.target = self
-        autoCloseMouseExitSwitch.action = #selector(toggleAutoCloseMouseExit(_:))
-        autoCloseMouseExitSwitch.state = ConfigManager.shared.config.autoCloseOnMouseExit ? .on : .off
-        let rowCloseMouse = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "cursorarrow.motionlines"),
-            title: "鼠标移出面板后自动关闭",
-            subtitle: "含 0.35s 智能防抖延迟与右键菜单弹出保护",
-            accessory: autoCloseMouseExitSwitch
-        )
-        card1.addRow(rowCloseMouse)
-
-        let autoCloseDeactivateSwitch = NSSwitch()
-        autoCloseDeactivateSwitch.target = self
-        autoCloseDeactivateSwitch.action = #selector(toggleAutoCloseDeactivate(_:))
-        autoCloseDeactivateSwitch.state = ConfigManager.shared.config.autoCloseOnDeactivate ? .on : .off
-        let rowCloseDeactivate = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "macwindow.badge.plus"),
-            title: "失焦时自动关闭",
-            subtitle: "点击面板外部任意工作区或切换应用时自动收起窗口",
-            accessory: autoCloseDeactivateSwitch,
-            minHeight: 46
-        )
-        card1.addRow(rowCloseDeactivate, isLast: true)
-
-        let sec1Top: NSLayoutConstraint
-        if let banner = welcomeBanner {
-            sec1Top = sec1Title.topAnchor.constraint(equalTo: banner.bottomAnchor, constant: 18)
-            banner.onNavigateToSpotlightGuide = { [weak self] in
-                self?.headerView.segmentedControl.selectedSegment = 2
-                self?.showPage(2)
-            }
-            banner.onDismiss = { [weak self, weak banner, weak launchScrollContent] in
-                guard let banner = banner, let content = launchScrollContent else { return }
-                NSAnimationContext.runAnimationGroup({ context in
-                    context.duration = 0.2
-                    banner.animator().alphaValue = 0
-                }, completionHandler: {
-                    banner.removeFromSuperview()
-                    self?.sec1TitleTopConstraint?.isActive = false
-                    let newTop = sec1Title.topAnchor.constraint(equalTo: content.topAnchor, constant: 14)
-                    self?.sec1TitleTopConstraint = newTop
-                    newTop.isActive = true
-                })
-            }
-        } else {
-            sec1Top = sec1Title.topAnchor.constraint(equalTo: launchScrollContent.topAnchor, constant: 14)
-        }
-        self.sec1TitleTopConstraint = sec1Top
-
-        NSLayoutConstraint.activate([
-            sec1Top,
-            sec1Title.leadingAnchor.constraint(equalTo: launchScrollContent.leadingAnchor, constant: 28),
-
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
-            card1.leadingAnchor.constraint(equalTo: launchScrollContent.leadingAnchor, constant: 28),
-            card1.trailingAnchor.constraint(equalTo: launchScrollContent.trailingAnchor, constant: -28),
-            card1.bottomAnchor.constraint(equalTo: launchScrollContent.bottomAnchor, constant: -28)
-        ])
-
-        // Page 1: 面板开关
-        let panelPage = NSView()
-        let panelScrollContent = NSView()
-        let panelScroll = makeTabScrollView(contentView: panelScrollContent)
-        panelPage.addSubview(panelScroll)
-        NSLayoutConstraint.activate([
-            panelScroll.topAnchor.constraint(equalTo: panelPage.topAnchor),
-            panelScroll.leadingAnchor.constraint(equalTo: panelPage.leadingAnchor),
-            panelScroll.trailingAnchor.constraint(equalTo: panelPage.trailingAnchor),
-            panelScroll.bottomAnchor.constraint(equalTo: panelPage.bottomAnchor)
-        ])
-
-        let sec2Title = makeSectionHeader(title: "功能面板启用控制")
-        panelScrollContent.addSubview(sec2Title)
-
-        let card2 = SettingsCardView()
-        card2.translatesAutoresizingMaskIntoConstraints = false
-        panelScrollContent.addSubview(card2)
+        triggerScrollContent.addSubview(card1)
 
         shelfSwitch = NSSwitch()
         shelfSwitch.target = self
@@ -253,261 +276,215 @@ public final class GeneralTabView: NSView {
         let rowShelf = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "square.grid.2x2"),
             title: "启用应用分类工作台",
-            subtitle: "支持自定义分类、拖拽整理与快速启停",
+            subtitle: "开启后支持自定义分类、拖拽整理与快速启停",
             accessory: shelfSwitch
         )
-        card2.addRow(rowShelf)
+        card1.addRow(rowShelf)
 
-        searchSwitch = NSSwitch()
-        searchSwitch.target = self
-        searchSwitch.action = #selector(toggleSearchPanel(_:))
-        let rowSearch = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "magnifyingglass"),
-            title: "启用全盘搜索中枢",
-            subtitle: "毫秒级全盘文件秒搜、公式即时计算与系统词典",
-            accessory: searchSwitch
+        let recorder = HotkeyRecorderControl(binding: ConfigManager.shared.config.shelfHotkey)
+        recorder.translatesAutoresizingMaskIntoConstraints = false
+        recorder.widthAnchor.constraint(equalToConstant: 210).isActive = true
+        recorder.onChange = { [weak self] newBinding in
+            self?.handleShelfRecorded(newBinding)
+        }
+        recorder.onClear = { [weak self] in
+            self?.handleShelfCleared()
+        }
+        self.shelfRecorder = recorder
+        let rowRecorder = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "keyboard"),
+            title: "专属全局快捷键",
+            subtitle: "默认 ⌥A，支持按下键盘任意组合键或双击修饰键 (如 2× ⌥)",
+            accessory: recorder
         )
-        card2.addRow(rowSearch, isLast: true)
+        card1.addRow(rowRecorder)
 
-        let secPinTitle = makeSectionHeader(title: "面板驻留行为")
-        panelScrollContent.addSubview(secPinTitle)
+        trackpadGesturePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        trackpadGesturePopUp.translatesAutoresizingMaskIntoConstraints = false
+        trackpadGesturePopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        for gesture in ShelfTrackpadGesture.allCases {
+            trackpadGesturePopUp.addItem(withTitle: gesture.title)
+        }
+        trackpadGesturePopUp.target = self
+        trackpadGesturePopUp.action = #selector(trackpadGestureChanged(_:))
+        let rowGesture = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.point.up.left"),
+            title: "触控板手势唤出",
+            subtitle: "在触控板上轻点手势随时呼出工作台（推荐四指轻点）",
+            accessory: trackpadGesturePopUp
+        )
+        card1.addRow(rowGesture, isLast: true)
 
-        let cardPin = SettingsCardView()
-        cardPin.translatesAutoresizingMaskIntoConstraints = false
-        panelScrollContent.addSubview(cardPin)
+        NSLayoutConstraint.activate([
+            sec1Title.topAnchor.constraint(equalTo: triggerScrollContent.topAnchor, constant: 14),
+            sec1Title.leadingAnchor.constraint(equalTo: triggerScrollContent.leadingAnchor, constant: 28),
+
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.leadingAnchor.constraint(equalTo: triggerScrollContent.leadingAnchor, constant: 28),
+            card1.trailingAnchor.constraint(equalTo: triggerScrollContent.trailingAnchor, constant: -28),
+            card1.bottomAnchor.constraint(equalTo: triggerScrollContent.bottomAnchor, constant: -28)
+        ])
+
+        // Page 1: 驻留形态与关闭行为
+        let behaviorPage = NSView()
+        let behaviorScrollContent = NSView()
+        let behaviorScroll = makeTabScrollView(contentView: behaviorScrollContent)
+        behaviorPage.addSubview(behaviorScroll)
+        NSLayoutConstraint.activate([
+            behaviorScroll.topAnchor.constraint(equalTo: behaviorPage.topAnchor),
+            behaviorScroll.leadingAnchor.constraint(equalTo: behaviorPage.leadingAnchor),
+            behaviorScroll.trailingAnchor.constraint(equalTo: behaviorPage.trailingAnchor),
+            behaviorScroll.bottomAnchor.constraint(equalTo: behaviorPage.bottomAnchor)
+        ])
+
+        let sec2Title = makeSectionHeader(title: "驻留形态与关闭行为")
+        behaviorScrollContent.addSubview(sec2Title)
+
+        let card2 = SettingsCardView()
+        card2.translatesAutoresizingMaskIntoConstraints = false
+        behaviorScrollContent.addSubview(card2)
 
         pinSwitch = NSSwitch()
         pinSwitch.target = self
         pinSwitch.action = #selector(togglePin(_:))
         let rowPin = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "pin.fill"),
-            title: "固定应用抽屉在桌面",
-            subtitle: "开启后抽屉忽略失焦与鼠标移出关闭；跨 App 拖拽保护始终独立生效",
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "pin"),
+            title: "抽屉面板固定在桌面",
+            subtitle: "开启后抽屉始终停留在桌面壁纸上方，不受失焦关闭影响",
             accessory: pinSwitch
         )
-        cardPin.addRow(rowPin, isLast: true)
+        card2.addRow(rowPin)
 
-        mutualExclusionHint = NSTextField(labelWithString: "💡 提示：为了保证随时有可用的生产力入口，不能同时禁用两个面板。")
-        mutualExclusionHint.translatesAutoresizingMaskIntoConstraints = false
-        mutualExclusionHint.font = NSFont.systemFont(ofSize: 11)
-        mutualExclusionHint.textColor = .secondaryLabelColor
-        mutualExclusionHint.cell?.wraps = true
-        mutualExclusionHint.maximumNumberOfLines = 2
-        mutualExclusionHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        panelScrollContent.addSubview(mutualExclusionHint)
+        autoCloseLaunchSwitch = NSSwitch()
+        autoCloseLaunchSwitch.target = self
+        autoCloseLaunchSwitch.action = #selector(toggleAutoCloseLaunch(_:))
+        let rowCloseLaunch = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.down.right.and.arrow.up.left"),
+            title: "点击启动应用后自动关闭",
+            subtitle: "在抽屉中点击启动应用后，立即自动收起抽屉窗口",
+            accessory: autoCloseLaunchSwitch
+        )
+        card2.addRow(rowCloseLaunch)
+
+        autoCloseMouseExitSwitch = NSSwitch()
+        autoCloseMouseExitSwitch.target = self
+        autoCloseMouseExitSwitch.action = #selector(toggleAutoCloseMouseExit(_:))
+        let rowCloseMouse = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "cursorarrow.motionlines"),
+            title: "鼠标移出面板后自动关闭",
+            subtitle: "含 0.35s 防抖延迟与右键菜单弹出保护",
+            accessory: autoCloseMouseExitSwitch
+        )
+        card2.addRow(rowCloseMouse, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec2Title.topAnchor.constraint(equalTo: panelScrollContent.topAnchor, constant: 14),
-            sec2Title.leadingAnchor.constraint(equalTo: panelScrollContent.leadingAnchor, constant: 28),
+            sec2Title.topAnchor.constraint(equalTo: behaviorScrollContent.topAnchor, constant: 14),
+            sec2Title.leadingAnchor.constraint(equalTo: behaviorScrollContent.leadingAnchor, constant: 28),
 
             card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
-            card2.leadingAnchor.constraint(equalTo: panelScrollContent.leadingAnchor, constant: 28),
-            card2.trailingAnchor.constraint(equalTo: panelScrollContent.trailingAnchor, constant: -28),
-
-            secPinTitle.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 20),
-            secPinTitle.leadingAnchor.constraint(equalTo: panelScrollContent.leadingAnchor, constant: 28),
-
-            cardPin.topAnchor.constraint(equalTo: secPinTitle.bottomAnchor, constant: 8),
-            cardPin.leadingAnchor.constraint(equalTo: panelScrollContent.leadingAnchor, constant: 28),
-            cardPin.trailingAnchor.constraint(equalTo: panelScrollContent.trailingAnchor, constant: -28),
-
-            mutualExclusionHint.topAnchor.constraint(equalTo: cardPin.bottomAnchor, constant: 8),
-            mutualExclusionHint.leadingAnchor.constraint(equalTo: panelScrollContent.leadingAnchor, constant: 32),
-            mutualExclusionHint.trailingAnchor.constraint(equalTo: panelScrollContent.trailingAnchor, constant: -28),
-            mutualExclusionHint.bottomAnchor.constraint(equalTo: panelScrollContent.bottomAnchor, constant: -28)
+            card2.leadingAnchor.constraint(equalTo: behaviorScrollContent.leadingAnchor, constant: 28),
+            card2.trailingAnchor.constraint(equalTo: behaviorScrollContent.trailingAnchor, constant: -28),
+            card2.bottomAnchor.constraint(equalTo: behaviorScrollContent.bottomAnchor, constant: -28)
         ])
 
-        // Page 2: 系统权限与环境引导
-        let permPage = NSView()
-        let permScrollContent = NSView()
-        let permScroll = makeTabScrollView(contentView: permScrollContent)
-        permPage.addSubview(permScroll)
+        // Page 2: 分类与视觉排版
+        let layoutPage = NSView()
+        let layoutScrollContent = NSView()
+        let layoutScroll = makeTabScrollView(contentView: layoutScrollContent)
+        layoutPage.addSubview(layoutScroll)
         NSLayoutConstraint.activate([
-            permScroll.topAnchor.constraint(equalTo: permPage.topAnchor),
-            permScroll.leadingAnchor.constraint(equalTo: permPage.leadingAnchor),
-            permScroll.trailingAnchor.constraint(equalTo: permPage.trailingAnchor),
-            permScroll.bottomAnchor.constraint(equalTo: permPage.bottomAnchor)
+            layoutScroll.topAnchor.constraint(equalTo: layoutPage.topAnchor),
+            layoutScroll.leadingAnchor.constraint(equalTo: layoutPage.leadingAnchor),
+            layoutScroll.trailingAnchor.constraint(equalTo: layoutPage.trailingAnchor),
+            layoutScroll.bottomAnchor.constraint(equalTo: layoutPage.bottomAnchor)
         ])
 
-        let sec3Title = makeSectionHeader(title: "系统安全与隐私权限")
-        permScrollContent.addSubview(sec3Title)
+        let sec3Title = makeSectionHeader(title: "分类与视觉排版")
+        layoutScrollContent.addSubview(sec3Title)
 
         let card3 = SettingsCardView()
         card3.translatesAutoresizingMaskIntoConstraints = false
-        permScrollContent.addSubview(card3)
+        layoutScrollContent.addSubview(card3)
 
-        let fdaBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openFDA))
-        let rowFDA = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "lock.shield"),
-            title: "完全磁盘访问权限 (Full Disk Access)",
-            subtitle: "若搜不到“下载”或“文稿”等受 TCC 保护的目录文件，请前往系统设置授权",
-            accessory: fdaBtn
+        orientationControl = NSSegmentedControl(labels: ["水平顶部", "垂直左侧"], trackingMode: .selectOne, target: self, action: #selector(orientationChanged(_:)))
+        orientationControl.translatesAutoresizingMaskIntoConstraints = false
+        orientationControl.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        let rowOrient = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "rectangle.split.2x1"),
+            title: "分类栏布局方向",
+            subtitle: "切换分类胶囊栏在应用抽屉的展示方位（顶部或左侧）",
+            accessory: orientationControl
         )
-        card3.addRow(rowFDA, isLast: true)
+        card3.addRow(rowOrient)
 
-        let secSpotlightTitle = makeSectionHeader(title: "系统聚焦 (Spotlight) 完整平替指南")
-        permScrollContent.addSubview(secSpotlightTitle)
+        let sliderContainer = NSView()
+        sliderContainer.translatesAutoresizingMaskIntoConstraints = false
 
-        let cardSpotlight = SettingsCardView()
-        cardSpotlight.translatesAutoresizingMaskIntoConstraints = false
-        permScrollContent.addSubview(cardSpotlight)
+        iconSizeSlider = NSSlider(value: 100, minValue: 70, maxValue: 110, target: self, action: #selector(scaleSliderChanged(_:)))
+        iconSizeSlider.translatesAutoresizingMaskIntoConstraints = false
+        iconSizeSlider.numberOfTickMarks = 5
+        iconSizeSlider.allowsTickMarkValuesOnly = false
+        iconSizeSlider.isContinuous = true
+        sliderContainer.addSubview(iconSizeSlider)
 
-        let kbBtn = SettingsPillButton(title: "前往键盘设置...", target: self, action: #selector(openKeyboardSettings))
-        let rowKB = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
-            title: "步骤 1：禁用系统 Spotlight 快捷键",
-            subtitle: "在 macOS「键盘」->「快捷键」取消聚焦勾选，释放 ⌘Space 由 ATools 接管",
-            accessory: kbBtn
-        )
-        cardSpotlight.addRow(rowKB)
+        iconSizeBadge = NSTextField(labelWithString: "100%")
+        iconSizeBadge.translatesAutoresizingMaskIntoConstraints = false
+        iconSizeBadge.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        iconSizeBadge.textColor = .secondaryLabelColor
+        iconSizeBadge.alignment = .left
+        sliderContainer.addSubview(iconSizeBadge)
 
-        let ccBtn = SettingsPillButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
-        let rowCC = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "menubar.arrow.up.rectangle"),
-            title: "步骤 2：隐藏系统菜单栏聚焦图标",
-            subtitle: "在 macOS「控制中心」将聚焦设为「不在菜单栏中显示」，只保留 ATools 图标",
-            accessory: ccBtn
-        )
-        cardSpotlight.addRow(rowCC, isLast: true)
-
-        let spotlightTip = NSTextField(labelWithString: "💡 技术保障：ATools 直接复用 macOS 原生 CoreServices 索引，无需额外后台扫描进程，请勿在终端强行停用系统 mds 索引。")
-        spotlightTip.translatesAutoresizingMaskIntoConstraints = false
-        spotlightTip.font = NSFont.systemFont(ofSize: 11)
-        spotlightTip.textColor = .secondaryLabelColor
-        spotlightTip.cell?.wraps = true
-        spotlightTip.maximumNumberOfLines = 3
-        spotlightTip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        permScrollContent.addSubview(spotlightTip)
+        resetScaleButton = SettingsResetButton(title: "恢复默认", target: self, action: #selector(resetScaleToDefault))
+        sliderContainer.addSubview(resetScaleButton)
 
         NSLayoutConstraint.activate([
-            sec3Title.topAnchor.constraint(equalTo: permScrollContent.topAnchor, constant: 14),
-            sec3Title.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
+            sliderContainer.widthAnchor.constraint(equalToConstant: 240),
+            sliderContainer.heightAnchor.constraint(equalToConstant: 24),
+
+            iconSizeSlider.leadingAnchor.constraint(equalTo: sliderContainer.leadingAnchor),
+            iconSizeSlider.centerYAnchor.constraint(equalTo: sliderContainer.centerYAnchor),
+            iconSizeSlider.widthAnchor.constraint(equalToConstant: 120),
+
+            iconSizeBadge.leadingAnchor.constraint(equalTo: iconSizeSlider.trailingAnchor, constant: 6),
+            iconSizeBadge.centerYAnchor.constraint(equalTo: sliderContainer.centerYAnchor),
+            iconSizeBadge.widthAnchor.constraint(equalToConstant: 38),
+
+            resetScaleButton.leadingAnchor.constraint(equalTo: iconSizeBadge.trailingAnchor, constant: 8),
+            resetScaleButton.centerYAnchor.constraint(equalTo: sliderContainer.centerYAnchor),
+            resetScaleButton.trailingAnchor.constraint(equalTo: sliderContainer.trailingAnchor),
+            resetScaleButton.heightAnchor.constraint(equalToConstant: 22)
+        ])
+
+        let rowScale = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.below.rectangle"),
+            title: "应用图标大小比例",
+            subtitle: "自由缩放应用抽屉网格内图标和文字尺寸 (70% ~ 110%，默认 100%)",
+            accessory: sliderContainer
+        )
+        card3.addRow(rowScale)
+
+        favoritesSwitch = NSSwitch()
+        favoritesSwitch.target = self
+        favoritesSwitch.action = #selector(toggleFavorites(_:))
+        let rowFav = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "star.fill"),
+            title: "启用「常用」分类",
+            subtitle: "在分类栏首位展示常用应用，并随使用频率自动排序",
+            accessory: favoritesSwitch
+        )
+        card3.addRow(rowFav, isLast: true)
+
+        NSLayoutConstraint.activate([
+            sec3Title.topAnchor.constraint(equalTo: layoutScrollContent.topAnchor, constant: 14),
+            sec3Title.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
 
             card3.topAnchor.constraint(equalTo: sec3Title.bottomAnchor, constant: 8),
-            card3.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
-            card3.trailingAnchor.constraint(equalTo: permScrollContent.trailingAnchor, constant: -28),
-
-            secSpotlightTitle.topAnchor.constraint(equalTo: card3.bottomAnchor, constant: 20),
-            secSpotlightTitle.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
-
-            cardSpotlight.topAnchor.constraint(equalTo: secSpotlightTitle.bottomAnchor, constant: 8),
-            cardSpotlight.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 28),
-            cardSpotlight.trailingAnchor.constraint(equalTo: permScrollContent.trailingAnchor, constant: -28),
-
-            spotlightTip.topAnchor.constraint(equalTo: cardSpotlight.bottomAnchor, constant: 10),
-            spotlightTip.leadingAnchor.constraint(equalTo: permScrollContent.leadingAnchor, constant: 32),
-            spotlightTip.trailingAnchor.constraint(equalTo: permScrollContent.trailingAnchor, constant: -28),
-            spotlightTip.bottomAnchor.constraint(equalTo: permScrollContent.bottomAnchor, constant: -28)
+            card3.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
+            card3.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
+            card3.bottomAnchor.constraint(equalTo: layoutScrollContent.bottomAnchor, constant: -28)
         ])
 
-        // Page 3: 窗口退出 (AutoQuit) —— 必须追加在 pages 末尾，欢迎横幅硬编码跳转 showPage(2)
-        let autoQuitPage = NSView()
-        let autoQuitScrollContent = NSView()
-        let autoQuitScroll = makeTabScrollView(contentView: autoQuitScrollContent)
-        autoQuitPage.addSubview(autoQuitScroll)
-        NSLayoutConstraint.activate([
-            autoQuitScroll.topAnchor.constraint(equalTo: autoQuitPage.topAnchor),
-            autoQuitScroll.leadingAnchor.constraint(equalTo: autoQuitPage.leadingAnchor),
-            autoQuitScroll.trailingAnchor.constraint(equalTo: autoQuitPage.trailingAnchor),
-            autoQuitScroll.bottomAnchor.constraint(equalTo: autoQuitPage.bottomAnchor)
-        ])
-
-        let sec4Title = makeSectionHeader(title: "关闭窗口即退出应用")
-        autoQuitScrollContent.addSubview(sec4Title)
-
-        let card4 = SettingsCardView()
-        card4.translatesAutoresizingMaskIntoConstraints = false
-        autoQuitScrollContent.addSubview(card4)
-
-        autoQuitSwitch = NSSwitch()
-        autoQuitSwitch.target = self
-        autoQuitSwitch.action = #selector(toggleAutoQuit(_:))
-        let rowAutoQuit = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "xmark.circle"),
-            title: "最后一个窗口关闭后退出应用",
-            subtitle: "点击窗口红色关闭按钮且应用再无其他窗口时，延迟自动退出该应用（对标 SwiftQuit）",
-            accessory: autoQuitSwitch
-        )
-        card4.addRow(rowAutoQuit)
-
-        autoQuitPermissionLabel = NSTextField(labelWithString: "")
-        autoQuitPermissionLabel.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        let autoQuitPermissionBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openAutoQuitAccessibility))
-        let permissionStack = NSStackView(views: [autoQuitPermissionLabel, autoQuitPermissionBtn])
-        permissionStack.orientation = .horizontal
-        permissionStack.spacing = 8
-        permissionStack.alignment = .centerY
-        let rowAutoQuitPermission = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "accessibility"),
-            title: "辅助功能授权状态",
-            subtitle: "监听窗口关闭事件需在系统设置中允许「辅助功能」；ATools 仅感知窗口数量变化，不读取任何窗口内容",
-            accessory: permissionStack
-        )
-        card4.addRow(rowAutoQuitPermission)
-
-        autoQuitModePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-        for mode in AutoQuitMode.allCases {
-            autoQuitModePopUp.addItem(withTitle: mode.title)
-        }
-        autoQuitModePopUp.target = self
-        autoQuitModePopUp.action = #selector(autoQuitModeChanged(_:))
-        autoQuitModePopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        let rowAutoQuitMode = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "scope"),
-            title: "作用范围",
-            subtitle: "「全部应用」开箱即用；追求可控可选「仅名单内」，只自动退出勾选的应用",
-            accessory: autoQuitModePopUp
-        )
-        card4.addRow(rowAutoQuitMode)
-
-        autoQuitDelayPopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-        for option in autoQuitDelayOptions {
-            autoQuitDelayPopUp.addItem(withTitle: option.title)
-        }
-        autoQuitDelayPopUp.target = self
-        autoQuitDelayPopUp.action = #selector(autoQuitDelayChanged(_:))
-        autoQuitDelayPopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        let rowAutoQuitDelay = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "timer"),
-            title: "退出延迟",
-            subtitle: "确认窗口关闭后的等待时间；延迟内重开窗口会自动取消退出",
-            accessory: autoQuitDelayPopUp
-        )
-        card4.addRow(rowAutoQuitDelay)
-
-        autoQuitRulesButton = SettingsPillButton(title: "编辑名单...", target: self, action: #selector(openAutoQuitRulesEditor))
-        let rowAutoQuitRules = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "list.bullet.rectangle"),
-            title: "应用名单",
-            subtitle: "勾选的应用构成名单：随上方「作用范围」作为排除项或退出项生效",
-            accessory: autoQuitRulesButton
-        )
-        card4.addRow(rowAutoQuitRules, isLast: true)
-
-        let autoQuitTip = NSTextField(labelWithString: "💡 边界保护：未保存文档会先弹保存框（窗口未真正关闭不退出）；最小化、⌘H 隐藏或位于其他空间的窗口不误判；访达等系统应用与应用本身永远排除。")
-        autoQuitTip.translatesAutoresizingMaskIntoConstraints = false
-        autoQuitTip.font = NSFont.systemFont(ofSize: 11)
-        autoQuitTip.textColor = .secondaryLabelColor
-        autoQuitTip.cell?.wraps = true
-        autoQuitTip.maximumNumberOfLines = 3
-        autoQuitTip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        autoQuitScrollContent.addSubview(autoQuitTip)
-
-        NSLayoutConstraint.activate([
-            sec4Title.topAnchor.constraint(equalTo: autoQuitScrollContent.topAnchor, constant: 14),
-            sec4Title.leadingAnchor.constraint(equalTo: autoQuitScrollContent.leadingAnchor, constant: 28),
-
-            card4.topAnchor.constraint(equalTo: sec4Title.bottomAnchor, constant: 8),
-            card4.leadingAnchor.constraint(equalTo: autoQuitScrollContent.leadingAnchor, constant: 28),
-            card4.trailingAnchor.constraint(equalTo: autoQuitScrollContent.trailingAnchor, constant: -28),
-
-            autoQuitTip.topAnchor.constraint(equalTo: card4.bottomAnchor, constant: 10),
-            autoQuitTip.leadingAnchor.constraint(equalTo: autoQuitScrollContent.leadingAnchor, constant: 32),
-            autoQuitTip.trailingAnchor.constraint(equalTo: autoQuitScrollContent.trailingAnchor, constant: -28),
-            autoQuitTip.bottomAnchor.constraint(equalTo: autoQuitScrollContent.bottomAnchor, constant: -28)
-        ])
-
-        pages = [launchPage, panelPage, permPage, autoQuitPage]
+        pages = [triggerPage, behaviorPage, layoutPage]
         for (idx, page) in pages.enumerated() {
             page.translatesAutoresizingMaskIntoConstraints = false
             pageContainer.addSubview(page)
@@ -525,172 +502,44 @@ public final class GeneralTabView: NSView {
         }
     }
 
+    public func showPage(_ index: Int) {
+        guard index >= 0 && index < pages.count else { return }
+        for (i, p) in pages.enumerated() {
+            p.isHidden = (i != index)
+        }
+    }
+
     public func refresh() {
         let cfg = ConfigManager.shared.config
         shelfSwitch.state = cfg.enableShelfPanel ? .on : .off
-        searchSwitch.state = cfg.enableSearchPanel ? .on : .off
         shelfSwitch.isEnabled = cfg.enableSearchPanel
-        searchSwitch.isEnabled = cfg.enableShelfPanel
+        let enabled = cfg.enableShelfPanel
+
+        shelfRecorder?.isEnabled = enabled
+        shelfRecorder?.currentBinding = cfg.shelfHotkey
+        trackpadGesturePopUp.isEnabled = enabled
+        if let idx = ShelfTrackpadGesture.allCases.firstIndex(of: cfg.shelfTrackpadGesture) {
+            trackpadGesturePopUp.selectItem(at: idx)
+        }
+
+        pinSwitch.isEnabled = enabled
         pinSwitch.state = cfg.isShelfPinned ? .on : .off
-        refreshLaunchOnLogin()
-        refreshAutoQuitPage()
-    }
+        autoCloseLaunchSwitch.isEnabled = enabled
+        autoCloseLaunchSwitch.state = cfg.autoCloseOnLaunch ? .on : .off
+        autoCloseMouseExitSwitch.isEnabled = enabled
+        autoCloseMouseExitSwitch.state = cfg.autoCloseOnMouseExit ? .on : .off
 
-    private func refreshAutoQuitPage() {
-        guard autoQuitSwitch != nil else { return }
-        let cfg = ConfigManager.shared.config
-        autoQuitSwitch.state = cfg.enableAutoQuit ? .on : .off
-        autoQuitModePopUp.isEnabled = cfg.enableAutoQuit
-        autoQuitDelayPopUp.isEnabled = cfg.enableAutoQuit
-        autoQuitRulesButton.isEnabled = true
+        orientationControl.isEnabled = enabled
+        orientationControl.selectedSegment = (cfg.categoryOrientation == .vertical) ? 1 : 0
 
-        if let modeIdx = AutoQuitMode.allCases.firstIndex(of: cfg.autoQuitMode) {
-            autoQuitModePopUp.selectItem(at: modeIdx)
-        }
-        if let delayIdx = autoQuitDelayOptions.firstIndex(where: { $0.seconds == cfg.autoQuitDelaySeconds }) {
-            autoQuitDelayPopUp.selectItem(at: delayIdx)
-        } else {
-            // 手改配置出现的非预设值：选最接近的预设，避免显示过期选项
-            let nearest = autoQuitDelayOptions.enumerated().min {
-                abs($0.element.seconds - cfg.autoQuitDelaySeconds) < abs($1.element.seconds - cfg.autoQuitDelaySeconds)
-            }?.offset ?? 2
-            autoQuitDelayPopUp.selectItem(at: nearest)
-        }
-        let currentRules = cfg.rules(for: cfg.autoQuitMode)
-        switch cfg.autoQuitMode {
-        case .allApps:
-            autoQuitRulesButton.title = "编辑排除名单 (\(currentRules.count))..."
-        case .onlyListed:
-            autoQuitRulesButton.title = "编辑退出名单 (\(currentRules.count))..."
-        }
+        iconSizeSlider.isEnabled = enabled
+        iconSizeSlider.doubleValue = cfg.shelfIconScale * 100.0
+        let pct = Int(round(cfg.shelfIconScale * 100.0))
+        iconSizeBadge.stringValue = "\(pct)%"
+        resetScaleButton.isEnabled = enabled && (pct != 100)
 
-        let trusted = HotkeyManager.isAccessibilityTrusted()
-        autoQuitPermissionLabel.stringValue = trusted ? "已授权" : "未授权"
-        autoQuitPermissionLabel.textColor = trusted ? .systemGreen : .systemOrange
-    }
-
-    @objc private func toggleAutoQuit(_ sender: NSSwitch) {
-        let desired = (sender.state == .on)
-        guard desired else {
-            ConfigManager.shared.updateEnableAutoQuit(false)
-            return
-        }
-        if HotkeyManager.isAccessibilityTrusted() {
-            ConfigManager.shared.updateEnableAutoQuit(true)
-            return
-        }
-        // 授权引导只在用户显式点击开关时出现；refresh() 绝不触发系统弹窗（--test 环境安全）
-        let alert = NSAlert()
-        alert.messageText = "「窗口退出」需要辅助功能授权"
-        alert.informativeText = "监听其他应用窗口的关闭事件，需要 macOS「系统设置」->「隐私与安全性」->「辅助功能」中允许 ATools。\n\nATools 仅感知窗口数量变化，绝不读取任何窗口内容或键入信息。是否前往授权？"
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "前往系统设置")
-        alert.addButton(withTitle: "暂不开启")
-        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
-            HotkeyManager.openAccessibilitySettings()
-            // 保存开关；在授权完成前 AutoQuitManager 保持空闲，授权后切回应用即热启动
-            ConfigManager.shared.updateEnableAutoQuit(true)
-        } else {
-            sender.state = .off
-        }
-    }
-
-    @objc private func autoQuitModeChanged(_ sender: NSPopUpButton) {
-        let modes = AutoQuitMode.allCases
-        guard modes.indices.contains(sender.indexOfSelectedItem) else { return }
-        ConfigManager.shared.updateAutoQuitMode(modes[sender.indexOfSelectedItem])
-        refreshAutoQuitPage()
-    }
-
-    @objc private func autoQuitDelayChanged(_ sender: NSPopUpButton) {
-        guard autoQuitDelayOptions.indices.contains(sender.indexOfSelectedItem) else { return }
-        ConfigManager.shared.updateAutoQuitDelaySeconds(autoQuitDelayOptions[sender.indexOfSelectedItem].seconds)
-    }
-
-    @objc private func openAutoQuitAccessibility() {
-        HotkeyManager.openAccessibilitySettings()
-    }
-
-    @objc private func openAutoQuitRulesEditor() {
-        guard let hostWindow = window else { return }
-        // 防重入：连点两次会让第二个 beginSheet 排队，叠加上一次的呈现耗时
-        // 造成可感知的卡顿（见 CHANGELOG 十-修复记录）。
-        guard hostWindow.attachedSheet == nil else {
-            runtimeLog("[AutoQuit] rules sheet already attached; ignoring re-entrant open")
-            return
-        }
-        let t0 = Date()
-        let mode = ConfigManager.shared.config.autoQuitMode
-        let sheet = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 470, height: 430),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        sheet.title = (mode == .allApps) ? "AutoQuit 排除名单" : "AutoQuit 退出名单"
-        sheet.isReleasedWhenClosed = false
-        sheet.contentMinSize = NSSize(width: 470, height: 430)
-        sheet.contentMaxSize = NSSize(width: 470, height: 430)
-        sheet.setContentSize(NSSize(width: 470, height: 430))
-        sheet.contentView = AutoQuitRulesEditorView(frame: NSRect(x: 0, y: 0, width: 470, height: 430), mode: mode)
-        let constructDone = Date()
-        // 在 completion 闭包里强持有 sheet，endSheet 关闭后由 ARC 安全释放（不泄漏不悬垂）
-        hostWindow.beginSheet(sheet) { _ in
-            _ = sheet
-        }
-        runtimeLog("[AutoQuit] rules sheet: construct=\(String(format: "%.0f", constructDone.timeIntervalSince(t0) * 1000))ms present=\(String(format: "%.0f", Date().timeIntervalSince(constructDone) * 1000))ms")
-    }
-
-    @objc private func toggleLaunchOnLogin(_ sender: NSSwitch) {
-        let desired = (sender.state == .on)
-        do {
-            let newState = try LaunchAtLoginController.shared.setEnabled(desired)
-            if newState == .requiresApproval {
-                NSSound.beep()
-                let alert = NSAlert()
-                alert.messageText = "需要系统授权"
-                alert.informativeText = "请在「系统设置」->「通用」->「登录项」中允许 ATools 开机自启。"
-                alert.addButton(withTitle: "打开系统设置")
-                alert.addButton(withTitle: "好")
-                if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
-                    LaunchAtLoginController.shared.openLoginItemsSettings()
-                }
-            }
-        } catch {
-            NSSound.beep()
-        }
-        refreshLaunchOnLogin()
-    }
-
-    private func refreshLaunchOnLogin() {
-        guard let launchOnLoginSwitch = launchOnLoginSwitch else { return }
-        let supported = LaunchAtLoginController.shared.isSupported
-        launchOnLoginSwitch.isEnabled = supported
-        launchOnLoginSwitch.state = LaunchAtLoginController.shared.isEnabled ? .on : .off
-    }
-
-    @objc private func togglePin(_ sender: NSSwitch) {
-        ConfigManager.shared.updateIsShelfPinned(sender.state == .on)
-        PanelCoordinator.shared.refreshShelfPinState()
-    }
-
-    private func showPage(_ index: Int) {
-        guard pages.indices.contains(index) else { return }
-        for (idx, page) in pages.enumerated() {
-            page.isHidden = (idx != index)
-        }
-    }
-
-    @objc private func toggleAutoCloseLaunch(_ sender: NSSwitch) {
-        ConfigManager.shared.updateAutoCloseOnLaunch(sender.state == .on)
-    }
-
-    @objc private func toggleAutoCloseMouseExit(_ sender: NSSwitch) {
-        ConfigManager.shared.updateAutoCloseOnMouseExit(sender.state == .on)
-    }
-
-    @objc private func toggleAutoCloseDeactivate(_ sender: NSSwitch) {
-        ConfigManager.shared.updateAutoCloseOnDeactivate(sender.state == .on)
+        favoritesSwitch.isEnabled = enabled
+        favoritesSwitch.state = cfg.enableFavoritesCategory ? .on : .off
     }
 
     @objc private func toggleShelfPanel(_ sender: NSSwitch) {
@@ -710,314 +559,44 @@ public final class GeneralTabView: NSView {
         }
     }
 
-    @objc private func toggleSearchPanel(_ sender: NSSwitch) {
-        let desired = (sender.state == .on)
-        if !ConfigManager.shared.updateEnableSearchPanel(desired) {
+    private func handleShelfRecorded(_ newBinding: HotkeyBinding) {
+        let currentSearch = ConfigManager.shared.config.searchHotkey
+        if newBinding == currentSearch {
             NSSound.beep()
-            sender.state = .on
-        } else {
-            if desired {
-                HotkeyManager.shared.register(id: .search, binding: ConfigManager.shared.config.searchHotkey)
-            } else {
-                HotkeyManager.shared.unregister(id: .search)
-                PanelCoordinator.shared.searchPanel.orderOut(nil)
-            }
-            NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
-            refresh()
-        }
-    }
-
-    @objc private func openFDA() {
-        if #available(macOS 13.0, *), let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-            NSWorkspace.shared.open(url)
+            let alert = NSAlert()
+            alert.messageText = "快捷键冲突"
+            alert.informativeText = "该快捷键已被「全盘搜索中枢」占用。请录入其他组合键，或前往全盘搜索设置调整。"
+            alert.runModalAboveFloatingWindows()
+            shelfRecorder?.currentBinding = ConfigManager.shared.config.shelfHotkey
             return
         }
-        let script = "tell application \"System Settings\"\nactivate\nend tell"
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-        }
+        ConfigManager.shared.updateShelfHotkey(newBinding)
+        HotkeyManager.shared.register(id: .shelf, binding: newBinding)
     }
 
-    @objc private func openKeyboardSettings() {
-        HotkeyManager.shared.openSystemKeyboardSettings()
-    }
-
-    @objc private func openControlCenterSettings() {
-        if #available(macOS 13.0, *), let url = URL(string: "x-apple.systempreferences:com.apple.ControlCenter-Settings.extension") {
-            if NSWorkspace.shared.open(url) { return }
-        }
-        let script = "tell application \"System Settings\"\nactivate\nend tell"
-        if let appleScript = NSAppleScript(source: script) {
-            var error: NSDictionary?
-            appleScript.executeAndReturnError(&error)
-        }
-    }
-}
-
-// MARK: - 2. Shelf Tab View
-public final class ShelfTabView: NSView {
-    private var orientationControl: NSSegmentedControl!
-    private var iconSizeSlider: NSSlider!
-    private var iconSizeBadge: NSTextField!
-    private var trackpadGesturePopUp: NSPopUpButton!
-    private var favoritesSwitch: NSSwitch!
-    private var pageContainer: NSView!
-    private var pages: [NSView] = []
-    private var headerView: SettingsHeaderView!
-
-    public init() {
-        super.init(frame: .zero)
-        setupUI()
-        refresh()
-    }
-
-    required init?(coder: NSCoder) { super.init(coder: coder) }
-
-    private func setupUI() {
-        translatesAutoresizingMaskIntoConstraints = false
-
-        headerView = SettingsHeaderView(title: "应用抽屉", iconName: "square.grid.2x2", tabs: ["布局与排版", "分类管理"])
-        addSubview(headerView)
-
-        pageContainer = NSView()
-        pageContainer.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(pageContainer)
-
-        NSLayoutConstraint.activate([
-            headerView.topAnchor.constraint(equalTo: topAnchor),
-            headerView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            headerView.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            pageContainer.topAnchor.constraint(equalTo: headerView.bottomAnchor),
-            pageContainer.leadingAnchor.constraint(equalTo: leadingAnchor),
-            pageContainer.trailingAnchor.constraint(equalTo: trailingAnchor),
-            pageContainer.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
-        // Page 0: 布局与排版
-        let layoutPage = NSView()
-        let layoutScrollContent = NSView()
-        let layoutScroll = makeTabScrollView(contentView: layoutScrollContent)
-        layoutPage.addSubview(layoutScroll)
-        NSLayoutConstraint.activate([
-            layoutScroll.topAnchor.constraint(equalTo: layoutPage.topAnchor),
-            layoutScroll.leadingAnchor.constraint(equalTo: layoutPage.leadingAnchor),
-            layoutScroll.trailingAnchor.constraint(equalTo: layoutPage.trailingAnchor),
-            layoutScroll.bottomAnchor.constraint(equalTo: layoutPage.bottomAnchor)
-        ])
-
-        let sec1Title = makeSectionHeader(title: "排版与尺寸")
-        layoutScrollContent.addSubview(sec1Title)
-
-        let card1 = SettingsCardView()
-        card1.translatesAutoresizingMaskIntoConstraints = false
-        layoutScrollContent.addSubview(card1)
-
-        orientationControl = NSSegmentedControl(labels: ["横向排版 (顶部标签)", "纵向排版 (左侧侧边栏)"], trackingMode: .selectOne, target: self, action: #selector(orientationChanged(_:)))
-        let rowOrient = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "rectangle.split.2x1"),
-            title: "抽屉排版方向",
-            subtitle: "支持横向顶部胶囊标签或纵向侧边导航",
-            accessory: orientationControl
-        )
-        card1.addRow(rowOrient)
-
-        let scaleContainer = NSView()
-        scaleContainer.translatesAutoresizingMaskIntoConstraints = false
-
-        iconSizeSlider = NSSlider(value: 100, minValue: 70, maxValue: 130, target: self, action: #selector(scaleSliderChanged(_:)))
-        iconSizeSlider.translatesAutoresizingMaskIntoConstraints = false
-        iconSizeSlider.numberOfTickMarks = 5
-        iconSizeSlider.allowsTickMarkValuesOnly = true
-        iconSizeSlider.isContinuous = true
-        scaleContainer.addSubview(iconSizeSlider)
-
-        let badgeContainer = NSView()
-        badgeContainer.translatesAutoresizingMaskIntoConstraints = false
-        badgeContainer.wantsLayer = true
-        badgeContainer.layer?.cornerRadius = 10
-        badgeContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
-        scaleContainer.addSubview(badgeContainer)
-
-        iconSizeBadge = NSTextField(labelWithString: "100%（默认）")
-        iconSizeBadge.translatesAutoresizingMaskIntoConstraints = false
-        iconSizeBadge.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        iconSizeBadge.textColor = .labelColor
-        badgeContainer.addSubview(iconSizeBadge)
-
-        NSLayoutConstraint.activate([
-            scaleContainer.widthAnchor.constraint(equalToConstant: 260),
-            scaleContainer.heightAnchor.constraint(equalToConstant: 28),
-
-            iconSizeSlider.leadingAnchor.constraint(equalTo: scaleContainer.leadingAnchor),
-            iconSizeSlider.centerYAnchor.constraint(equalTo: scaleContainer.centerYAnchor),
-            iconSizeSlider.trailingAnchor.constraint(equalTo: badgeContainer.leadingAnchor, constant: -10),
-
-            badgeContainer.trailingAnchor.constraint(equalTo: scaleContainer.trailingAnchor),
-            badgeContainer.centerYAnchor.constraint(equalTo: scaleContainer.centerYAnchor),
-            badgeContainer.heightAnchor.constraint(equalToConstant: 20),
-
-            iconSizeBadge.leadingAnchor.constraint(equalTo: badgeContainer.leadingAnchor, constant: 6),
-            iconSizeBadge.trailingAnchor.constraint(equalTo: badgeContainer.trailingAnchor, constant: -6),
-            iconSizeBadge.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor)
-        ])
-
-        let rowScale = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "app.dashed"),
-            title: "图标缩放比例",
-            subtitle: "支持 70% ~ 130% 五档缩放",
-            accessory: scaleContainer
-        )
-        card1.addRow(rowScale, isLast: true)
-
-        let secGestureTitle = makeSectionHeader(title: "唤出与触控手势")
-        layoutScrollContent.addSubview(secGestureTitle)
-
-        let cardGesture = SettingsCardView()
-        cardGesture.translatesAutoresizingMaskIntoConstraints = false
-        layoutScrollContent.addSubview(cardGesture)
-
-        trackpadGesturePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
-        trackpadGesturePopUp.translatesAutoresizingMaskIntoConstraints = false
-        trackpadGesturePopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
-        for gesture in ShelfTrackpadGesture.allCases {
-            trackpadGesturePopUp.addItem(withTitle: gesture.title)
-        }
-        trackpadGesturePopUp.target = self
-        trackpadGesturePopUp.action = #selector(trackpadGestureChanged(_:))
-
-        let rowGesture = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.point.up.left"),
-            title: "触控板手势唤出",
-            subtitle: "在触控板上触发手势即可直接呼出或收回抽屉面板",
-            accessory: trackpadGesturePopUp
-        )
-        cardGesture.addRow(rowGesture, isLast: true)
-
-        let gestureTipLabel = NSTextField(labelWithString: "💡 提示：四指轻点与系统快捷手势完全不冲突（推荐首选）；若选用三指轻点，请确保系统「三指轻点查询」已调整或关闭。")
-        gestureTipLabel.translatesAutoresizingMaskIntoConstraints = false
-        gestureTipLabel.font = NSFont.systemFont(ofSize: 11)
-        gestureTipLabel.textColor = .secondaryLabelColor
-        gestureTipLabel.cell?.wraps = true
-        gestureTipLabel.maximumNumberOfLines = 2
-        gestureTipLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        layoutScrollContent.addSubview(gestureTipLabel)
-
-        NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: layoutScrollContent.topAnchor, constant: 14),
-            sec1Title.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
-
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
-            card1.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
-            card1.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
-
-            secGestureTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 18),
-            secGestureTitle.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
-
-            cardGesture.topAnchor.constraint(equalTo: secGestureTitle.bottomAnchor, constant: 8),
-            cardGesture.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
-            cardGesture.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
-
-            gestureTipLabel.topAnchor.constraint(equalTo: cardGesture.bottomAnchor, constant: 6),
-            gestureTipLabel.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 32),
-            gestureTipLabel.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
-            gestureTipLabel.bottomAnchor.constraint(equalTo: layoutScrollContent.bottomAnchor, constant: -28)
-        ])
-
-        // Page 1: 分类管理
-        let categoryPage = NSView()
-        let categoryScrollContent = NSView()
-        let categoryScroll = makeTabScrollView(contentView: categoryScrollContent)
-        categoryPage.addSubview(categoryScroll)
-        NSLayoutConstraint.activate([
-            categoryScroll.topAnchor.constraint(equalTo: categoryPage.topAnchor),
-            categoryScroll.leadingAnchor.constraint(equalTo: categoryPage.leadingAnchor),
-            categoryScroll.trailingAnchor.constraint(equalTo: categoryPage.trailingAnchor),
-            categoryScroll.bottomAnchor.constraint(equalTo: categoryPage.bottomAnchor)
-        ])
-
-        let sec2Title = makeSectionHeader(title: "分类与标签")
-        categoryScrollContent.addSubview(sec2Title)
-
-        let card2 = SettingsCardView()
-        card2.translatesAutoresizingMaskIntoConstraints = false
-        categoryScrollContent.addSubview(card2)
-
-        favoritesSwitch = NSSwitch()
-        favoritesSwitch.target = self
-        favoritesSwitch.action = #selector(toggleFavorites(_:))
-        let rowFav = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "star.fill"),
-            title: "启用「常用」应用标签分类",
-            subtitle: "开启后自动智能扫描系统装机常用 App 并置顶展示；关闭时自动清空",
-            accessory: favoritesSwitch
-        )
-        card2.addRow(rowFav, isLast: true)
-
-        let tipLabel = NSTextField(labelWithString: "💡 提示：在抽屉面板任意标签或空白处右键，可快速新建、重命名或安全删除分类。")
-        tipLabel.translatesAutoresizingMaskIntoConstraints = false
-        tipLabel.font = NSFont.systemFont(ofSize: 11)
-        tipLabel.textColor = .secondaryLabelColor
-        categoryScrollContent.addSubview(tipLabel)
-
-        NSLayoutConstraint.activate([
-            sec2Title.topAnchor.constraint(equalTo: categoryScrollContent.topAnchor, constant: 14),
-            sec2Title.leadingAnchor.constraint(equalTo: categoryScrollContent.leadingAnchor, constant: 28),
-
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
-            card2.leadingAnchor.constraint(equalTo: categoryScrollContent.leadingAnchor, constant: 28),
-            card2.trailingAnchor.constraint(equalTo: categoryScrollContent.trailingAnchor, constant: -28),
-
-            tipLabel.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 8),
-            tipLabel.leadingAnchor.constraint(equalTo: categoryScrollContent.leadingAnchor, constant: 32),
-            tipLabel.bottomAnchor.constraint(equalTo: categoryScrollContent.bottomAnchor, constant: -28)
-        ])
-
-        pages = [layoutPage, categoryPage]
-        for (idx, page) in pages.enumerated() {
-            page.translatesAutoresizingMaskIntoConstraints = false
-            pageContainer.addSubview(page)
-            NSLayoutConstraint.activate([
-                page.topAnchor.constraint(equalTo: pageContainer.topAnchor),
-                page.leadingAnchor.constraint(equalTo: pageContainer.leadingAnchor),
-                page.trailingAnchor.constraint(equalTo: pageContainer.trailingAnchor),
-                page.bottomAnchor.constraint(equalTo: pageContainer.bottomAnchor)
-            ])
-            page.isHidden = (idx != 0)
-        }
-
-        headerView.onSegmentChanged = { [weak self] index in
-            self?.showPage(index)
-        }
-    }
-
-    public func refresh() {
-        let cfg = ConfigManager.shared.config
-        orientationControl.selectedSegment = (cfg.categoryOrientation == .vertical) ? 1 : 0
-        iconSizeSlider.doubleValue = cfg.shelfIconScale * 100.0
-        let pct = Int(round(cfg.shelfIconScale * 100.0))
-        iconSizeBadge.stringValue = (pct == 100) ? "100%（默认）" : "\(pct)%"
-        favoritesSwitch.state = cfg.enableFavoritesCategory ? .on : .off
-        if let idx = ShelfTrackpadGesture.allCases.firstIndex(of: cfg.shelfTrackpadGesture) {
-            trackpadGesturePopUp.selectItem(at: idx)
-        }
-        trackpadGesturePopUp.isEnabled = cfg.enableShelfPanel
+    private func handleShelfCleared() {
+        let unassigned = HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "", specialTrigger: .none)
+        ConfigManager.shared.updateShelfHotkey(unassigned)
+        HotkeyManager.shared.unregister(id: .shelf)
     }
 
     @objc private func trackpadGestureChanged(_ sender: NSPopUpButton) {
-        let index = sender.indexOfSelectedItem
-        let all = ShelfTrackpadGesture.allCases
-        guard all.indices.contains(index) else { return }
-        let selected = all[index]
+        let gestures = ShelfTrackpadGesture.allCases
+        guard gestures.indices.contains(sender.indexOfSelectedItem) else { return }
+        let selected = gestures[sender.indexOfSelectedItem]
         ConfigManager.shared.updateShelfTrackpadGesture(selected)
     }
 
-    private func showPage(_ index: Int) {
-        guard pages.indices.contains(index) else { return }
-        for (idx, page) in pages.enumerated() {
-            page.isHidden = (idx != index)
-        }
+    @objc private func togglePin(_ sender: NSSwitch) {
+        ConfigManager.shared.updateIsShelfPinned(sender.state == .on)
+    }
+
+    @objc private func toggleAutoCloseLaunch(_ sender: NSSwitch) {
+        ConfigManager.shared.updateAutoCloseOnLaunch(sender.state == .on)
+    }
+
+    @objc private func toggleAutoCloseMouseExit(_ sender: NSSwitch) {
+        ConfigManager.shared.updateAutoCloseOnMouseExit(sender.state == .on)
     }
 
     @objc private func orientationChanged(_ sender: NSSegmentedControl) {
@@ -1030,12 +609,16 @@ public final class ShelfTabView: NSView {
         let val = round(sender.doubleValue)
         let scale = val / 100.0
         let pct = Int(val)
-        iconSizeBadge.stringValue = (pct == 100) ? "100%（默认）" : "\(pct)%"
-        // A continuous slider fires for every drag event; only react to real value changes
-        // (each change rebuilds the grid and re-snaps the shelf window).
+        iconSizeBadge.stringValue = "\(pct)%"
+        resetScaleButton.isEnabled = (pct != 100)
         guard abs(scale - ConfigManager.shared.config.shelfIconScale) > 0.001 else { return }
         ConfigManager.shared.updateShelfIconScale(scale)
         NotificationCenter.default.post(name: .atoolsShelfIconSizeDidChange, object: nil)
+    }
+
+    @objc private func resetScaleToDefault() {
+        iconSizeSlider.doubleValue = 100.0
+        scaleSliderChanged(iconSizeSlider)
     }
 
     @objc private func toggleFavorites(_ sender: NSSwitch) {
@@ -1046,6 +629,8 @@ public final class ShelfTabView: NSView {
 
 // MARK: - 3. Search Tab View
 public final class SearchTabView: NSView, NSTextFieldDelegate {
+    public private(set) var searchRecorder: HotkeyRecorderControl?
+    private var searchSwitch: NSSwitch!
     private var diskSearchSwitch: NSSwitch!
     private var autoPasteSwitch: NSSwitch!
     private var dictSwitch: NSSwitch!
@@ -1079,7 +664,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     private func setupUI() {
         translatesAutoresizingMaskIntoConstraints = false
 
-        headerView = SettingsHeaderView(title: "全盘搜索", iconName: "magnifyingglass", tabs: ["搜索选项", "排除范围", "扩展功能", "网络搜索"])
+        headerView = SettingsHeaderView(title: "全盘搜索", iconName: "magnifyingglass", tabs: ["搜索选项", "排除范围", "扩展与平替", "网络搜索"])
         addSubview(headerView)
 
         pageContainer = NSView()
@@ -1108,6 +693,43 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             optionsScroll.trailingAnchor.constraint(equalTo: optionsPage.trailingAnchor),
             optionsScroll.bottomAnchor.constraint(equalTo: optionsPage.bottomAnchor)
         ])
+
+        // Section 0: 启用与呼出快捷键
+        let sec0Title = makeSectionHeader(title: "启用与呼出快捷键")
+        optionsScrollContent.addSubview(sec0Title)
+
+        let card0 = SettingsCardView()
+        card0.translatesAutoresizingMaskIntoConstraints = false
+        optionsScrollContent.addSubview(card0)
+
+        searchSwitch = NSSwitch()
+        searchSwitch.target = self
+        searchSwitch.action = #selector(toggleSearchPanel(_:))
+        let rowSearch = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "magnifyingglass"),
+            title: "启用全盘搜索中枢",
+            subtitle: "开启后支持快捷键呼出、全盘文件极速检索与内置扩展工具",
+            accessory: searchSwitch
+        )
+        card0.addRow(rowSearch)
+
+        let recorder = HotkeyRecorderControl(binding: ConfigManager.shared.config.searchHotkey)
+        recorder.translatesAutoresizingMaskIntoConstraints = false
+        recorder.widthAnchor.constraint(equalToConstant: 210).isActive = true
+        recorder.onChange = { [weak self] newBinding in
+            self?.handleSearchRecorded(newBinding)
+        }
+        recorder.onClear = { [weak self] in
+            self?.handleSearchCleared()
+        }
+        self.searchRecorder = recorder
+        let rowRecorder = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "keyboard"),
+            title: "专属呼出快捷键",
+            subtitle: "默认 ⌥Space，支持键盘任意组合键或双击修饰键 (如 2× ⌥)",
+            accessory: recorder
+        )
+        card0.addRow(rowRecorder, isLast: true)
 
         let sec1Title = makeSectionHeader(title: "搜索选项与结果数量")
         optionsScrollContent.addSubview(sec1Title)
@@ -1148,7 +770,14 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         card1.addRow(rowAutoPaste, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: optionsScrollContent.topAnchor, constant: 14),
+            sec0Title.topAnchor.constraint(equalTo: optionsScrollContent.topAnchor, constant: 14),
+            sec0Title.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
+
+            card0.topAnchor.constraint(equalTo: sec0Title.bottomAnchor, constant: 8),
+            card0.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
+            card0.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28),
+
+            sec1Title.topAnchor.constraint(equalTo: card0.bottomAnchor, constant: 20),
             sec1Title.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
 
             card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
@@ -1293,10 +922,10 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         cardPreset.addRow(rowHidden, isLast: true)
 
         NSLayoutConstraint.activate([
-            secPresetTitle.topAnchor.constraint(equalTo: exclusionScrollContent.topAnchor, constant: 14),
+            secPresetTitle.topAnchor.constraint(equalTo: exclusionScrollContent.topAnchor, constant: 10),
             secPresetTitle.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
 
-            cardPreset.topAnchor.constraint(equalTo: secPresetTitle.bottomAnchor, constant: 8),
+            cardPreset.topAnchor.constraint(equalTo: secPresetTitle.bottomAnchor, constant: 6),
             cardPreset.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
             cardPreset.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28)
         ])
@@ -1351,17 +980,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         exclusionScrollContent.addSubview(exclusionTipLabel)
 
         NSLayoutConstraint.activate([
-            secCustomTitle.topAnchor.constraint(equalTo: cardPreset.bottomAnchor, constant: 20),
+            secCustomTitle.topAnchor.constraint(equalTo: cardPreset.bottomAnchor, constant: 12),
             secCustomTitle.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
 
-            cardCustom.topAnchor.constraint(equalTo: secCustomTitle.bottomAnchor, constant: 8),
+            cardCustom.topAnchor.constraint(equalTo: secCustomTitle.bottomAnchor, constant: 6),
             cardCustom.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
             cardCustom.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28),
 
-            exclusionTipLabel.topAnchor.constraint(equalTo: cardCustom.bottomAnchor, constant: 12),
+            exclusionTipLabel.topAnchor.constraint(equalTo: cardCustom.bottomAnchor, constant: 10),
             exclusionTipLabel.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
             exclusionTipLabel.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28),
-            exclusionTipLabel.bottomAnchor.constraint(equalTo: exclusionScrollContent.bottomAnchor, constant: -28)
+            exclusionTipLabel.bottomAnchor.constraint(equalTo: exclusionScrollContent.bottomAnchor, constant: -12)
         ])
         reloadCustomExclusionRows()
 
@@ -1406,6 +1035,48 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         )
         card2.addRow(rowDict, isLast: true)
 
+        let secSpotTitle = makeSectionHeader(title: "Spotlight 权威平替指引")
+        extScrollContent.addSubview(secSpotTitle)
+
+        let cardSpot = SettingsCardView()
+        cardSpot.translatesAutoresizingMaskIntoConstraints = false
+        extScrollContent.addSubview(cardSpot)
+
+        let setCmdSpaceBtn = SettingsPillButton(title: "设为 ⌘Space", target: self, action: #selector(setCommandSpaceHotkey))
+        let rowSetCmdSpace = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
+            title: "一键将全盘搜索快捷键设为 ⌘Space",
+            subtitle: "无缝替代系统聚焦呼出体验，若系统快捷键冲突，请前往下方系统设置关闭",
+            accessory: setCmdSpaceBtn
+        )
+        cardSpot.addRow(rowSetCmdSpace)
+
+        let openKbBtn = SettingsPillButton(title: "系统键盘设置...", target: self, action: #selector(openKeyboardSettings))
+        let rowKb = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "keyboard"),
+            title: "打开系统键盘快捷键设置",
+            subtitle: "前往「键盘」->「键盘快捷键」->「聚焦」，取消勾选“显示聚焦搜索”",
+            accessory: openKbBtn
+        )
+        cardSpot.addRow(rowKb)
+
+        let openCcBtn = SettingsPillButton(title: "控制中心设置...", target: self, action: #selector(openControlCenterSettings))
+        let rowCc = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "switch.2"),
+            title: "打开系统控制中心设置",
+            subtitle: "前往「控制中心」->「聚焦」，可从 macOS 顶部菜单栏移除系统聚焦图标",
+            accessory: openCcBtn
+        )
+        cardSpot.addRow(rowCc, isLast: true)
+
+        let spotlightTip = NSTextField(labelWithString: "提示：将系统聚焦快捷键取消后，⌘Space 将由 ATools 独占接管，提供毫秒级全盘搜索。")
+        spotlightTip.translatesAutoresizingMaskIntoConstraints = false
+        spotlightTip.font = NSFont.systemFont(ofSize: 11)
+        spotlightTip.textColor = .secondaryLabelColor
+        spotlightTip.cell?.wraps = true
+        spotlightTip.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        extScrollContent.addSubview(spotlightTip)
+
         NSLayoutConstraint.activate([
             sec2Title.topAnchor.constraint(equalTo: extScrollContent.topAnchor, constant: 14),
             sec2Title.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
@@ -1413,7 +1084,18 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
             card2.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: extScrollContent.trailingAnchor, constant: -28),
-            card2.bottomAnchor.constraint(equalTo: extScrollContent.bottomAnchor, constant: -28)
+
+            secSpotTitle.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 20),
+            secSpotTitle.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
+
+            cardSpot.topAnchor.constraint(equalTo: secSpotTitle.bottomAnchor, constant: 8),
+            cardSpot.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
+            cardSpot.trailingAnchor.constraint(equalTo: extScrollContent.trailingAnchor, constant: -28),
+
+            spotlightTip.topAnchor.constraint(equalTo: cardSpot.bottomAnchor, constant: 12),
+            spotlightTip.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 32),
+            spotlightTip.trailingAnchor.constraint(equalTo: extScrollContent.trailingAnchor, constant: -28),
+            spotlightTip.bottomAnchor.constraint(equalTo: extScrollContent.bottomAnchor, constant: -28)
         ])
 
         // Page 2: 网络搜索
@@ -1523,6 +1205,20 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
     public func refresh() {
         let cfg = ConfigManager.shared.config
+        searchSwitch?.state = cfg.enableSearchPanel ? .on : .off
+        searchSwitch?.isEnabled = cfg.enableShelfPanel
+        let enabled = cfg.enableSearchPanel
+
+        searchRecorder?.isEnabled = enabled
+        searchRecorder?.currentBinding = cfg.searchHotkey
+
+        diskSearchSwitch?.isEnabled = enabled
+        autoPasteSwitch?.isEnabled = enabled
+        calcSwitch?.isEnabled = enabled
+        dictSwitch?.isEnabled = enabled
+        limitControl?.isEnabled = enabled
+        webSearchSwitch?.isEnabled = enabled
+
         reloadHotFolderRows()
         reloadCustomExclusionRows()
         diskSearchSwitch.state = cfg.enableFullDiskSearch ? .on : .off
@@ -1786,9 +1482,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         }
 
         let paths = ConfigManager.shared.config.customExcludedPaths
-        if paths.isEmpty {
-            addRow(makeCustomExclusionInfoRow(subtitle: "暂无自定义排除目录。可点击下方按钮添加，或直接从访达将文件夹拖拽至此。"))
-        } else {
+        if !paths.isEmpty {
             for (index, path) in paths.enumerated() {
                 if index > 0 { addRow(makeSeparator()) }
                 addRow(makeCustomExclusionRow(path: path))
@@ -1864,7 +1558,10 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         titleLabel.textColor = .controlAccentColor
         row.addSubview(titleLabel)
 
-        let subtitle = NSTextField(labelWithString: "已添加 \(count)/\(ConfigManager.maxCustomExcludedPaths) · 可点击添加，或直接从访达将文件夹拖拽至此")
+        let desc = (count == 0)
+            ? "暂无自定义排除目录 · 可点击添加，或直接从访达将文件夹拖拽至此"
+            : "已添加 \(count)/\(ConfigManager.maxCustomExcludedPaths) · 可点击添加，或直接从访达将文件夹拖拽至此"
+        let subtitle = NSTextField(labelWithString: desc)
         subtitle.translatesAutoresizingMaskIntoConstraints = false
         subtitle.font = NSFont.systemFont(ofSize: 11)
         subtitle.textColor = .secondaryLabelColor
@@ -2026,250 +1723,50 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             ConfigManager.shared.updateCustomWebSearchURL(tf.stringValue)
         }
     }
-}
 
-// MARK: - 4. Hotkeys Tab View
-public final class HotkeysTabView: NSView {
-    public private(set) var shelfRecorder: HotkeyRecorderControl!
-    public private(set) var searchRecorder: HotkeyRecorderControl!
-
-    public init() {
-        super.init(frame: .zero)
-        setupUI()
-        refresh()
-    }
-
-    required init?(coder: NSCoder) { super.init(coder: coder) }
-
-    private func setupUI() {
-        translatesAutoresizingMaskIntoConstraints = false
-
-        let header = SettingsHeaderView(title: "全局快捷键", iconName: "keyboard")
-        addSubview(header)
-
-        let scrollContent = NSView()
-        scrollContent.translatesAutoresizingMaskIntoConstraints = false
-
-        let scrollView = makeTabScrollView(contentView: scrollContent)
-        addSubview(scrollView)
-
-        NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: topAnchor),
-            header.leadingAnchor.constraint(equalTo: leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            scrollView.topAnchor.constraint(equalTo: header.bottomAnchor),
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-
-        let sec1Title = makeSectionHeader(title: "核心面板快捷键录制")
-        scrollContent.addSubview(sec1Title)
-
-        let card1 = SettingsCardView()
-        card1.translatesAutoresizingMaskIntoConstraints = false
-        scrollContent.addSubview(card1)
-
-        shelfRecorder = HotkeyRecorderControl(binding: ConfigManager.shared.config.shelfHotkey)
-        shelfRecorder.translatesAutoresizingMaskIntoConstraints = false
-        shelfRecorder.widthAnchor.constraint(equalToConstant: 210).isActive = true
-        shelfRecorder.onChange = { [weak self] newBinding in
-            self?.handleShelfRecorded(newBinding)
-        }
-        shelfRecorder.onClear = { [weak self] in
-            self?.handleShelfCleared()
-        }
-        let rowShelf = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "square.grid.2x2"),
-            title: "分类工作台快捷键",
-            subtitle: "默认 ⌥A，支持按下键盘任意组合键或双击修饰键 (如 2× ⌥)",
-            accessory: shelfRecorder
-        )
-        card1.addRow(rowShelf)
-
-        searchRecorder = HotkeyRecorderControl(binding: ConfigManager.shared.config.searchHotkey)
-        searchRecorder.translatesAutoresizingMaskIntoConstraints = false
-        searchRecorder.widthAnchor.constraint(equalToConstant: 210).isActive = true
-        searchRecorder.onChange = { [weak self] newBinding in
-            self?.handleSearchRecorded(newBinding)
-        }
-        searchRecorder.onClear = { [weak self] in
-            self?.handleSearchCleared()
-        }
-        let rowSearch = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "magnifyingglass"),
-            title: "全盘搜索中枢快捷键",
-            subtitle: "默认 ⌥Space，释放系统聚焦后可无缝绑定为 ⌘Space",
-            accessory: searchRecorder
-        )
-        card1.addRow(rowSearch, isLast: true)
-
-        let conflictHint = NSTextField(labelWithString: "💡 提示：若将搜索快捷键设为与抽屉相同，ATools 将自动将两者对调，保证绝不冲突。")
-        conflictHint.translatesAutoresizingMaskIntoConstraints = false
-        conflictHint.font = NSFont.systemFont(ofSize: 11)
-        conflictHint.textColor = .secondaryLabelColor
-        conflictHint.cell?.wraps = true
-        conflictHint.maximumNumberOfLines = 2
-        conflictHint.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        scrollContent.addSubview(conflictHint)
-
-        let sec2Title = makeSectionHeader(title: "系统聚焦 (Spotlight) 冲突排查与平替")
-        scrollContent.addSubview(sec2Title)
-
-        let card2 = SettingsCardView()
-        card2.translatesAutoresizingMaskIntoConstraints = false
-        scrollContent.addSubview(card2)
-
-        let sysBtn = SettingsPillButton(title: "前往系统键盘设置...", target: self, action: #selector(openKeyboardSettings))
-        let rowSys = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
-            title: "释放 Spotlight 快捷键 (⌘Space)",
-            subtitle: "macOS 默认占用了该键。前往「系统设置」->「键盘」->「键盘快捷键」取消聚焦勾选即可释放",
-            accessory: sysBtn
-        )
-        card2.addRow(rowSys)
-
-        let ccBtn = SettingsPillButton(title: "前往控制中心...", target: self, action: #selector(openControlCenterSettings))
-        let rowCC = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "menubar.arrow.up.rectangle"),
-            title: "隐藏系统菜单栏 Spotlight 放大镜",
-            subtitle: "在 macOS「控制中心」将聚焦设为「不在菜单栏中显示」，让菜单栏只保留 ATools 搜索入口",
-            accessory: ccBtn
-        )
-        card2.addRow(rowCC, isLast: true)
-
-        NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
-            sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
-
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
-            card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
-            card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-
-            conflictHint.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 6),
-            conflictHint.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 32),
-            conflictHint.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-
-            sec2Title.topAnchor.constraint(equalTo: conflictHint.bottomAnchor, constant: 18),
-            sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
-
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
-            card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
-            card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
-        ])
-    }
-
-    public func refresh() {
-        let cfg = ConfigManager.shared.config
-        shelfRecorder.currentBinding = cfg.shelfHotkey
-        searchRecorder.currentBinding = cfg.searchHotkey
-        shelfRecorder.isEnabled = cfg.enableShelfPanel
-        searchRecorder.isEnabled = cfg.enableSearchPanel
-    }
-
-    private func handleShelfRecorded(_ binding: HotkeyBinding) {
-        applyRecordedBinding(binding, for: .shelf)
-    }
-
-    /// Applies a freshly recorded binding. When it collides with the other panel's binding the
-    /// two are swapped. Both registrations are released first because Carbon refuses to
-    /// register a key combination that is still held — even by this same process.
-    private func applyRecordedBinding(_ binding: HotkeyBinding, for id: HotKeyID) {
-        let cfg = ConfigManager.shared.config
-        let otherId: HotKeyID = (id == .shelf) ? .search : .shelf
-        let previous = (id == .shelf) ? cfg.shelfHotkey : cfg.searchHotkey
-        let other = (id == .shelf) ? cfg.searchHotkey : cfg.shelfHotkey
-        let isEnabled = (id == .shelf) ? cfg.enableShelfPanel : cfg.enableSearchPanel
-        let isOtherEnabled = (id == .shelf) ? cfg.enableSearchPanel : cfg.enableShelfPanel
-        let recorder: HotkeyRecorderControl = (id == .shelf) ? shelfRecorder : searchRecorder
-        let otherRecorder: HotkeyRecorderControl = (id == .shelf) ? searchRecorder : shelfRecorder
-
-        let collides = !other.isUnassigned
-            && binding.keyCode == other.keyCode
-            && binding.carbonModifiers == other.carbonModifiers
-            && binding.specialTrigger == other.specialTrigger
-
-        if collides {
-            HotkeyManager.shared.unregister(id: .shelf)
-            HotkeyManager.shared.unregister(id: .search)
-        }
-
-        let success = isEnabled ? HotkeyManager.shared.register(id: id, binding: binding) : true
-        guard success else {
-            if collides {
-                HotkeyManager.shared.registerDefaultHotkeys()
+    @objc private func toggleSearchPanel(_ sender: NSSwitch) {
+        let desired = (sender.state == .on)
+        if !ConfigManager.shared.updateEnableSearchPanel(desired) {
+            NSSound.beep()
+            sender.state = .on
+        } else {
+            if desired {
+                HotkeyManager.shared.register(id: .search, binding: ConfigManager.shared.config.searchHotkey)
+            } else {
+                HotkeyManager.shared.unregister(id: .search)
+                PanelCoordinator.shared.searchPanel.orderOut(nil)
             }
-            showConflictAlert(binding: binding, name: id == .shelf ? "应用分类工作台" : "全盘搜索中枢")
-            recorder.currentBinding = previous
+            NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
+            refresh()
+        }
+    }
+
+    private func handleSearchRecorded(_ newBinding: HotkeyBinding) {
+        let currentShelf = ConfigManager.shared.config.shelfHotkey
+        if newBinding == currentShelf {
+            NSSound.beep()
+            let alert = NSAlert()
+            alert.messageText = "快捷键冲突"
+            alert.informativeText = "该快捷键已被「应用分类工作台」占用。请录入其他组合键，或前往应用抽屉设置调整。"
+            alert.runModalAboveFloatingWindows()
+            searchRecorder?.currentBinding = ConfigManager.shared.config.searchHotkey
             return
         }
-
-        if id == .shelf {
-            ConfigManager.shared.updateShelfHotkey(binding)
-        } else {
-            ConfigManager.shared.updateSearchHotkey(binding)
-        }
-        recorder.currentBinding = binding
-
-        if collides {
-            if otherId == .shelf {
-                ConfigManager.shared.updateShelfHotkey(previous)
-            } else {
-                ConfigManager.shared.updateSearchHotkey(previous)
-            }
-            otherRecorder.currentBinding = previous
-            if isOtherEnabled {
-                HotkeyManager.shared.register(id: otherId, binding: previous)
-            }
-        }
-
-        NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
-        checkAccessibilityIfNeeded(for: binding)
-    }
-
-    private func handleShelfCleared() {
-        HotkeyManager.shared.unregister(id: .shelf)
-        ConfigManager.shared.updateShelfHotkey(HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: ""))
-        NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
-    }
-
-    private func handleSearchRecorded(_ binding: HotkeyBinding) {
-        applyRecordedBinding(binding, for: .search)
-    }
-
-    private func checkAccessibilityIfNeeded(for binding: HotkeyBinding) {
-        guard binding.specialTrigger != .none else { return }
-        if !HotkeyManager.isAccessibilityTrusted() {
-            let alert = NSAlert()
-            alert.messageText = "双击修饰键需要「辅助功能」授权"
-            alert.informativeText = "您已设置「\(binding.displayString)」快捷键。\n\nmacOS 安全机制要求：全局感知修饰键轻击需在系统设置中允许 ATools 使用「辅助功能」。\n\nATools 仅监听单键轻敲，绝不记录任何键入内容。是否前往系统设置开启授权？"
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "前往系统设置")
-            alert.addButton(withTitle: "稍后手动开启")
-            if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
-                HotkeyManager.openAccessibilitySettings()
-            }
-        }
+        ConfigManager.shared.updateSearchHotkey(newBinding)
+        HotkeyManager.shared.register(id: .search, binding: newBinding)
     }
 
     private func handleSearchCleared() {
+        let unassigned = HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "", specialTrigger: .none)
+        ConfigManager.shared.updateSearchHotkey(unassigned)
         HotkeyManager.shared.unregister(id: .search)
-        ConfigManager.shared.updateSearchHotkey(HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: ""))
-        NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
     }
 
-    private func showConflictAlert(binding: HotkeyBinding, name: String) {
-        NSSound.beep()
-        let alert = NSAlert()
-        alert.messageText = "快捷键注册失败"
-        alert.informativeText = "快捷键「\(binding.displayString)」未能注册为【\(name)】的热键。\n该快捷键可能已被系统聚焦或其他软件占用。"
-        alert.addButton(withTitle: "前往系统设置...")
-        alert.addButton(withTitle: "好")
-        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
-            HotkeyManager.shared.openSystemKeyboardSettings()
-        }
+    @objc private func setCommandSpaceHotkey() {
+        let display = HotkeyDisplayFormatter.displayString(keyCode: 49, carbonModifiers: 256)
+        let cmdSpace = HotkeyBinding(keyCode: 49, carbonModifiers: 256, displayString: display, specialTrigger: .none)
+        handleSearchRecorded(cmdSpace)
+        searchRecorder?.currentBinding = cmdSpace
     }
 
     @objc private func openKeyboardSettings() {
@@ -2288,11 +1785,14 @@ public final class HotkeysTabView: NSView {
     }
 }
 
+
+
 // MARK: - 5. Theme Tab View
 public final class ThemeTabView: NSView {
     private var themeCards: [ThemeCardView] = []
     private var opacitySlider: NSSlider!
     private var opacityBadge: NSTextField!
+    private var resetOpacityButton: SettingsResetButton!
 
     public init() {
         super.init(frame: .zero)
@@ -2378,40 +1878,38 @@ public final class ThemeTabView: NSView {
         opacitySlider.isContinuous = true
         opacityContainer.addSubview(opacitySlider)
 
-        let badgeContainer = NSView()
-        badgeContainer.translatesAutoresizingMaskIntoConstraints = false
-        badgeContainer.wantsLayer = true
-        badgeContainer.layer?.cornerRadius = 10
-        badgeContainer.layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.72).cgColor
-        opacityContainer.addSubview(badgeContainer)
-
-        opacityBadge = NSTextField(labelWithString: "90%（默认）")
+        opacityBadge = NSTextField(labelWithString: "90%")
         opacityBadge.translatesAutoresizingMaskIntoConstraints = false
-        opacityBadge.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
-        opacityBadge.textColor = .labelColor
-        badgeContainer.addSubview(opacityBadge)
+        opacityBadge.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        opacityBadge.textColor = .secondaryLabelColor
+        opacityBadge.alignment = .left
+        opacityContainer.addSubview(opacityBadge)
+
+        resetOpacityButton = SettingsResetButton(title: "恢复默认", target: self, action: #selector(resetOpacityToDefault))
+        opacityContainer.addSubview(resetOpacityButton)
 
         NSLayoutConstraint.activate([
-            opacityContainer.widthAnchor.constraint(equalToConstant: 260),
-            opacityContainer.heightAnchor.constraint(equalToConstant: 28),
+            opacityContainer.widthAnchor.constraint(equalToConstant: 240),
+            opacityContainer.heightAnchor.constraint(equalToConstant: 24),
 
             opacitySlider.leadingAnchor.constraint(equalTo: opacityContainer.leadingAnchor),
             opacitySlider.centerYAnchor.constraint(equalTo: opacityContainer.centerYAnchor),
-            opacitySlider.trailingAnchor.constraint(equalTo: badgeContainer.leadingAnchor, constant: -10),
+            opacitySlider.widthAnchor.constraint(equalToConstant: 120),
 
-            badgeContainer.trailingAnchor.constraint(equalTo: opacityContainer.trailingAnchor),
-            badgeContainer.centerYAnchor.constraint(equalTo: opacityContainer.centerYAnchor),
-            badgeContainer.heightAnchor.constraint(equalToConstant: 20),
+            opacityBadge.leadingAnchor.constraint(equalTo: opacitySlider.trailingAnchor, constant: 6),
+            opacityBadge.centerYAnchor.constraint(equalTo: opacityContainer.centerYAnchor),
+            opacityBadge.widthAnchor.constraint(equalToConstant: 38),
 
-            opacityBadge.leadingAnchor.constraint(equalTo: badgeContainer.leadingAnchor, constant: 6),
-            opacityBadge.trailingAnchor.constraint(equalTo: badgeContainer.trailingAnchor, constant: -6),
-            opacityBadge.centerYAnchor.constraint(equalTo: badgeContainer.centerYAnchor)
+            resetOpacityButton.leadingAnchor.constraint(equalTo: opacityBadge.trailingAnchor, constant: 8),
+            resetOpacityButton.centerYAnchor.constraint(equalTo: opacityContainer.centerYAnchor),
+            resetOpacityButton.trailingAnchor.constraint(equalTo: opacityContainer.trailingAnchor),
+            resetOpacityButton.heightAnchor.constraint(equalToConstant: 22)
         ])
 
         let rowOpacity = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.below.rectangle"),
             title: "面板背景透明度",
-            subtitle: "40% 轻透玻璃，数值越高玻璃越模糊、遮光越强",
+            subtitle: "40% 轻透玻璃，数值越高遮光越强 (默认 90%)",
             accessory: opacityContainer
         )
         card2.addRow(rowOpacity, isLast: true)
@@ -2441,7 +1939,8 @@ public final class ThemeTabView: NSView {
         }
         opacitySlider.doubleValue = cfg.themeOpacity * 100.0
         let pct = Int(round(cfg.themeOpacity * 100.0))
-        opacityBadge.stringValue = (pct == 90) ? "90%（默认）" : "\(pct)%"
+        opacityBadge.stringValue = "\(pct)%"
+        resetOpacityButton.isEnabled = (pct != 90)
     }
 
     private func handleThemeSelected(_ theme: AppTheme) {
@@ -2456,10 +1955,16 @@ public final class ThemeTabView: NSView {
         let val = round(sender.doubleValue)
         let opacity = val / 100.0
         let pct = Int(val)
-        opacityBadge.stringValue = (pct == 90) ? "90%（默认）" : "\(pct)%"
+        opacityBadge.stringValue = "\(pct)%"
+        resetOpacityButton.isEnabled = (pct != 90)
         guard abs(opacity - ConfigManager.shared.config.themeOpacity) > 0.001 else { return }
         ConfigManager.shared.updateThemeOpacity(opacity)
         // Theme change notification is now posted by ConfigManager
+    }
+
+    @objc private func resetOpacityToDefault() {
+        opacitySlider.doubleValue = 90.0
+        opacitySliderChanged(opacitySlider)
     }
 }
 
@@ -2756,7 +2261,7 @@ public final class AboutTabView: NSView {
         verLabel.textColor = .secondaryLabelColor
         let rowVer = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "sparkles"),
-            title: "ATools for macOS",
+            title: "ATools for macOS (v\(currentVer))",
             subtitle: "极简启动抽屉与全盘秒搜中枢",
             accessory: verLabel
         )

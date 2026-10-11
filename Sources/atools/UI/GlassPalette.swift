@@ -63,6 +63,13 @@ enum GlassPalette {
 extension NSView {
     /// Convenience check used across all glass-styled controls.
     var glassIsDark: Bool {
-        effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        if let win = window {
+            let app = win.appearance ?? win.effectiveAppearance
+            return app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+        if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
+            return true
+        }
+        return ConfigManager.shared.config.theme.isDark
     }
 }

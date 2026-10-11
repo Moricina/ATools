@@ -74,7 +74,7 @@ public struct HotkeyBinding: Codable, Equatable {
     public static let defaultSearch = HotkeyBinding(
         keyCode: 49, // Key 'Space'
         carbonModifiers: 2048, // optionKey in Carbon
-        displayString: "⌥Space",
+        displayString: "⌥空格",
         specialTrigger: .none
     )
 }
