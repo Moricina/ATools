@@ -209,11 +209,11 @@ public final class GeneralTabView: NSView {
 public final class ShelfTabView: NSView {
     public private(set) var shelfRecorder: HotkeyRecorderControl?
     private var shelfSwitch: NSSwitch!
-    private var trackpadGesturePopUp: NSPopUpButton!
+    private var trackpadGesturePopUp: SettingsLiquidPopUpButton!
     private var pinSwitch: NSSwitch!
     private var autoCloseLaunchSwitch: NSSwitch!
     private var autoCloseMouseExitSwitch: NSSwitch!
-    private var orientationControl: NSSegmentedControl!
+    private var orientationControl: SettingsLiquidSegmentedControl!
     private var iconSizeSlider: NSSlider!
     private var iconSizeBadge: NSTextField!
     private var resetScaleButton: SettingsResetButton!
@@ -299,9 +299,9 @@ public final class ShelfTabView: NSView {
         )
         card1.addRow(rowRecorder)
 
-        trackpadGesturePopUp = NSPopUpButton(frame: .zero, pullsDown: false)
+        trackpadGesturePopUp = SettingsLiquidPopUpButton(frame: .zero, pullsDown: false)
         trackpadGesturePopUp.translatesAutoresizingMaskIntoConstraints = false
-        trackpadGesturePopUp.widthAnchor.constraint(equalToConstant: 220).isActive = true
+        trackpadGesturePopUp.widthAnchor.constraint(equalToConstant: 210).isActive = true
         for gesture in ShelfTrackpadGesture.allCases {
             trackpadGesturePopUp.addItem(withTitle: gesture.title)
         }
@@ -406,7 +406,7 @@ public final class ShelfTabView: NSView {
         card3.translatesAutoresizingMaskIntoConstraints = false
         layoutScrollContent.addSubview(card3)
 
-        orientationControl = NSSegmentedControl(labels: ["水平顶部", "垂直左侧"], trackingMode: .selectOne, target: self, action: #selector(orientationChanged(_:)))
+        orientationControl = SettingsLiquidSegmentedControl(labels: ["水平顶部", "垂直左侧"], target: self, action: #selector(orientationChanged(_:)))
         orientationControl.translatesAutoresizingMaskIntoConstraints = false
         orientationControl.widthAnchor.constraint(equalToConstant: 240).isActive = true
         let rowOrient = SettingsRowView(
@@ -599,7 +599,7 @@ public final class ShelfTabView: NSView {
         ConfigManager.shared.updateAutoCloseOnMouseExit(sender.state == .on)
     }
 
-    @objc private func orientationChanged(_ sender: NSSegmentedControl) {
+    @objc private func orientationChanged(_ sender: SettingsLiquidSegmentedControl) {
         let newOrientation: CategoryOrientation = (sender.selectedSegment == 1) ? .vertical : .horizontal
         ConfigManager.shared.updateCategoryOrientation(newOrientation)
         NotificationCenter.default.post(name: .atoolsCategoryOrientationDidChange, object: nil)
@@ -635,9 +635,9 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     private var autoPasteSwitch: NSSwitch!
     private var dictSwitch: NSSwitch!
     private var calcSwitch: NSSwitch!
-    private var limitControl: NSSegmentedControl!
+    private var limitControl: SettingsLiquidSegmentedControl!
     private var webSearchSwitch: NSSwitch!
-    private var enginePopUp: NSPopUpButton!
+    private var enginePopUp: SettingsLiquidPopUpButton!
     private var customURLField: NSTextField!
     private var pageContainer: NSView!
     private var pages: [NSView] = []
@@ -749,7 +749,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         )
         card1.addRow(rowDisk)
 
-        limitControl = NSSegmentedControl(labels: ["30 条", "50 条", "80 条 (推荐)", "120 条"], trackingMode: .selectOne, target: self, action: #selector(limitChanged(_:)))
+        limitControl = SettingsLiquidSegmentedControl(labels: ["30 条", "50 条", "80 条 (推荐)", "120 条"], target: self, action: #selector(limitChanged(_:)))
         let rowLimit = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "list.number"),
             title: "搜索结果条数上限",
@@ -1128,7 +1128,9 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         )
         card3.addRow(rowWebSearch)
 
-        enginePopUp = NSPopUpButton()
+        enginePopUp = SettingsLiquidPopUpButton()
+        enginePopUp.translatesAutoresizingMaskIntoConstraints = false
+        enginePopUp.widthAnchor.constraint(equalToConstant: 210).isActive = true
         enginePopUp.target = self
         enginePopUp.action = #selector(engineChanged(_:))
         for engine in WebSearchEngine.allCases {
@@ -1323,14 +1325,16 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         pathLabel.lineBreakMode = .byTruncatingMiddle
         row.addSubview(pathLabel)
 
-        let removeBtn = NSButton(image: NSImage(systemSymbolName: "minus.circle.fill",
-                                                accessibilityDescription: "移除") ?? NSImage(),
-                                 target: self, action: #selector(removeHotFolderClicked(_:)))
-        removeBtn.translatesAutoresizingMaskIntoConstraints = false
-        removeBtn.isBordered = false
+        let removeBtn = SettingsIconButton(
+            symbolName: "minus.circle.fill",
+            accessibilityLabel: "移除",
+            target: self,
+            action: #selector(removeHotFolderClicked(_:))
+        )
+        removeBtn.normalTintColor = .secondaryLabelColor
+        removeBtn.hoverTintColor = .systemRed
         removeBtn.identifier = NSUserInterfaceItemIdentifier(path)
         removeBtn.toolTip = "从热目录移除"
-        removeBtn.contentTintColor = .secondaryLabelColor
         row.addSubview(removeBtn)
 
         NSLayoutConstraint.activate([
@@ -1373,14 +1377,16 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         subtitle.lineBreakMode = .byTruncatingMiddle
         row.addSubview(subtitle)
 
-        let addBtn = NSButton(image: NSImage(systemSymbolName: "plus.circle.fill",
-                                             accessibilityDescription: "添加") ?? NSImage(),
-                              target: self, action: #selector(addHotFolderClicked(_:)))
-        addBtn.translatesAutoresizingMaskIntoConstraints = false
-        addBtn.isBordered = false
+        let addBtn = SettingsIconButton(
+            symbolName: "plus.circle.fill",
+            accessibilityLabel: "添加",
+            target: self,
+            action: #selector(addHotFolderClicked(_:))
+        )
+        addBtn.normalTintColor = .controlAccentColor
+        addBtn.hoverTintColor = .controlAccentColor
         addBtn.toolTip = "添加热目录"
         addBtn.isEnabled = count < ConfigManager.maxExtraHotFolders
-        addBtn.contentTintColor = .controlAccentColor
         row.addSubview(addBtn)
 
         NSLayoutConstraint.activate([
@@ -1515,14 +1521,16 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         pathLabel.lineBreakMode = .byTruncatingMiddle
         row.addSubview(pathLabel)
 
-        let removeBtn = NSButton(image: NSImage(systemSymbolName: "minus.circle.fill",
-                                                accessibilityDescription: "移除") ?? NSImage(),
-                                 target: self, action: #selector(removeCustomExclusionClicked(_:)))
-        removeBtn.translatesAutoresizingMaskIntoConstraints = false
-        removeBtn.isBordered = false
+        let removeBtn = SettingsIconButton(
+            symbolName: "minus.circle.fill",
+            accessibilityLabel: "移除",
+            target: self,
+            action: #selector(removeCustomExclusionClicked(_:))
+        )
+        removeBtn.normalTintColor = .secondaryLabelColor
+        removeBtn.hoverTintColor = .systemRed
         removeBtn.identifier = NSUserInterfaceItemIdentifier(path)
         removeBtn.toolTip = "从排除目录中移除"
-        removeBtn.contentTintColor = .secondaryLabelColor
         row.addSubview(removeBtn)
 
         NSLayoutConstraint.activate([
@@ -1568,21 +1576,21 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         subtitle.lineBreakMode = .byTruncatingMiddle
         row.addSubview(subtitle)
 
-        let addBtn = NSButton(image: NSImage(systemSymbolName: "plus.circle.fill",
-                                             accessibilityDescription: "添加") ?? NSImage(),
-                              target: self, action: #selector(addCustomExclusionClicked(_:)))
-        addBtn.translatesAutoresizingMaskIntoConstraints = false
-        addBtn.isBordered = false
+        let addBtn = SettingsIconButton(
+            symbolName: "plus.circle.fill",
+            accessibilityLabel: "添加",
+            target: self,
+            action: #selector(addCustomExclusionClicked(_:))
+        )
+        addBtn.normalTintColor = .controlAccentColor
+        addBtn.hoverTintColor = .controlAccentColor
         addBtn.toolTip = "选择文件夹添加至排除黑名单"
         addBtn.isEnabled = count < ConfigManager.maxCustomExcludedPaths
-        addBtn.contentTintColor = .controlAccentColor
         row.addSubview(addBtn)
 
-        let resetBtn = NSButton(title: "恢复默认", target: self, action: #selector(resetCustomExclusionClicked(_:)))
-        resetBtn.translatesAutoresizingMaskIntoConstraints = false
-        resetBtn.bezelStyle = .inline
-        resetBtn.font = NSFont.systemFont(ofSize: 11)
+        let resetBtn = SettingsResetButton(title: "恢复默认", target: self, action: #selector(resetCustomExclusionClicked(_:)))
         resetBtn.toolTip = "清空自定义排除目录"
+        resetBtn.isEnabled = count > 0
         row.addSubview(resetBtn)
 
         NSLayoutConstraint.activate([
@@ -1693,7 +1701,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         ConfigManager.shared.updateEnableDictionary(sender.state == .on)
     }
 
-    @objc private func limitChanged(_ sender: NSSegmentedControl) {
+    @objc private func limitChanged(_ sender: SettingsLiquidSegmentedControl) {
         let limits = [30, 50, 80, 120]
         let selected = limits[max(0, min(limits.count - 1, sender.selectedSegment))]
         ConfigManager.shared.updateSearchResultLimit(selected)
@@ -1973,9 +1981,9 @@ public final class PerformanceTabView: NSView {
     private var memLabel = NSTextField(labelWithString: "正在测量...")
     private var purgeStatusLabel = NSTextField(labelWithString: "")
     private var timer: Timer?
-    private var annealControl: NSSegmentedControl!
-    private var debounceControl: NSSegmentedControl!
-    private var cacheControl: NSSegmentedControl!
+    private var annealControl: SettingsLiquidSegmentedControl!
+    private var debounceControl: SettingsLiquidSegmentedControl!
+    private var cacheControl: SettingsLiquidSegmentedControl!
 
     public init() {
         super.init(frame: .zero)
@@ -2070,7 +2078,7 @@ public final class PerformanceTabView: NSView {
         card2.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card2)
 
-        annealControl = NSSegmentedControl(labels: ["1.5s (激进省电)", "3.0s (推荐平衡)", "10.0s (宽松缓存)"], trackingMode: .selectOne, target: self, action: #selector(annealChanged(_:)))
+        annealControl = SettingsLiquidSegmentedControl(labels: ["1.5s (激进省电)", "3.0s (推荐平衡)", "10.0s (宽松缓存)"], target: self, action: #selector(annealChanged(_:)))
         let rowAnneal = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "timer"),
             title: "面板隐藏退火延迟",
@@ -2079,7 +2087,7 @@ public final class PerformanceTabView: NSView {
         )
         card2.addRow(rowAnneal)
 
-        debounceControl = NSSegmentedControl(labels: ["50ms (极速)", "150ms (均衡)", "300ms (节能)"], trackingMode: .selectOne, target: self, action: #selector(debounceChanged(_:)))
+        debounceControl = SettingsLiquidSegmentedControl(labels: ["50ms (极速)", "150ms (均衡)", "300ms (节能)"], target: self, action: #selector(debounceChanged(_:)))
         let rowDebounce = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "waveform.path"),
             title: "全盘搜索防抖延迟",
@@ -2088,7 +2096,7 @@ public final class PerformanceTabView: NSView {
         )
         card2.addRow(rowDebounce)
 
-        cacheControl = NSSegmentedControl(labels: ["4 MB", "6 MB (默认)", "12 MB"], trackingMode: .selectOne, target: self, action: #selector(cacheLimitChanged(_:)))
+        cacheControl = SettingsLiquidSegmentedControl(labels: ["4 MB", "6 MB (默认)", "12 MB"], target: self, action: #selector(cacheLimitChanged(_:)))
         let rowCache = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "photo.stack"),
             title: "缩略图缓存池上限",
@@ -2178,19 +2186,19 @@ public final class PerformanceTabView: NSView {
         }
     }
 
-    @objc private func annealChanged(_ sender: NSSegmentedControl) {
+    @objc private func annealChanged(_ sender: SettingsLiquidSegmentedControl) {
         let delays = [1.5, 3.0, 10.0]
         let sel = delays[max(0, min(delays.count - 1, sender.selectedSegment))]
         ConfigManager.shared.updateMemoryAnnealDelay(sel)
     }
 
-    @objc private func debounceChanged(_ sender: NSSegmentedControl) {
+    @objc private func debounceChanged(_ sender: SettingsLiquidSegmentedControl) {
         let ms = [50, 150, 300]
         let sel = ms[max(0, min(ms.count - 1, sender.selectedSegment))]
         ConfigManager.shared.updateSearchDebounceMs(sel)
     }
 
-    @objc private func cacheLimitChanged(_ sender: NSSegmentedControl) {
+    @objc private func cacheLimitChanged(_ sender: SettingsLiquidSegmentedControl) {
         let mbs = [4, 6, 12]
         let sel = mbs[max(0, min(mbs.count - 1, sender.selectedSegment))]
         ConfigManager.shared.updateThumbnailCacheLimitMB(sel)

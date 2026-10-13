@@ -24,20 +24,20 @@ private final class FlippedStackView: NSStackView {
 /// container itself stays transparent.
 private final class SelectionCapsuleView: NSView {
     private let glass = LiquidGlassContainerView()
+    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 14)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
+        layer?.masksToBounds = false
+        liquidBackdrop.contactShadowEnabled = true
+        liquidBackdrop.customShadowRadius = 6.0
+        liquidBackdrop.customShadowOpacity = 0.05
+
         glass.usesRegularGlass = true
         glass.softEdgeEnabled = false
-        glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
-        NSLayoutConstraint.activate([
-            glass.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glass.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glass.topAnchor.constraint(equalTo: topAnchor),
-            glass.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
+        addSubview(liquidBackdrop)
         updateColors()
     }
 
@@ -45,8 +45,56 @@ private final class SelectionCapsuleView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let r = bounds.height > 0 ? (bounds.height / 2) : 14
+        layer?.cornerRadius = r
+        glass.frame = bounds
+        glass.cornerRadius = r
+        liquidBackdrop.frame = bounds
+        liquidBackdrop.cornerRadius = r
+        CATransaction.commit()
+    }
+
+    private var capsuleIsDark: Bool {
+        if let win = window {
+            let app = win.appearance ?? win.effectiveAppearance
+            if let match = app.bestMatch(from: [.darkAqua, .aqua]) {
+                return match == .darkAqua
+            }
+        }
+        return ConfigManager.shared.config.theme.isDark
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateColors()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateColors()
+    }
+
     func updateColors() {
-        let isDark = glassIsDark
+        let isDark = capsuleIsDark
+        let isNative = ConfigManager.shared.config.theme.isNativeLiquid
+        if isNative {
+            liquidBackdrop.isHidden = false
+            liquidBackdrop.isDark = isDark
+            liquidBackdrop.isSelected = true
+            liquidBackdrop.customShadowOpacity = isDark ? 0.16 : 0.05
+            liquidBackdrop.customShadowRadius = 6.0
+            liquidBackdrop.updateStyles()
+            glass.isHidden = true
+            return
+        }
+        liquidBackdrop.isHidden = true
+        glass.isHidden = false
+        glass.isNativeLiquid = false
+        glass.isDark = isDark
         // Keep the selected capsule on exactly the same glass recipe as the
         // drawer backdrop; the compact shape alone provides the selection cue.
         if isDark {
@@ -59,7 +107,10 @@ private final class SelectionCapsuleView: NSView {
     }
 
     func updateCornerRadius(_ radius: CGFloat) {
-        glass.cornerRadius = radius
+        let r = bounds.height > 0 ? (bounds.height / 2) : radius
+        layer?.cornerRadius = r
+        glass.cornerRadius = r
+        liquidBackdrop.cornerRadius = r
     }
 }
 
@@ -77,6 +128,9 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     private var categories: [Category] = []
     private var selectedCategoryId: UUID?
     private let stackView = FlippedStackView()
+    internal var allPills: [CategoryPillView] {
+        stackView.arrangedSubviews.compactMap { $0 as? CategoryPillView }
+    }
     private let scrollView = NSScrollView()
     private let selectionCapsule = SelectionCapsuleView()
     private var stackViewConstraints: [NSLayoutConstraint] = []
@@ -128,6 +182,38 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         ])
 
         updateOrientation()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleThemeChanged),
+            name: .atoolsThemeDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func handleThemeChanged() {
+        updatePillsAppearance()
+    }
+
+    public func updatePillsAppearance() {
+        selectionCapsule.updateColors()
+        for sub in stackView.arrangedSubviews {
+            if let pill = sub as? CategoryPillView {
+                pill.updateAppearanceStyles()
+            }
+        }
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            updatePillsAppearance()
+        }
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updatePillsAppearance()
     }
 
     private func updateOrientation() {
@@ -186,6 +272,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
             }
         }
 
+        updatePillsAppearance()
+
         // Pin the flowing capsule underneath the arranged pills and align it to
         // the currently selected pill without animation on initial layout.
         selectedPill = stackView.arrangedSubviews.first(where: { ($0 as? CategoryPillView)?.isSelected == true }) as? CategoryPillView
@@ -227,10 +315,6 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         }
     }
 
-    override public func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        selectionCapsule.updateColors()
-    }
 
     // MARK: - Right Click on CategoryBarView (Blank Area)
     override public func rightMouseDown(with event: NSEvent) {

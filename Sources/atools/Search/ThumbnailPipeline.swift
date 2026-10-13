@@ -39,6 +39,22 @@ public final class ThumbnailPipeline {
         genericCache.removeAllObjects()
     }
 
+    /// 保留应用抽屉已固定的关键应用图标（防止重新展开抽屉时发生重绘或闪烁），同时清空全盘搜索中产生的临时文件缩略图缓存
+    public func clearTransientSearchCache() {
+        let shelfTargets = Set(ConfigManager.shared.config.categories.flatMap { $0.items.map { $0.target } })
+        var shelfImages: [(NSString, NSImage, Int)] = []
+        for target in shelfTargets {
+            let key = target as NSString
+            if let img = cache.object(forKey: key) {
+                shelfImages.append((key, img, Self.costBytes(for: img)))
+            }
+        }
+        cache.removeAllObjects()
+        for (k, img, cost) in shelfImages {
+            cache.setObject(img, forKey: k, cost: cost)
+        }
+    }
+
     public func icon(forPath path: String, completion: @escaping (NSImage) -> Void) {
         let key = path as NSString
         if let cached = cache.object(forKey: key) {
@@ -152,14 +168,31 @@ public final class ThumbnailPipeline {
     }
 
     private func downsample(image: NSImage, to size: CGSize) -> NSImage {
-        let newImage = NSImage(size: size)
-        newImage.lockFocus()
-        image.draw(in: CGRect(origin: .zero, size: size),
-                   from: CGRect(origin: .zero, size: image.size),
-                   operation: .copy,
-                   fraction: 1.0)
-        newImage.unlockFocus()
-        return newImage
+        let width = Int(size.width * 2)
+        let height = Int(size.height * 2)
+        guard width > 0, height > 0,
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil,
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bytesPerRow: 0,
+                  space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            return image
+        }
+
+        let rect = CGRect(origin: .zero, size: CGSize(width: width, height: height))
+        let graphicsContext = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        image.draw(in: rect, from: CGRect(origin: .zero, size: image.size), operation: .copy, fraction: 1.0)
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let cgImage = context.makeImage() else { return image }
+        return NSImage(cgImage: cgImage, size: size)
     }
 }
 

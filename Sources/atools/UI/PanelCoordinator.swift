@@ -363,6 +363,7 @@ public final class PanelCoordinator {
             searchPanel.orderOut(nil)
             resetPanelEntrance(searchPanel)
         }
+        searchPanel.searchViewController.clearSearch()
 
         if activePanel == nil {
             stopGlobalOutsideClickMonitor()
@@ -661,10 +662,17 @@ public final class PanelCoordinator {
 
     /// 检查点击的屏幕坐标是否落在辅助浮层工具（如 AuraSnap、Maccy、Paste、CleanClip 等无 Dock 图标的工具面板）的窗口范围内
     internal static func isClickOnAuxiliaryToolWindow(at screenPoint: NSPoint) -> Bool {
+        // Tier 0: 优先检查是否落在本应用自身的任何有效窗口内（极速毫秒级，无需发起 IPC 或 AX 查询）
+        for window in NSApp.windows {
+            if window.frame.contains(screenPoint) {
+                return true
+            }
+        }
+
         let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 900
         let quartzY = mainScreenHeight - screenPoint.y
 
-        // Tier 1: 优先尝试通过系统 Accessibility API (AXUIElement) 获取点击点所在的进程 PID
+        // Tier 1: 尝试通过系统 Accessibility API (AXUIElement) 获取点击点所在的进程 PID
         let systemWide = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(systemWide, 0.05) // 50ms 严格超时保护，绝不拖卡主线程
         var element: AXUIElement?

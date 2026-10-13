@@ -83,6 +83,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
 
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "文件")
+        fileMenu.addItem(withTitle: "关闭窗口", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "编辑")
         editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")

@@ -53,6 +53,7 @@ public final class ShelfItemButton: NSControl {
 
     // Soft glass base drawn under the icon for hover/pressed states.
     private let baseLayer = CALayer()
+    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 14)
 
     override public var mouseDownCanMoveWindow: Bool { false }
 
@@ -85,6 +86,11 @@ public final class ShelfItemButton: NSControl {
         baseLayer.cornerRadius = 14
         baseLayer.opacity = 0.0
         layer?.addSublayer(baseLayer)
+
+        liquidBackdrop.contactShadowEnabled = true
+        liquidBackdrop.customShadowRadius = 5.5
+        liquidBackdrop.isHidden = true
+        addSubview(liquidBackdrop, positioned: .below, relativeTo: iconImageView)
 
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
         iconImageView.imageScaling = .scaleProportionallyUpOrDown
@@ -139,6 +145,7 @@ public final class ShelfItemButton: NSControl {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         baseLayer.frame = bounds.insetBy(dx: 4, dy: 0)
+        liquidBackdrop.frame = bounds.insetBy(dx: 4, dy: 0)
         CATransaction.commit()
     }
 
@@ -152,7 +159,7 @@ public final class ShelfItemButton: NSControl {
         titleLabel.font = NSFont.systemFont(ofSize: fontSize, weight: .regular)
     }
 
-    private func updateAppearanceStyles() {
+    internal func updateAppearanceStyles() {
         let isDark = glassIsDark
 
         let scale: CGFloat = isPressed ? 0.98 : (isHovered ? 1.02 : 1.0)
@@ -163,30 +170,57 @@ public final class ShelfItemButton: NSControl {
         CATransaction.begin()
         CATransaction.setAnimationDuration(window == nil ? 0 : 0.10)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-        if isSelected {
-            baseLayer.backgroundColor = GlassPalette.selectedFill(isDark: isDark).cgColor
-            baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
-            baseLayer.borderWidth = 0.75
-            baseLayer.shadowOpacity = 0
-            baseLayer.opacity = 1.0
-        } else if isPressed {
-            baseLayer.backgroundColor = GlassPalette.pressedFill(isDark: isDark).cgColor
-            baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
-            baseLayer.borderWidth = 0.75
-            baseLayer.shadowOpacity = 0
-            baseLayer.opacity = 1.0
-        } else if isHovered {
-            baseLayer.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
-            baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
-            baseLayer.borderWidth = 0.75
-            baseLayer.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
-            baseLayer.shadowOpacity = 0.16
-            baseLayer.shadowRadius = 8
-            baseLayer.shadowOffset = CGSize(width: 0, height: 3)
-            baseLayer.opacity = 1.0
-        } else {
-            baseLayer.shadowOpacity = 0
+
+        if isNativeLiquidTheme {
             baseLayer.opacity = 0.0
+            if isSelected {
+                liquidBackdrop.isHidden = false
+                liquidBackdrop.isDark = isDark
+                liquidBackdrop.isSelected = true
+                liquidBackdrop.isHovered = false
+                liquidBackdrop.isPressed = isPressed
+                liquidBackdrop.customShadowOpacity = isDark ? 0.16 : 0.05
+                liquidBackdrop.customShadowRadius = 5.5
+                liquidBackdrop.updateStyles()
+            } else if isHovered {
+                liquidBackdrop.isHidden = false
+                liquidBackdrop.isDark = isDark
+                liquidBackdrop.isSelected = false
+                liquidBackdrop.isHovered = true
+                liquidBackdrop.isPressed = isPressed
+                liquidBackdrop.customShadowOpacity = isDark ? 0.09 : 0.035
+                liquidBackdrop.customShadowRadius = 5.0
+                liquidBackdrop.updateStyles()
+            } else {
+                liquidBackdrop.isHidden = true
+            }
+        } else {
+            liquidBackdrop.isHidden = true
+            if isSelected {
+                baseLayer.backgroundColor = GlassPalette.selectedFill(isDark: isDark).cgColor
+                baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+                baseLayer.borderWidth = 0.75
+                baseLayer.shadowOpacity = 0
+                baseLayer.opacity = 1.0
+            } else if isPressed {
+                baseLayer.backgroundColor = GlassPalette.pressedFill(isDark: isDark).cgColor
+                baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+                baseLayer.borderWidth = 0.75
+                baseLayer.shadowOpacity = 0
+                baseLayer.opacity = 1.0
+            } else if isHovered {
+                baseLayer.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
+                baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+                baseLayer.borderWidth = 0.75
+                baseLayer.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
+                baseLayer.shadowOpacity = 0.16
+                baseLayer.shadowRadius = 8
+                baseLayer.shadowOffset = CGSize(width: 0, height: 3)
+                baseLayer.opacity = 1.0
+            } else {
+                baseLayer.shadowOpacity = 0
+                baseLayer.opacity = 0.0
+            }
         }
         CATransaction.commit()
 
@@ -203,12 +237,31 @@ public final class ShelfItemButton: NSControl {
             ctx.allowsImplicitAnimation = true
             iconImageView.layer?.transform = transform
         }
+
+        titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+        if isNativeLiquidTheme {
+            if isDark {
+                let sh = NSShadow()
+                sh.shadowColor = NSColor.black.withAlphaComponent(0.70)
+                sh.shadowOffset = NSSize(width: 0, height: -1)
+                sh.shadowBlurRadius = 2.0
+                titleLabel.shadow = sh
+            } else {
+                titleLabel.shadow = nil
+            }
+        } else {
+            titleLabel.shadow = nil
+        }
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearanceStyles()
     }
 
     override public func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateAppearanceStyles()
-        titleLabel.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
     }
 
     override public func updateTrackingAreas() {
@@ -391,6 +444,34 @@ public final class ShelfGridView: NSView {
             emptyLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleThemeChanged),
+            name: .atoolsThemeDidChange,
+            object: nil
+        )
+        updateAppearanceForTheme()
+    }
+
+    private func updateAppearanceForTheme() {
+        let isDark = ConfigManager.shared.config.theme.isDark
+        let app = NSAppearance(named: isDark ? .darkAqua : .aqua)
+        self.appearance = app
+        contentView.appearance = app
+        scrollView.appearance = app
+    }
+
+    @objc private func handleThemeChanged() {
+        updateAppearanceForTheme()
+        for btn in itemButtons {
+            btn.updateAppearanceStyles()
+        }
+        for sub in contentView.subviews {
+            if let btn = sub as? ShelfItemButton {
+                btn.updateAppearanceStyles()
+            }
+        }
     }
 
     override public func layout() {
@@ -421,11 +502,13 @@ public final class ShelfGridView: NSView {
                 if existing.scale != scale {
                     existing.scale = scale
                 }
+                existing.updateAppearanceStyles()
                 newButtons.append(existing)
                 reusedAny = true
             } else {
                 let btn = makeButton(for: item, scale: scale)
                 contentView.addSubview(btn)
+                btn.updateAppearanceStyles()
                 newButtons.append(btn)
             }
         }

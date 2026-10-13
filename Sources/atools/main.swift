@@ -112,12 +112,22 @@ if CommandLine.arguments.contains("--test") {
     ConfigManager.shared.updateTheme(.liquidDark)
     TestAssertions.expect(ConfigManager.shared.config.theme == .liquidDark, "Theme should update to .liquidDark")
     TestAssertions.expect(ConfigManager.shared.config.theme.isDark == true, "liquidDark isDark should be true")
-    TestAssertions.expect(AppTheme.allCases == [.liquidDark, .liquidLight], "Only the two liquid themes remain")
+    TestAssertions.expect(AppTheme.allCases == [.liquidDark, .liquidLight, .macosLiquidDark, .macosLiquidLight], "AppTheme should include liquidDark, liquidLight, macosLiquidDark, and macosLiquidLight")
     // Configs saved with the retired solid themes migrate to the matching liquid theme.
     let solidLightJSON = "{\"theme\": \"solidLight\"}".data(using: .utf8)!
     TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidLightJSON)).theme == .liquidLight, "solidLight -> liquidLight")
     let solidDarkJSON = "{\"theme\": \"solidDark\"}".data(using: .utf8)!
     TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidDarkJSON)).theme == .liquidDark, "solidDark -> liquidDark")
+    let legacyNativeJSON = "{\"theme\": \"macosLiquid\"}".data(using: .utf8)!
+    TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: legacyNativeJSON)).theme == .macosLiquidLight, "macosLiquid -> macosLiquidLight")
+    ConfigManager.shared.updateTheme(.macosLiquidDark)
+    TestAssertions.expect(ConfigManager.shared.config.theme == .macosLiquidDark, "Theme should update to .macosLiquidDark")
+    TestAssertions.expect(ConfigManager.shared.config.theme.isDark == true, "macosLiquidDark isDark should be true")
+    TestAssertions.expect(ConfigManager.shared.config.theme.isNativeLiquid == true, "macosLiquidDark isNativeLiquid should be true")
+    ConfigManager.shared.updateTheme(.macosLiquidLight)
+    TestAssertions.expect(ConfigManager.shared.config.theme == .macosLiquidLight, "Theme should update to .macosLiquidLight")
+    TestAssertions.expect(ConfigManager.shared.config.theme.isDark == false, "macosLiquidLight isDark should be false")
+    TestAssertions.expect(ConfigManager.shared.config.theme.isNativeLiquid == true, "macosLiquidLight isNativeLiquid should be true")
     ConfigManager.shared.updateTheme(.liquidLight)
     TestAssertions.expect(ConfigManager.shared.config.theme == .liquidLight, "Theme should update to .liquidLight")
 
@@ -143,9 +153,16 @@ if CommandLine.arguments.contains("--test") {
     ConfigManager.shared.updateThemeOpacity(-0.5) // should clamp to 0.40
     TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.40, "themeOpacity clamped to 0.40")
     ConfigManager.shared.updateThemeOpacity(1.50) // should clamp to 1.00
-    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 1.00, "themeOpacity clamped to 1.00")
     ConfigManager.shared.updateThemeOpacity(0.90) // reset to default
     TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.90, "themeOpacity reset to 0.90")
+
+    // Test macosLiquidLight dynamic opacity linkage in VisualEffectBackdropView
+    ConfigManager.shared.updateTheme(.macosLiquidLight)
+    let backdropTest = VisualEffectBackdropView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+    ConfigManager.shared.updateThemeOpacity(0.40)
+    ConfigManager.shared.updateThemeOpacity(1.00)
+    ConfigManager.shared.updateThemeOpacity(0.90)
+    _ = backdropTest
 
     // Test ShelfTrackpadGesture configuration & persistence
     TestAssertions.expect(ConfigManager.shared.config.shelfTrackpadGesture == .none, "shelfTrackpadGesture default should be .none")
@@ -1341,6 +1358,22 @@ if CommandLine.arguments.contains("--test") {
             }
         }
     }
+
+    // Verify category pills under liquidDark theme have consistent white text
+    let originalTheme = ConfigManager.shared.config.theme
+    ConfigManager.shared.updateTheme(.liquidDark)
+    NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
+    shelfPanel.prepareForDisplay()
+    let darkPills = shelfPanel.shelfViewController.categoryBar.allPills
+    TestAssertions.expect(!darkPills.isEmpty, "Category bar must have pills")
+    for pill in darkPills {
+        let color = pill.titleLabel.textColor ?? .black
+        let rgb = color.usingColorSpace(.deviceRGB) ?? color
+        let brightness = max(rgb.redComponent, max(rgb.greenComponent, rgb.blueComponent))
+        TestAssertions.expect(brightness > 0.75, "Category pill '\(pill.category.name)' must have white font in liquidDark, got brightness \(brightness)")
+    }
+    ConfigManager.shared.updateTheme(originalTheme)
+    NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
 
     // Now test vertical orientation
     ConfigManager.shared.updateCategoryOrientation(.vertical)

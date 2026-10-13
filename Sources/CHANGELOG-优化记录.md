@@ -1541,3 +1541,675 @@
   - 实机渲染快照核验：
     * `/tmp/settings_tab_shelf_layout.png`：应用抽屉图标滑块 70%~110% 刻度舒展，右侧「恢复默认」按钮与分段控件上下垂直对齐；
     * `/tmp/settings_tab_4.png`：外观与主题透明度滑块绝对固定 120pt，右侧「恢复默认」完美对齐，伸缩抖动彻底根除。
+### 41. 新增 macOS 原生液态玻璃主题（深色/浅色）与界面水滴质感全链路适配 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 为满足 macOS 最新视觉系统要求，在现有「液态玻璃」主题基础上，新增「原生液态 (深色)」与「原生液态 (浅色)」双模式；
+  - 浅色模式追求 100% 极纯无色水滴透镜效果，白底完全通透无色差；深色模式增加轻量暗色微熏透镜，凸显亮白文字与深色通透质感。
+
+- **实施细节与涉及文件**：
+  1. **枚举扩展与旧配置容错迁移**（[`AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)）：
+     - `AppTheme` 扩展 `macosLiquidDark` 与 `macosLiquidLight`；
+     - 新增 `isNativeLiquid` 状态判定与 `migrated(from:)` 迁移兼容处理（支持兼容 `macosLiquid` 与 `nativeLiquid` 迁移至 `macosLiquidLight`）。
+  2. **SwiftUI 液态透镜多层光影重塑**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - 在原生液态模式下引入多重光影渲染：柔和外扩散环境光晕阴影、多层水滴内部凹面漫射高光、双色发丝切边高光（天光反射 0.90 + 侧边微光 0.35 + 底部漫射 0.16）；
+     - 依据深浅色模式自动配置环境色温、色调不透明度及发光层次。
+  3. **背景透镜与图层裁剪调优**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)）：
+     - 原生液态模式下动态调整 `masksToBounds = false` 确保光晕阴影立体扩散；
+     - 浅色透镜采用纯透明零 tint 处理，深色透镜采用轻量暗色微熏，保证对比度与通透性并存。
+  4. **全套面板交互控件高光与阴影联动**：
+     - [`GlassPalette.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/GlassPalette.swift)：提供原生液态主题下的边框色彩、选中态与悬停态对比度；
+     - [`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift) & [`CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift)：胶囊选框及标签在原生液态深色模式下强化文字外发光阴影；
+     - [`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) & [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：应用图标在原生液态模式下增强悬停立体投影，标题文字添加微羽化阴影；
+     - [`SearchPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchPanel.swift)：搜索提示文字色相自适应。
+  5. **主题设置卡片与回归断言**（[`ThemeCardView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ThemeCardView.swift) & [`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)）：
+     - 主题设置卡片增设专属原生水滴极纯微缩模型预览；
+     - 补充 `--test` 针对原生主题更新、迁移及 `isNativeLiquid` 状态的完整自动化回归断言。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包 DMG/ZIP 校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，顺利重启进程验证（PID: 91605），全局热键与界面渲染均正常运作。
+### 42. 修复原生液态主题抽屉文字变色滞后，全局搜索胶囊与展开结果面板原生水滴质感全面对齐 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈原生液态（深色）主题下，应用抽屉内的文字默认呈现暗色，只有当鼠标移动到图标上时字体才变白；
+  - 全局搜索胶囊（折叠态）呈现生硬的黑灰卡片与描边，与应用抽屉极纯通透的水滴液态外观不一致；
+  - 当输入文字或指令出现搜索结果时（展开态），整个搜索大面板的液态玻璃效果完全消失，退化为无折射、无高光的纯色磨砂灰板。
+
+- **实施细节与涉及文件**：
+  1. **抽屉应用文字颜色初始化与生命周期即时刷新**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 为 [`ShelfItemButton`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift#L12) 增设 `viewDidMoveToWindow()` 挂载回调，当按钮添加入视图树后立即触发 `updateAppearanceStyles()`，依据窗口真实 `effectiveAppearance` 正确初始化文字颜色与阴影；
+     - 在 [`reloadData(items:)`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift#L450) 中对复用按钮 `existing` 与新建按钮 `btn` 均无条件执行 `updateAppearanceStyles()`；
+     - 在 `ShelfGridView` 增设 `updateAppearanceForTheme()`，并在 `setupViews()` 和 `handleThemeChanged()` 中显式将 `appearance` 广播赋予 `contentView` 与 `scrollView`，彻底解决鼠标悬停才变白的视觉延迟。
+  2. **全局搜索胶囊（折叠态）水滴液态完全对齐**（[`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift)）：
+     - 搜索胶囊内部 `glassEffectView` 全面激活 `isNativeLiquid = true`，浅色模式应用 0% tint 纯通透透镜，深色模式应用 22% tint 微熏透镜；
+     - 原生液态下去除宿主 CALayer 黑色生硬描边（`borderWidth = 0`），完全交由 `LiquidGlassRoot` 的双层发丝高光与内部焦散折射接管；
+     - 增加 `viewDidMoveToWindow()` 回调确保搜索框唤出即与当前主题外观严格一致。
+  3. **搜索结果大面板（展开态）水滴液态效果修复**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift) & [`SearchPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchPanel.swift)）：
+     - 修复 `VisualEffectBackdropView.updateAppearanceColors()` 中 `matchesSearchCapsuleAppearance` 提前 `return` 拦截并阻断 `isNativeLiquid` 设置的致命缺陷；将原生液态判断置顶，使展开大面板同享 100% 原生硬件级物理液态水滴折射；
+     - 展开态下动态去除 `revealLayers` 外部生硬描边（`rim.borderWidth = 0`），消除覆盖在水滴高光之上的多余灰线；
+     - [`SearchResultsTableView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchResultsTableView.swift)：为原生液态模式下的搜索结果选中条与文字配备匹配的微羽化立体阴影与对比度。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 96856）。
+### 43. 强化液态玻璃深色主题遮蔽度与暗色沉浸感，杜绝白底背景文字杂色穿透 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈深色液态玻璃效果颜色不够深，当悬浮在白色网页或高对比度文本文档上方时，底层黑色/红色文字严重穿透（透出度高达 78%），导致搜索列表前景内容与底层背景严重冲突混乱。
+
+- **实施细节与涉及文件**：
+  1. **SwiftUI 硬件水滴透镜材质与深邃底衬调优**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - `LiquidGlassRoot` 在深色模式下由完全透明的 `Glass.clear` 切换为具备真实物理漫射模糊的 `Glass.regular`；
+     - 增设深色模式专属深邃暗色底衬（`Color(red: 0.06, green: 0.07, blue: 0.10).opacity(min(0.72, tintOpacity * 0.90))`），配合发丝切边高光与内部焦散，有效遮蔽底层高亮文字杂色，彻底消除穿透感。
+  2. **透镜色阶深度与遮蔽浓度全面加深**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift) & [`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift)）：
+     - 原生液态深色模式（`macosLiquidDark`）透镜浓度从偏浅的 0.22 大幅提升至 0.72，`tintColor` 切换为深邃黑曜石微熏色（`#12141C`），并联动 `themeOpacity` 滑块进行精准无级调节；
+     - 经典液态深色模式（`liquidDark`）同步深化：`tintColor` 强化为 `NSColor(white: 0.06, alpha: 1.0)`，`tintOpacity` 升至 0.85，`tintOverlayView` 暗黑叠层提升至 0.20；
+     - [`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)：`SearchGlassSurfaceProfile` 深色基础透明度升至 0.85，悬停强调态升至 0.90。
+  3. **主题微缩卡片预览更新**（[`ThemeCardView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ThemeCardView.swift)）：
+     - 同步加深偏好设置中原生深色液态玻璃的微缩窗口底色，确保所见即所得。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 99486）。
+
+### 44. 消除应用抽屉四周四个透明方角，精准分离并恢复经典液态玻璃磨砂质感 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈应用抽屉周围出现四个透明的角（原先为防止高光被剪裁而豁免关闭了 `masksToBounds`，导致底层矩形图层及 `NSHostingView` 四个直角渗出 24pt 圆角边界形成透明方角）；
+  - 同时用户要求将「液态玻璃」主题（classic `liquidDark` / `liquidLight`）还原回之前的经典磨砂质感，且明确保持「原生液态」主题（`macosLiquidDark` / `macosLiquidLight`）完好无损。
+
+- **实施细节与涉及文件**：
+  1. **彻底消除应用抽屉四周的四个透明角**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)、[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)、[`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)）：
+     - [`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)：无论处于原生液态或经典磨砂主题，宿主图层与内部 `effectView` 均无条件强制启用 `layer.cornerRadius = 24/20` 与 `layer.masksToBounds = true`，并在 `layout()` 布局生命周期中持续约束，彻底阻断子图层向外溢出；
+     - [`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)：彻底移除对 `isNativeLiquid` 豁免设置的 `layer.masksToBounds = false`，改为统一绑定 `layer.masksToBounds = true`，并对内部 `hostingView` 显式设置 `hostingView.layer?.cornerRadius = cornerRadius` 与 `hostingView.layer?.masksToBounds = true`，使内部 SwiftUI NSHostingView 严密限制在圆角范围内；
+     - [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：对抽屉内容根视图 `ShelfRootView` 显式开启 `wantsLayer = true`，并在初始化与 `layout()` 中同步配置 `cornerRadius = 24` 与 `masksToBounds = true`，构筑双重防漏裁剪屏障。
+  2. **恢复经典「液态玻璃」主题纯正磨砂质感，隔离并保持「原生液态」不变**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift) & [`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - 恢复经典「液态玻璃（深色）」先前的磨砂参数：`effectView.tintColor = GlassPalette.darkBaseTop`，`tintOpacity = 0.76`，暗色叠层遮罩恢复为经典 `NSColor.black.withAlphaComponent(0.08 * opacity)`；
+     - [`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)：`SearchGlassSurfaceProfile` 恢复经典深色基础浓度 `darkBaseTintOpacity = 0.76`、强调态浓度 `darkEmphasizedTintOpacity = 0.82`；
+     - 严格保持「原生液态」主题（`macosLiquidDark` / `macosLiquidLight`）1:1 硬件级双层发丝高光、内部焦散折射与黑曜石微熏透镜光学效果，完全不受任何干扰。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 4597）。
+
+### 45. 修复原生液态深色主题在低透明度（40%）下无法透出底层背景的问题，实现与浅色主题一致的晶莹透光水滴质感 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈原生液态深色主题（`macosLiquidDark`）在偏好设置中将「面板背景透明度」拖动至最低的 40% 后，仍然无法像浅色主题那样晶莹透出底层桌面与应用窗口；
+  - **根本原因**：此前为加深颜色，代码中硬编码了 `max(0.60, ...)` 阻断了 40%~60% 区间的滑块生效；且内部 `LiquidGlassRoot` 无条件采用带磨砂模糊的 `Glass.regular` 并叠加了固定的不透明暗色底衬，导致无论如何调低透明度，底层内容均被磨砂和底衬完全遮挡。
+
+- **实施细节与涉及文件**：
+  1. **解开硬编码限制，建立透明度全范围平滑映射**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift) & [`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift)）：
+     - 彻底移除 `max(0.60, ...)` 截断，建立 `progress = (themeOpacity - 0.40) / 0.60` 连续响应曲线；
+     - 当滑块处于 40% 最低透明度时，`dynamicTintOpacity` 精确下探至 0.05（极轻微水滴微熏透镜）；当滑块拉升至 90%~100% 时，平滑增强至 0.58~0.72 深邃浓度。
+  2. **暗色底衬动态隐退与 `Glass.clear` 水滴透镜无缝切换**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - 在 `LiquidGlassRoot` 中，当处于低透明度区间（`tintOpacity <= 0.18`，对应滑块 40%~55%）时，深色模式动态自动切换为纯水滴透镜 `Glass.clear`，消除磨砂模糊漫射，实现 100% 物理光线折射穿透；
+     - 联动 `underlayAlpha`：在低透明度（<=0.08）时暗色底衬完全隐退（`underlayAlpha = 0.0`），彻底移除非通透色块阻隔，使面板底部桌面壁纸与底层窗口纤毫毕现，通透感与浅色主题完全一致；高透明度（60%~100%）下平滑增强至 0.68，确保文字防穿透遮蔽力。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 6345）。
+
+### 46. 兼顾纯水滴透镜动态折射与基准暗色底衬，重塑原生液态深色主题的黑曜石深色辨识度 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈原生液态深色主题（`macosLiquidDark`）在透明度调整至 40% 后，因底衬过度清零而发白发浅，丢失了深色主题应有的暗色底蕴与辨识度；
+  - 用户明确要求在保留低透明度下水滴透镜纯净折射（`Glass.clear`）的同时，始终保留恰到好处的暗色底衬，使整体呈现清晰透底的半透明黑曜石质感，既透亮又具备纯正深色主题气质。
+
+- **实施细节与涉及文件**：
+  1. **维持深色基准微熏浓度**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift) & [`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift)）：
+     - 将 40% 最低透明度下的 `dynamicTintOpacity` 基准值设定为 0.22（避免过度衰减至 0.05 导致色彩脱失），在 40%~100% 间由 0.22 平滑增强至 0.72；
+     - 确保透镜本身自带深邃黑曜石微熏色（`#12141C`），与浅色白水滴透镜形成鲜明色调分水岭。
+  2. **水滴透镜动态切换与暗色底衬深度兼顾**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - 在 `LiquidGlassRoot` 中，即使处于 40% 透明度，也始终保留 `underlayAlpha ≈ 0.24` 的基准暗色底衬，既让 76% 外部光线畅通穿透、清晰看见面板下方桌面内容，又将该区域整体压暗为高级黑曜石深色调；高透明度（90%~100%）下平滑过渡至 0.58~0.68；
+     - 阈值设定为 `tintOpacity > 0.36`（对应约 60% 透明度）：当处于 40%~55% 低透明度区间时动态采用 `Glass.clear` 消除磨砂漫射，享受纯水滴晶体折射；高透明度下无缝切入 `Glass.regular` 磨砂模糊。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 7501）。
+
+### 47. 全面排查并修复偏好设置全界面按钮“静止不可见、悬停才显现”缺陷，健全按键视觉轮廓与指针反馈 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈当前偏好设置中存在“部分按钮在鼠标移动上去时才显现出来”的问题，严重影响视觉可用性与按键引导性；
+  - **排查与根因定位**：
+    1. **胶囊按钮缺乏基准线框与可见底色**（`SettingsPillButton`）：原本静止状态下 `borderWidth = 0`，底色透明度仅 `0.06`（且依赖系统的 `contentTintColor`），在设置面板浅色白底卡片或深色卡片上，由于对比度极低，按钮轮廓几近隐形，只有鼠标悬停触发展开加深后才暴露出胶囊外形；
+    2. **文字颜色未显式设置属性字符串**：`SettingsPillButton` 之前直接修改 `contentTintColor`，在 AppKit 的 `NSButton` 某些样式下文字并不会随之变更颜色或产生清晰的边缘；
+    3. **排除规则重置按钮采用隐形样式**（`SettingsTabViews.swift`）：自定义排除规则行的重置按钮使用了 `bezelStyle = .inline`，macOS 原生内联样式在静止状态下无底色、无边框，完全隐形；
+    4. **热文件夹及排除规则行首尾增删按钮缺乏按键语义**：原先采用裸 SF Symbols 图标按钮（`minus.circle.fill` / `plus.circle.fill`），在卡片中无独立微弱底衬，静止时缺少交互按键感；
+    5. **光标手势缺失**：设置窗口中多个自定义按钮（`SettingsPillButton`、`SettingsResetButton`、`SidebarRowButton`）未实现 `resetCursorRects`，鼠标悬停时仍为普通箭头，缺乏可点击交互反馈。
+
+- **实施细节与涉及文件**：
+  1. **重构核心胶囊与重置按钮组件**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - **`SettingsPillButton`**：
+       * 赋予常驻清晰微弱边框：静止状态下始终保持 `borderWidth = 1.0`，浅色模式为 12% 灰度边框，深色模式为 16% 高光白边，悬停与按下时梯级加深至 28%/35%；
+       * 增强常驻轻质底色：浅色模式常驻 7% 灰度底色，深色模式常驻 11% 灰度底色，无论鼠标在何处，胶囊按键几何形态一目了然；
+       * 改用显式 `attributedTitle`：统一注入精确的字体与前景色，杜绝文字颜色因状态丢失而褪色的问题；
+       * 增加 `resetCursorRects` 与 `cursorUpdate`，鼠标悬停即刻变为标准 `pointingHand` 手型光标。
+     - **`SettingsResetButton`**：
+       * 赋予常驻 1.0pt 轮廓与微弱填充底衬，修复静止时仅凭极淡文字漂浮的假象；
+       * 补全 `resetCursorRects` 手型光标。
+     - **全新增加 `SettingsIconButton` 规整微型圆形动作按钮**：
+       * 封装 24x24 固定尺寸、圆角 12pt 的高质感图标按键；
+       * 具备清晰常驻描边、微弱底衬、悬停高亮、按下加深、系统无障碍标签及手型光标；
+       * 专用于列表项的增删（`plus`、`minus`）等微型交互场景。
+  2. **全面替换列表行增删与重置按钮**（[`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift)）：
+     - 热文件夹行（`makeHotFolderRow` / `makeAddHotFolderRow`）及自定义排除项行（`makeCustomExclusionRow` / `makeAddCustomExclusionRow`）的 `+` 与 `-` 按钮全面迁移至 `SettingsIconButton`；
+     - 彻底废除 `bezelStyle = .inline` 的隐形重置按钮，统一替换为标准 `SettingsResetButton`，并根据排除列表条数动态控制 `isEnabled` 与高亮。
+  3. **增强侧边栏选项卡光标反馈**（[`SettingsSidebarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsSidebarView.swift)）：
+     - 在 `SidebarRowButton` 中补全 `resetCursorRects` 与 `cursorUpdate`，实现侧边栏各导航项的全域 `pointingHand` 光标交互。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 9598）。
+
+### 48. 根治未入窗控件主题穿透判定缺陷（glassIsDark Fallback）与暗箱隐形，实现设置全域按钮常驻高对比度实体轮廓 (2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户反馈在设置中某些按钮依然存在“鼠标移到按钮上才显现出来，且大部分表现为极度透明的液态玻璃材质”的隐形现象；
+  - **深度溯源与排查定性**：
+    1. **未入窗控件在浅色系统下的“深色误判穿透”（致命根因）**：
+       - 当用户配置了深色主题（如 `macosLiquidDark`），但 macOS 系统处于浅色外观（Light mode）时；
+       - 各设置 Tab 视图均在 `window` 赋值前实例化其子控件，此时 `self.window == nil`；
+       - 原 `glassIsDark` 逻辑为：`if effectiveAppearance.bestMatch(...) == .darkAqua { return true } return theme.isDark`；
+       - **严重缺陷在于**：当未入窗视图处于浅色环境时，`bestMatch` 返回 `.aqua`，未被拦截直接穿透跌落至 `return theme.isDark`（返回 `true`！）；
+       - 导致所有按钮在浅色卡片上直接按深色模式初始化：被赋予了**纯白文字（white）、白色半透明描边（white alpha 0.16）与纯白微弱底色（white alpha 0.11）**！
+       - 在浅色卡片的纯白背景上，白字白框白底导致按钮视觉上完全隐形，呈现出极具欺骗性的“消失在白底上的透明液态玻璃水滴”！
+       - 当鼠标初次划过按键触发 `mouseEntered` 时，控件因已被挂载到窗口，`self.window != nil` 重新评估为浅色模式，按键文字才突然翻转为深黑色并暴露出背景，给用户造成“鼠标移到按键上才显现出来”的强烈现象。
+    2. **生命周期入窗感知缺失**：
+       - `SettingsPillButton`、`SettingsResetButton`、`SettingsIconButton`、`HotkeyRecorderControl`、`ThemeCardView` 均未实现 `viewDidMoveToWindow()`，控件挂入真实窗口渲染树时未能强制刷新色彩模型。
+    3. **快捷键录制框无边框隐形**：
+       - `HotkeyRecorderControl` 静止状态下缺少外轮廓边框（`borderWidth = 0`），仅有微弱浅灰底色，在白底卡片中形似平铺文字。
+    4. **未选中主题卡片对比度过低**：
+       - `ThemeCardView` 未选中状态下描边透明度仅 0.06，底色仅 0.02，在未悬停时四个“液态玻璃”主题卡片边框虚浮几近隐形。
+
+- **实施细节与涉及文件**：
+  1. **修正全域环境深色判定兜底**（[`GlassPalette.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/GlassPalette.swift)）：
+     - 修复 `glassIsDark`：无论是否挂入窗口，优先以 `NSApp?.effectiveAppearance ?? effectiveAppearance` 解析 `.darkAqua` 与 `.aqua`。只有当完全无法匹配时才考虑 `theme.isDark`，彻底终结浅色系统下未入窗控件被反向染成白色的错误穿透。
+  2. **补全全量设置按键入窗刷新钩子与标题响应**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - 为 `SettingsPillButton`、`SettingsResetButton`、`SettingsIconButton` 统一补全 `override func viewDidMoveToWindow()`，一旦入窗立即重算当前宿主窗口真确的色彩系统；
+     - 覆写 `SettingsPillButton.title` 的 `didSet`，确保动态更新按键文本时即刻同步重绘属性字符串；
+     - 提升静态状态对比度：浅色模式下常驻 18% 灰度轮廓（深色模式 24%），底色增强至 9%~15%，彻底告别“虚浮无边”的伪透明玻璃感。
+  3. **重构快捷键录制框常驻实体胶囊形态**（[`HotkeyRecorderControl.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/HotkeyRecorderControl.swift)）：
+     - 增加 `viewDidMoveToWindow()` 自动响应；
+     - 赋予常驻 `borderWidth = 1.0` 实体细描边（浅色 16%、深色 22%）与微弱底衬，悬停时加深至 28%/38%，使 `⌥A` 与 `⌥Space` 录制框在静止时具备清晰的按键物理凹槽与可点击暗示。
+  4. **提升精选主题卡片轮廓辨识度**（[`ThemeCardView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ThemeCardView.swift)）：
+     - 增加 `viewDidMoveToWindow()` 保证实时响应；
+     - 未选中状态下常驻清晰的 1.0pt 边框（浅色 14%、深色 18%）与微弱底色，确保 4 个主题卡片（深/浅液态玻璃、深/浅原生液态）无论是否悬停均有规整利落的卡片外观。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（计算器、系统指令、配置管理、热点索引、Spotlight 全盘搜索、搜索展开收起动画、偏好设置等）**100% 全部 PASSED 通过**；
+  - 检查生成的 `/tmp/settings_tab_*.png` 视觉截图，证实各页面的按钮、快捷键框、主题卡片在静止无 Hover 状态下均具备清晰可见的高质感实体轮廓；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 11780）。
+
+### 49. 设置界面全域按钮重塑为 macOS 原生液态水滴质感（光学折射/双色切边高光/悬浮光影/按压下陷）(2026-10-12, build 39)
+
+- **背景与现象**：
+  - 用户期望将偏好设置（Settings）窗口内的所有交互按钮打造成与主面板一致的「macOS 原生液态（Native Liquid Glass）」水滴质感；
+  - 原先设置中的胶囊按钮、复位按钮、图标按钮与快捷键录制框采用平铺色块与基础描边，缺乏高阶真实物理光学折射、水滴天光张力漫反射（Surface Sheen）以及连续双色发丝微切边高光。
+
+- **实施细节与涉及文件**：
+  1. **构建原生液态按钮光学背景组件 `NativeLiquidButtonBackdrop`**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - **底层物理光学折射（Liquid Refraction）**：挂载 `LiquidGlassContainerView(isNativeLiquid: true)`，在 macOS 26+ 上无缝承载原生硬件级 `.glassEffect` 动态折射，旧系统自动平滑降级至 `NSVisualEffectView`；
+     - **水滴表面张力天光漫反射（Top Ambient Sheen）**：新增 `topSheenLayer`（CAGradientLayer），在按钮上半区（45% 空间）注入自上而下的微弱凸弧高光漫射，营造水滴鼓起的微曲表面张力；
+     - **360° 连续双色发丝微切边高光（Dual Hairline Contour Stroke）**：新增 `specularBorderLayer`，基于 `CAShapeLayer` 路径描边遮罩渲染精确到 1.0pt 的全闭合梯度发丝高光——顶部承接 0.85/0.95 亮白高光，两侧及底部流转为轮廓微光，解决水滴与卡片底衬的物理边缘衔接；
+     - **微环境接触投影（Contact Shadow）**：赋予轻量 2.0pt 阴影半径与 (0, -1) 微下沉投影，使按键自然脱离平面、悬浮于设置卡片之上；
+     - **交互物理状态机（Interactive Physics）**：
+       * **静止态（Resting）**：晶莹剔透的水滴透镜，具备 100% 常驻清晰轮廓，彻底告别隐形；
+       * **悬停态（Hover）**：整体亮度轻微提升，天光漫反射与发丝高光点亮，光标自然切换为 `pointingHand`；
+       * **按压态（Pressed）**：整体向下微弹缩放（`scale(0.98)`）或加深，呈现水滴受压的扎实触感反馈；
+       * **禁用态（Disabled）**：透镜透明度降至 40%，高光隐退，文字与图标自然褪色。
+  2. **全面重构并接入 `SettingsPillButton` 胶囊按钮**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - 挂载 14pt 圆角 `NativeLiquidButtonBackdrop`；
+     - 针对 AppKit 中 `wantsLayer = true` 时 `NSButtonCell` 文字易被透镜层剪裁或模糊的底层机制，采用悬浮独立的 `titleLabel`（NSTextField）置顶挂载，确保文字 100% 极纯锐利、零锯齿；
+     - 全面支持 `.primary`（黑曜石/高亮水滴）与 `.secondary`（通透晶体水滴）双重原生质感形态；
+     - 补全 `resetCursorRects` 手型光标与生命周期实时入窗更新。
+  3. **重构 `SettingsResetButton` 紧凑型复位按钮与 `SettingsIconButton` 微型按键**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - `SettingsResetButton` 挂载 11pt 圆角液态水滴透镜底衬，22pt 高度紧凑精致；
+     - `SettingsIconButton` 挂载 12pt 圆角液态透镜底衬，正中央悬浮 14x14 矢量符号，为列表行增删（`+` / `-`）提供触手可及的水滴触感。
+  4. **重构 `HotkeyRecorderControl` 原生液态录制胶囊**（[`HotkeyRecorderControl.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/HotkeyRecorderControl.swift)）：
+     - 快捷键录制框底层全面接入 14pt 圆角 `NativeLiquidButtonBackdrop`；
+     - 常态呈现晶莹剔透的水滴凹槽质感，悬停时发丝高光流转；进入录制状态时发光变亮，提示输入。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 20490）。
+
+### 50. 移除搜索指令首项蓝色异常并统一胶囊外观，重塑原生液态主题下全局搜索与抽屉“选中态”为水滴质感 (2026-10-13, build 39)
+
+- **背景与现象**：
+  1. 用户反馈全局搜索输入 `/` 触发语法模式时，首个“文档”指令胶囊呈现刺眼的生硬蓝色，风格与其他胶囊完全割裂；
+  2. 原生液态主题下，全局搜索结果列表选中项（`SearchResultRowView`）和应用抽屉应用图标（`ShelfItemButton`）在选中或悬停时呈现生硬的黑灰色块描边，完全丧失了液态水滴通透折射感与表面张力天光。
+
+- **实施细节与涉及文件**：
+  1. **封装通用的原生水滴选中态背景组件 `NativeLiquidSelectionBackdrop`**（[`NativeLiquidSelectionBackdrop.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/NativeLiquidSelectionBackdrop.swift)）：
+     - **物理光学水滴折射**：底层挂载 `LiquidGlassContainerView(isNativeLiquid: true)`，在 macOS 26+ 环境下由 `.glassEffect` 呈现真实水滴焦散与背景折射放大效果；
+     - **浅色极纯水滴晶体**：在浅色模式下采用纯白水滴透镜（`tintColor = white`，选中 0.55，悬停 0.32），彻底根除黑灰底色；
+     - **深色黑曜石晶莹水滴**：在深色模式下采用微熏透光水滴晶体（`tintColor = white`，选中 0.24，悬停 0.15），与文字形成纯净对比；
+     - **顶部天光表面张力微弧（Top Sheen）**：顶部注入 `LinearGradient` 弧形反光（浅色 0.45，深色 0.30），呈现圆润水滴微鼓张力；
+     - **360° 连续双色发丝微切边高光（Dual Hairline Contour）**：顶沿 0.98/0.90 亮白高光切边，两侧与底缘流转为 0.35/0.20 轮廓微光，解决水滴与底板的边缘衔接；
+     - **微环境柔和投影**：赋予 (0, -1.5) 轻量柔和投影，使选中态晶莹脱离底板。
+  2. **消除搜索指令首项蓝色并全面重构搜索胶囊**（[`SearchFilterBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchFilterBarView.swift)）：
+     - 彻底废除 `SearchSyntaxPillButton` 中硬编码的蓝色（`NSColor(red: 0.15, green: 0.45, blue: 0.95, alpha: 0.28)` 与蓝色边框）；
+     - `SearchSyntaxPillButton` 与 `SearchFilterPillButton` 统一挂载 `NativeLiquidSelectionBackdrop(cornerRadius: 6)` 与独立 `NonInteractiveImageView` / `NonInteractiveLabel`，选中与悬停时呈现原生水滴质感，未选中时保持微透镜描边；
+     - 首项待补全指令胶囊外观与普通胶囊规范完全对齐。
+  3. **重塑搜索结果列表项选中态（SearchResultRowView）**（[`SearchResultsTableView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchResultsTableView.swift)）：
+     - 在 `SearchResultRowView` 底层内嵌 10pt 圆角 `NativeLiquidSelectionBackdrop`；
+     - 键盘上下导航切换选中行时，背景即刻无缝呈现晶莹剔透的水滴透镜条与顶部发丝切边高光，告别单薄灰条。
+  4. **重塑应用抽屉图标选中与悬停态（ShelfItemButton）**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 在 `ShelfItemButton` 底层挂载 14pt 圆角 `NativeLiquidSelectionBackdrop`；
+     - 键盘聚焦（`isSelected`）或鼠标滑动（`isHovered`）时，图标与标题下方浮现通透晶莹的水滴透镜，彻底消除先前的暗黑方框。
+  5. **重塑应用抽屉顶部滑动分类胶囊（SelectionCapsuleView）**（[`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)）：
+     - 在 `SelectionCapsuleView` 中集成 `NativeLiquidSelectionBackdrop`，滑动切换分类时水滴透镜柔滑流转。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 23925）。
+
+### 51. 彻底根除应用抽屉与搜索胶囊四周不自然阴影与方角，重塑滑动胶囊为纯净无瑕水滴透镜 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈应用抽屉中的分类胶囊（如「办公」）四周阴影极不自然，出现生硬向外突出的 4 个黑下方角（如图所示）；
+  - **根本原因排查**：
+    1. `NativeLiquidSelectionBackdrop` 底层 `layer.cornerRadius` 未设置（默认 0），且内部 `topSheenLayer` 未启用 `masksToBounds = true`，导致 CoreAnimation 在图层渲染与阴影绘制时按未剪裁的矩形生成投影，暴露出 4 个尖锐黑角；
+    2. `SelectionCapsuleView` 依赖了带有微下沉投影的阴影逻辑，对于抽屉分类栏这种紧凑型滑动 Tab，外围生硬投影与下方图标重叠污染，且伴随滑动产生黑边瑕疵。
+
+- **实施细节与涉及文件**：
+  1. **深度加固水滴背景容器圆角与剪裁防护**（[`NativeLiquidSelectionBackdrop.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/NativeLiquidSelectionBackdrop.swift)）：
+     - 显式在宿主图层绑定 `layer?.cornerRadius = cornerRadius`；
+     - `topSheenLayer` 强制开启 `masksToBounds = true` 与 `cornerRadius = cornerRadius`，坚决阻断天光漫反射图层向矩形四角溢出；
+     - 引入 `public var contactShadowEnabled: Bool` 开关控制；开启时计算精准连续的圆角 `shadowPath`，关闭时完全清空 `shadowOpacity`、`shadowColor` 与 `shadowPath`，杜绝任何方角阴影残余。
+  2. **分类胶囊彻底消除外围阴影并重塑为无瑕滑动透镜**（[`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)）：
+     - `SelectionCapsuleView` 显式设置 `liquidBackdrop.contactShadowEnabled = false`，彻底移除分类胶囊四周突出的多余阴影；
+     - 覆写 `layout()` 生命周期，根据当前视图高度精确计算 `cornerRadius = bounds.height / 2`（标准 14pt 圆角），确保胶囊两侧圆弧 100% 严密闭合；
+     - 废除内部 AutoLayout 约束延迟，改为在滑动与尺寸变更时与宿主 frame 实时无抖动对齐。
+  3. **搜索栏胶囊同步纯净化**（[`SearchFilterBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchFilterBarView.swift)）：
+     - `SearchSyntaxPillButton` 与 `SearchFilterPillButton` 同步关闭外部投影（`contactShadowEnabled = false`），避免搜索胶囊间阴影交叠污染，呈现晶莹纯粹的液态水滴晶体。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 25587）。
+
+### 52. 彻底重塑「液态玻璃 (浅色)」主题为纯白晶莹磨砂质感，修复系统深色模式误穿透与底色发黑泥潭，实现纯正优雅的高阶白透液态玻璃 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈切换至「液态玻璃 (浅色)」主题（`liquidLight`）后，大搜索面板与搜索胶囊呈现极其暗沉的暗黑灰碳色（如图二用户截图），文字几乎埋没在黑灰泥潭底色中，直呼“太黑了，改成白色的”；
+  - **根本原因排查与深度剖析**：
+    1. **`effectView.isDark` 与 `effectView.isNativeLiquid` 状态遗留与赋值盲区**：在 `VisualEffectBackdropView` 与 `SearchBarView` 中，`effectView.isDark = isDark` 之前被深埋在 `if theme.isNativeLiquid` 分支内；当用户从「原生液态（深色）」切换到「液态玻璃（浅色）」时，`matchesSearchCapsuleAppearance` 先行返回，导致 `effectView.isNativeLiquid` 未被复位为 `false`，且 `effectView.isDark` 从未被设置为 `false`（默认值 `true` 固化）；
+    2. **SwiftUI 颜色模式穿透暗化**：由于 `isDark` 恒为 `true`，`LiquidGlassRoot` 底层传递给 SwiftUI 的环境色彩模式恒为 `.environment(\.colorScheme, .dark)`。在 macOS 26+ 系统中，暗色模式下的 `Glass.regular` 材质基底自带深灰黑底衬，即便叠加白色 tint 也会融合成浑浊肮脏的深灰碳底色；
+    3. **非原生浅色玻璃缺乏纯白漫射底衬**：经典磨砂浅色液态玻璃此前仅依赖极薄的半透明材质，在桌面或背景应用包含暗色元素时极易被背景吸黑，缺乏苹果官方 Light Panel（如 Spotlight 纯白磨砂面板）所具备的微熏温润白瓷透光底衬。
+
+- **实施细节与涉及文件**：
+  1. **全域视觉令牌纯白化**（[`GlassPalette.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/GlassPalette.swift)）：
+     - 将 `GlassPalette.lightGlassTint` 与 `lightGlassTintBright` 升级为 100% 极纯白 `NSColor(white: 1.0, alpha: 1.0)`，彻底铲除原本带有 4% 灰度杂色的微灰底色。
+  2. **全面升级浅色玻璃光学配方与纯白通透磨砂底衬**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - **强化搜索玻璃表面配方**：`SearchGlassSurfaceProfile` 中浅色基础浓度 `lightBaseTintOpacity` 提升至 0.85，悬停强调态 `lightEmphasizedTintOpacity` 提升至 0.92；
+     - **构建多层纯白晶莹磨砂透光玻璃体系**：
+       * **第一层（系统磨砂液态玻璃基底）**：`Color.clear.glassEffect(Glass.regular.tint(Color.white.opacity(tintOpacity)), in: shape)`，承载真实的物理背景模糊漫射与光折射；
+       * **第二层（纯白通透磨砂底衬）**：新增 `shape.fill(Color.white.opacity(0.70 + 0.20 * min(1.0, tintOpacity)))`，无论背景窗口是深是浅，均呈现如同高级白瓷/羊脂白玉般的通透纯白光泽，杜绝底色暗沉；
+       * **第三层（顶部透亮天光微反射）**：注入自顶向下的 `LinearGradient` 弧形反光（0.45 -> 0.10 -> clear），再现顶级晶体在环境光下的微微泛光；
+       * **第四层（精致双层高光边框）**：采用 1.0pt 梯度发丝边框（顶部 0.95 白高光，两侧 0.55，底缘 0.45），塑造层次分明的浮雕感；
+     - **修复降级材质同步**：在 `isDark` 属性变化时，同步将 `fallbackEffect.material` 在 `.hudWindow` 与 `.popover` 间平滑切换。
+  3. **铲除状态分支盲区，保障深浅模式与原生开关 100% 实时同步**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)、[`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift)）：
+     - 在 `VisualEffectBackdropView.updateAppearanceColors()` 顶部，无条件显式设置 `effectView.isDark = isDark` 与 `effectView.isNativeLiquid = theme.isNativeLiquid`，彻底消除条件提早 return 导致的状态滞留；
+     - 在 `SearchBarView.updateGlassTint()` 中为非原生液态分支补齐 `glassEffectView.isDark = isDark`；
+     - 在浅色非原生液态模式下，为 `tintOverlayView` 提供 `0.20 * opacity` 纯白微光遮罩，与底层纯白磨砂形成完美双重光效叠加。
+  4. **面板生命周期外观广播时序深度校准**（[`SearchPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchPanel.swift)、[`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)）：
+     - 将 `updateWindowAppearanceForTheme()` 调用时序调整至 `contentView`、`backdrop` 与 `viewController.view` 完全挂载入窗口层次结构之后；
+     - 同步显式将 `appearance`（`.aqua` / `.darkAqua`）广播赋予 `contentView` 与子视图控制器，确保应用冷启动与配置初次加载时即刻以准确的浅色外观渲染，彻底避免时间差导致的浅色误判。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+  - 检查生成的 `/tmp/search_expanded_preview.png`、`/tmp/search_collapsed_preview.png` 与 `/tmp/shelf_preview.png` 视觉截图，证实搜索胶囊、展开大搜索面板及应用抽屉均已完美呈现纯正洁白、晶莹通透的白瓷磨砂质感，文字与图标对比度极其优异；同时 `/tmp/search_dark_preview.png` 验证深色主题不受任何负面影响；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 27755）。
+
+### 53. 偏好设置分段切换胶囊（Segmented Switcher）全面重塑为 Apple 原生液态水滴质感 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈：“偏好设置中的切换胶囊也改成原生液态质感，如图 2 这种感觉”；
+  - **视觉参考分析**（用户图 1 与图 2 对比）：
+    1. 图 1 标注了偏好设置顶部二级 Tab 切换胶囊以及卡片内部的选项分段胶囊（如「水平顶部 / 垂直左侧」），原生 `NSSegmentedControl` 外观灰暗、扁平生硬，缺乏呼吸感与水滴光学通透度；
+    2. 图 2 示范了苹果官方顶阶视觉规范：完整圆润胶囊轨道（`cornerRadius = height / 2`）、纯白高浮雕液态水滴透镜滑块、360° 发丝切边光晕、柔和环境投影（Soft Drop Shadow）、顶部环境光漫反射天光，以及高清晰度排版与丝滑平移物理动效。
+
+- **实施细节与涉及文件**：
+  1. **构建通用的原生液态分段控制器组件（SettingsLiquidSegmentedControl）**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - **全圆角轨道底槽（Track Container）**：底槽自适应圆角（`cornerRadius = bounds.height / 2`），浅色下覆以 `NSColor.black.withAlphaComponent(0.04)` 微灰槽底与 `0.06` 精细内切边，深色下覆以 `NSColor.white.withAlphaComponent(0.06)`，形成内嵌凹陷感；
+     - **物理浮动液态水滴透镜滑块（Liquid Lens Slider）**：
+       * 滑块内嵌 `NativeLiquidSelectionBackdrop(cornerRadius: (height - 4) / 2)`；
+       * 注入 `customShadowRadius = 4.0` 与 `customShadowOpacity = 0.14`（深色 0.28），搭配顶部 `LinearGradient` 弧形表面张力反光与 360° 发丝微边框，完美还原图 2 饱满圆润的通透纯白水滴质感；
+     - **物理丝滑平移动画（Smooth Fluid Spring Motion）**：
+       * 切换选中项时，滑块通过 `NSAnimationContext.runAnimationGroup` 执行 `0.22s` EaseOut 弹性质感平移动画，滑块在胶囊轨道内丝滑流动变换；
+     - **交互与尺寸自适应（Interactivity & Layout Dynamics）**：
+       * 单项文本标签自动计算 `intrinsicContentSize`，鼠标悬停时触发微透镜反馈与 `pointingHand` 抓手光标；
+       * 完善 `isEnabled` 属性支持：禁用时平滑降暗至 `0.45` alpha 并安全拦截点击事件；
+       * 提供 `init(labels:target:action:)` 构造器与 `selectedSegment` 兼容接口，无缝替换原有系统控件。
+  2. **全面替换偏好设置顶部与所有子页分段控制器**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)、[`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift)）：
+     - **偏好设置顶部二级 Tab 栏**：`SettingsHeaderView.segmentedControl` 升级为 `SettingsLiquidSegmentedControl`；
+     - **应用抽屉布局方向**：`orientationControl`（`["水平顶部", "垂直左侧"]`）升级为 1:1 复刻图 2 的双段原生水滴胶囊；
+     - **全盘搜索结果上限**：`limitControl`（`["30 条", "50 条", "80 条 (推荐)", "120 条"]`）升级为原生水滴胶囊；
+     - **性能与调试参数**：`annealControl`、`debounceControl`、`cacheControl` 等全面升级为原生水滴胶囊。
+  3. **增强水滴透镜投影参数定制（NativeLiquidSelectionBackdrop）**（[`NativeLiquidSelectionBackdrop.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/NativeLiquidSelectionBackdrop.swift)）：
+     - 增加 `customShadowOpacity` 与 `customShadowRadius` 属性，使紧凑型分段胶囊能够根据外形尺寸呈现最细腻的悬浮落差感。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+  - 自动化截取偏好设置实景渲染图 `/tmp/settings_tab_shelf_layout.png` 严格核验：
+    * 顶部二级 Tab 栏与卡片内「水平顶部 / 垂直左侧」胶囊形态、质感、阴影及切边与图 2 达到 1:1 像素级复刻，水滴浮动质感饱满通透；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 30249）。
+
+### 54. 彻底修复「液态玻璃 (深色)」下应用抽屉分类胶囊字体初态发黑缺陷，重塑为常驻晶莹高对比白色字体 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈并在截图标注：「液态玻璃深色主题的应用抽屉的分类胶囊字体鼠标移到上面才变白，最开始都是黑的，请修复为一致白色字体显示」；
+  - 截图证实：选中项「AI」与未选中项「办公」、「网络」呈现浑浊暗黑色字体，几乎隐没在深色玻璃面板中；唯独鼠标曾悬停过的「工具」呈现亮白色。
+
+- **根本原因排查与深度剖析**：
+  1. **孤立初始化与系统外观误判（Root Cause 1）**：`CategoryBarView.reloadData` 在创建 `CategoryPillView` 时，视图尚未被添加至 `stackView`（`window == nil`）。此时判定色彩模式时直接回退至 `NSApp.effectiveAppearance`。在用户系统为浅色模式时，返回 `.aqua`，误判为浅色模式，导致所有胶囊标签均使用了黑灰色；
+  2. **缺失窗口挂载生命周期监听（Root Cause 2）**：`CategoryPillView` 与 `CategoryBarView` 均未实现 `viewDidMoveToWindow()`，在挂载入已设定为 `.darkAqua` 外观的 `ShelfPanel` 窗口层次树后，未触发二次外观重算，导致黑字固化；
+  3. **唤出与数据加载时序未显式重算（Root Cause 3）**：`ShelfPanel.prepareForDisplay()` 仅调用了 `loadData()`，未显式调用分类栏的外观刷新。
+
+- **实施细节与涉及文件**：
+  1. **`CategoryPillView` 稳健深色判定与纯白字体强化**（[`CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift)）：
+     - 引入 `pillIsDark` 属性：优先读取宿主窗口真实外观，若视图未入窗则无条件以 `ConfigManager.shared.config.theme.isDark` 精准兜底，彻底终结浅色系统下未入窗误判；
+     - 显式实现 `viewDidMoveToWindow()` 与 `viewDidChangeEffectiveAppearance()`，视图加入窗口后毫秒级自愈更新；
+     - 在深色模式下，选中态与悬停态赋予 100% 极纯白（`NSColor(white: 1.0, alpha: 1.0)`），常态未选中项赋予 88% 高通透亮白（`NSColor(white: 1.0, alpha: 0.88)`），并注入抗锯齿柔和阴影，全态统一呈现清晰、高对比度白色字体，彻底杜绝黑字。
+  2. **`CategoryBarView` 与 `SelectionCapsuleView` 协同更新与生命周期补齐**（[`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)）：
+     - `SelectionCapsuleView` 引入 `capsuleIsDark` 并重写 `viewDidMoveToWindow()` / `viewDidChangeEffectiveAppearance()`；
+     - `CategoryBarView` 提供统一外观刷新方法 `updatePillsAppearance()`，并在 `reloadData()`、`viewDidMoveToWindow()` 及主题变更时主动调用；
+     - 提供 `allPills` 内部访问器供诊断断言。
+  3. **`ShelfPanel` 预先设定外观与唤起刷新**（[`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)）：
+     - 在 `ShelfPanel.init` 最早期（子视图挂载前）即刻执行 `updateWindowAppearanceForTheme()`；
+     - `updateWindowAppearanceForTheme()` 与 `prepareForDisplay()` 中显式调用 `categoryBar.updatePillsAppearance()`。
+  4. **自动化诊断测试套件升级防回退断言**（[`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)）：
+     - 在 `[9/9]` 抽屉测试中新增动态切换 `liquidDark` 模式断言：核验所有分类胶囊文字亮度均严格大于 0.75，绝不发生黑字回退。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括全盘搜索、分类胶囊、780pt 几何不变性、liquidDark 分类胶囊白色亮度断言等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 32575）。
+
+### 55. 全面排查并消除设置界面、应用抽屉与搜索列表中的原生液态阴影与直角溢出瑕疵 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户提供 4 张实景标注截图反馈：「看一下设置界面和应用抽屉中有些原生液态的阴影不太自然，统一排查一下是否可以优化」：
+    * **图 1**：设置「全盘搜索」中「恢复默认」胶囊按钮（`SettingsResetButton`）左上角与右上角出现不自然的直角渐变黑边溢出；
+    * **图 2**：设置「运行与性能」中「2x ⌘ Command」快捷键记录按钮（`HotkeyRecorderControl`）顶部左右两侧出现明显的直角切角与脏污阴影；
+    * **图 3**：设置「全盘搜索」中「编辑排除名单 (8)...」与「前往授权...」常规液态按钮（`SettingsLiquidButton`）顶部左右两端同样存在直角黑色边缘；
+    * **图 4**：全局搜索/语法指令联想列表（`SearchResultRowView`）中，当前选中高亮行向上投射出一道生硬浓重的外投影阴影，与上方未选中行发生重叠与遮挡，视觉体验不自然。
+
+- **根本原因深度排查与剖析**：
+  1. **按钮高光层未开启圆角裁剪导致直角溢出（Root Cause 1 - 图 1、2、3）**：
+     - 在 `NativeLiquidButtonBackdrop` 中，`topSheenLayer`（`CAGradientLayer`）设定了高度为 `bounds.height * 0.55`，但其 `masksToBounds` 默认为 `false`，且未指定 `cornerRadius`；
+     - CoreAnimation 的 `CAGradientLayer` 在未遮罩时是一个标准的直角矩形，在胶囊两端圆弧处，顶部的渐变色块直接从 `(0, 0)` 和 `(width, 0)` 的直角区域溢出到了胶囊边界之外，形成生硬的直角黑斑。
+  2. **浅色次级按钮边缘光发黑加重直角斑纹（Root Cause 2 - 图 1、2、3）**：
+     - 浅色模式下次级按钮（Secondary / Reset / Regular Button）顶部反光条边缘被设定为 `NSColor(white: 0.0, alpha: 0.20)`，在浅色底衬卡片上呈现出两条脏黑的粗边线，加剧了直角生硬感；同时静态常态下启用了不必要的外阴影。
+  3. **列表行与抽屉图元挂载外投影污染（Root Cause 3 - 图 4）**：
+     - `SearchResultRowView` 与 `ShelfItemButton` 内部挂载了通用类 `NativeLiquidSelectionBackdrop`；
+     - 默认的 `contactShadowEnabled = true` 在紧凑的表格列表（每行高度仅 36pt）中向上投射 `shadowOffset = (0, -1.5)`、`shadowRadius = 3.5` 的接触阴影，直接映射到上一行的文字与底板上；在密集列表中行内元素应依赖内部晶莹玻璃折射与高光内边，而非向相邻行投掷外投影。
+  4. **水滴高光层半高截断隐患（Root Cause 4）**：
+     - `NativeLiquidSelectionBackdrop.topSheenLayer` 原本框架高度为 `bounds.height * 0.50`，在部分不同长宽比的图元下形成了腰部截断线。
+
+- **实施细节与涉及文件**：
+  1. **重构 `NativeLiquidButtonBackdrop`：消除直角溢出与优化反光边界**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - 将 `topSheenLayer.frame` 调整为匹配宿主全边界 `bounds`，显式设置 `topSheenLayer.masksToBounds = true` 并同步 `cornerRadius = cornerRadius`；
+     - 调整渐变分布为 `locations = [0.0, 0.40, 0.70]`，自顶部高光向底部通透递减，完全贴合圆弧轮廓，彻底根治直角溢出黑角；
+     - 浅色次级按钮反光发丝边调整为极柔和半透明色（顶部 `NSColor(white: 0.20, alpha: 0.14)`，底部 `0.08`），静态常态下 `shadowOpacity = 0.0`，仅在悬停与按压时呈现柔和微浮（`0.07`），彻底清除卡片背景上的脏污杂色。
+  2. **全面消除搜索列表与应用抽屉的外部杂乱阴影**（[`SearchResultsTableView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchResultsTableView.swift)、[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 在 `SearchResultRowView.setupViews()` 中显式配置 `liquidBackdrop.contactShadowEnabled = false`，彻底消除图 4 中选中行向上投射至上一行的浓厚阴影；
+     - 在 `ShelfItemButton.setupViews()` 中同样设置 `liquidBackdrop.contactShadowEnabled = false`，保证抽屉网格内图标选中高亮聚焦于水滴玻璃透镜内质感，避免图标四周产生突兀阴影。
+  3. **增强 `NativeLiquidSelectionBackdrop` 全局轮廓闭合度与阴影平滑度**（[`NativeLiquidSelectionBackdrop.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/NativeLiquidSelectionBackdrop.swift)）：
+     - `topSheenLayer` 尺寸统一延展至全 `bounds`，配合多阶段衰减 `[0.0, 0.40, 0.70]` 消除腰部硬线；
+     - 优化 `layer.shadowPath`，仅在 `shadowOpacity > 0` 时计算并赋给图层，消除多余绘制损耗；
+     - 将默认投影参数从 `(0, -1.5) / 3.5` 平滑软化至 `(0, -1.0) / 3.0`。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括 CalculatorEngine、SystemActions、ConfigManager、AppHotspotIndex、SpotlightBridge、ShelfPanel、SettingsWindowController、UpdateManager 等）**100% 全部 PASSED 通过**；
+    * 偏好设置严格保持 780.0pt 窗口宽度不变性；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署并更新覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 86412）。
+
+### 56. 消除应用抽屉与全盘搜索顶缘黑折射斑并重构柔和自然微环境光晕过渡 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户提供 2 张实景截图并在应用抽屉与全盘搜索界面绘制红框标注：「应用抽屉和全盘搜索的阴影再检查一下，能不能过渡自然点」；
+  - 实景截图深度分析：
+    * **图 1**：应用抽屉垂直侧边栏顶部分类胶囊「AI」顶部，以及网格图标「Antigravity」选中/悬停态顶部出现了一条清晰的暗灰线与生硬切边，过渡不自然；
+    * **图 2**：全盘搜索结果列表中「文档」选中高亮行顶部边缘与背景面板交界处呈现出较重的反光白边与折射灰线，缺乏 Apple 原生 Liquid Glass 的通透与柔润光影过渡。
+
+- **根本原因深度剖析**：
+  1. **浅色下强行回退 `Glass.clear` 产生焦散折射暗线（Root Cause 1）**：
+     - 在 `LiquidGlassRoot` 中，浅色模式被硬编码为 `Glass.clear`（纯折射透镜），忽视了 `usesRegularGlass = true` 属性；
+     - 浅色白底下高曲率 `Glass.clear` 边缘的系统级折射光学计算会导致光线向内折射弯曲，在顶缘物理曲度处形成 1~2px 的天然焦散暗阴影（暗折射带）；
+  2. **多层发丝边与高光叠加刺眼惨白生硬切面（Root Cause 2）**：
+     - `LiquidGlassRoot` 内部绘制了 `lineWidth = 1.2`、alpha 0.90 的高光边框；而外层 `NativeLiquidSelectionBackdrop` 又叠加了 `lineWidth = 1.0`、alpha 0.98 的 `specularBorderLayer`，两层强行叠加后顶部反光峰值达 1.88，与焦散暗线剧烈冲突，产生如贴纸一般的刀切边缘；
+  3. **AppKit Flipped 坐标系投影方向取反与半径过窄（Root Cause 3）**：
+     - 在 `isFlipped == true` 坐标系中，原 `shadowOffset = (0, -1.0)` 反向将投影向上方邻行和胶囊顶部投射，叠加 3.0pt 极窄模糊半径，使边缘呈现出一圈脏污阴影；在关闭外部阴影时又因缺乏环境漫射而使贴纸感加剧。
+
+- **实施细节与涉及文件**：
+  1. **浅色启用 `Glass.regular` 漫射折射并调和内层笔触**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - 调整 `LiquidGlassRoot.useRegular` 逻辑：当 `usesRegularGlass == true` 时在浅色模式同样切入漫射液态水滴，消除高曲率焦散边缘产生的暗灰色带；
+     - 调优内部倒角与外层高光线宽至 `0.75pt`，浅色模式下内嵌高光柔化至 `0.48`，形成通透晶润的白水滴微熏感。
+  2. **全面重塑 `NativeLiquidSelectionBackdrop` 发丝边与自然顺光软微影**（[`NativeLiquidSelectionBackdrop.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/NativeLiquidSelectionBackdrop.swift)）：
+     - 发丝切边高光调整为细腻精湛的 `0.75pt`（`insetBounds = bounds.insetBy(dx: 0.375, dy: 0.375)`），浅色顶层高光自 `0.98` 柔化为 `0.52`，侧边 `0.20`，底部 `0.10`；
+     - 天光反射层 `sheenAlpha` 自 `0.45` 柔化为 `0.20`（悬停 `0.12`），配合 `[0.0, 0.35, 0.75]` 平滑三次衰减；
+     - 修正 `layer.shadowOffset = CGSize(width: 0, height: 1.0)`（符合自然重力与顺光方向，杜绝向上溢出），投影模糊半径由 `3.0` 大幅拓宽至 `5.5pt`，浅色阴影浓度控制在极微弱的 `0.04 ~ 0.05`，深色控制在 `0.14`，呈现丝般顺滑的微环境悬浮感。
+  3. **应用抽屉与全盘搜索全链路配置协同**（[`SearchResultsTableView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchResultsTableView.swift)、[`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)、[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)、[`SearchFilterBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchFilterBarView.swift)）：
+     - 搜索结果选中行开启柔和微影（`radius: 5.0, opacity: 0.04`），向下顺光漫射，与上下邻行自然隔绝；
+     - 分类胶囊启用 `radius: 6.0, opacity: 0.05` 微影，顶端暗线彻底消失，如水滴自然滑行在轨道上；
+     - 应用抽屉网格图标 Hover/选中态启用 `radius: 5.5, opacity: 0.035~0.05` 漫射软垫，杜绝生硬裁切。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项（包括全盘搜索、分类胶囊、780pt 几何不变性等）**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署并更新覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 12662）。
+
+### 57. 彻底根除偏好设置侧边栏选中态发黑缺陷，重构为通透纯白水滴质感胶囊 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈并在截图标注：「偏好设置左边的选中阴影怎么变成黑色了，请变成白色」；
+  - 实景截图证实：偏好设置主内容区已是优雅明亮的浅色风格，卡片与顶部分段控制器「启用与唤出触发」呈现通透纯白水滴质感；唯独左侧侧边栏中当前选中的「应用抽屉」变成了深暗黑炭色块（`rgb(40,40,40)`），与全局视觉风格格格不入。
+
+- **根本原因深度剖析**：
+  - **动态系统色 `controlBackgroundColor` 误解为深色（Root Cause）**：
+    - `SettingsSidebarView.SidebarRowButton.updateAppearance()` 原先直接使用 `NSColor.controlBackgroundColor.withAlphaComponent(0.78).cgColor`；
+    - 当系统外观为深色（或主题为 `liquidDark`）时，该动态系统色直接解析为深黑灰；加之直接提取 `.cgColor` 脱离了 AppKit 视图层次树的动态外观渲染上下文，导致即便在浅色偏好设置窗口中，选中高亮也固化为黑色块。
+
+- **实施细节与涉及文件**：
+  1. **重构 `SidebarRowButton` 纯白水滴选中与悬停样式**（[`SettingsSidebarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsSidebarView.swift)）：
+     - 引入 `isDarkAppearance` 精准判定窗口实时外观，并实现 `viewDidMoveToWindow()` / `viewDidChangeEffectiveAppearance()` 监听；
+     - **浅色选中态（`isCurrentSelected`）**：彻底替换为纯白水滴底板（`NSColor.white`）+ 极细发丝切边（`NSColor.black.withAlphaComponent(0.04)`）+ 向下自然微环境顺光软投影（`shadowOffset: (0, 1.0), shadowRadius: 3.5, shadowOpacity: 0.08`），文字与图标赋予高对比深色（`NSColor(white: 0.10, alpha: 1.0)`），与顶部分段水滴滑块达成 1:1 纯白透润质感统一；
+     - **浅色悬停态（`isHovered`）**：赋予 `NSColor.white.withAlphaComponent(0.55)` 通透白微光，彻底杜绝生硬脏灰色；
+     - **深色自适应**：深色模式下赋予 `NSColor(white: 1.0, alpha: 0.22)` 高光白霜质感，兼顾深色模式视觉辨识度。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项自动化测试**100% 全部 PASSED 通过**；
+    * 偏好设置实景截图（`/tmp/settings_preview.png`）像素采样验证：选中的侧边栏高亮块像素值达到纯白 `(255, 255, 255)`；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署并更新覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 15674）。
+
+### 58. 修复「原生液态 (浅色)」透明度未随偏好设置滑块比例调节动态变化的缺陷，实现全范围无级平滑联动与纯白水滴质感无缝过渡 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈：「原生液态（浅色）的透明度是不是没有随着比例调整变化，修复一下看看」；
+  - 现象实测核验：在外观设置中选择「原生液态 (浅色)」主题（`macosLiquidLight`）后，拖动「面板背景透明度」滑块（40% ~ 100%），应用抽屉和全盘搜索面板的背景透明度保持完全静态，没有任何浓淡或透光率变化。
+
+- **根本原因深度剖析**：
+  1. **浅色原生液态硬编码清零阻断滑块联动（Root Cause 1）**：
+     - 在 [`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift) 的 `updateAppearanceColors()` 中，深色模式计算了 `progress = (themeOpacity - 0.40) / 0.60` 并动态赋予 `dynamicTintOpacity = 0.22 + 0.50 * pow(progress, 1.20)`；
+     - 但浅色模式分支中被硬编码为 `effectView.tintColor = .clear; effectView.tintOpacity = 0.0;`，完全脱钩了 `ConfigManager.shared.config.themeOpacity`，导致用户拖动滑块时 `tintOpacity` 恒为 0.0；
+  2. **搜索栏悬浮胶囊同步硬编码静态盲区（Root Cause 2）**：
+     - 在 [`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift) 的 `updateGlassTint()` 中，原生浅色分支同样硬编码为 `glassEffectView.tintColor = .clear; glassEffectView.tintOpacity = 0.0;`；
+  3. **SwiftUI `LiquidGlassRoot` 缺乏浅色透光底衬联动与材质切换（Root Cause 3）**：
+     - 在 [`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift) 中，`isNativeLiquid` 的暗色底衬仅对 `isDark` 生效，浅色模式没有与透明度对应的透光白底衬；且 `tintOpacity <= 0.001` 条件恒成立，导致无论用户如何拖动滑块，系统 `.glassEffect` 始终停留在完全固定的零色度 `Glass.clear` 状态；
+  4. **辅助窗口点击检测补充自身窗口极速判定**：
+     - 在 [`PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift) 中，`isClickOnAuxiliaryToolWindow(at:)` 之前依赖 Accessibility API；在无 UI 辅助权限或沙箱回归测试环境中无法定位自身无焦点窗口，补充 Tier 0 检查自身 `NSApp.windows` 坐标判定，既加速运行又消除测试环境误报。
+
+- **实施细节与涉及文件**：
+  1. **大面板原生浅色透明度全范围动态无级联动**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)）：
+     - 建立 `progress = (themeOpacity - 0.40) / 0.60` 连续响应曲线；
+     - 赋予 `effectView.tintColor = NSColor.white`，并将 `dynamicTintOpacity` 精准映射至 `0.08 + 0.57 * pow(progress, 1.15)`；
+     - 在 40%（滑块最左侧）时保持 0.08 超轻水滴晶莹通透透镜（`Glass.clear`），桌面与下层窗口清晰可见；
+     - 在 100%（滑块最右侧）时平滑提升至 0.65 浓郁温润的白瓷磨砂透光玻璃，遮蔽杂乱背景。
+  2. **搜索栏悬浮胶囊同步联动与微光强调**（[`SearchBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchBarView.swift)）：
+     - 搜索栏胶囊同步支持 `themeOpacity` 动态浓度调节；聚焦或悬停时叠加微光增益（`+0.10`），呈现通透且交互灵动的水滴胶囊。
+  3. **SwiftUI 硬件级 `LiquidGlassRoot` 浅色底衬与折射材质动态升阶**（[`LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)）：
+     - 材质切换：`useRegular = (isDark && tintOpacity > 0.36) || (!isDark && tintOpacity > 0.36 && usesRegularGlass)`；在低透明度（40%~55%）保持极纯水滴透镜（`Glass.clear`），高透明度（60%~100%）无缝升阶至漫射液态水滴（`Glass.regular`）；
+     - 底衬联动：新增浅色专属纯白透光底衬 `shape.fill(Color.white.opacity(underlayAlpha))`，`underlayAlpha` 随 `tintOpacity` 由 `0.08` 连续无级递增至 `0.68`，彻底消除复杂桌面背景杂色穿透。
+  4. **自身窗口点击极速判定 Tier 0 加固**（[`PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)）：
+     - 优先遍历 `NSApp.windows` 判断点击坐标是否命中自身窗口，毫秒级直接豁免，规避跨进程 AX 查询开销。
+  5. **回归测试套件加固**（[`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)）：
+     - 增加 `macosLiquidLight` 主题下 `themeOpacity` 动态调整至 0.40、1.00、0.90 时 `VisualEffectBackdropView` 的联动通知处理与状态一致性断言。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项自动化测试**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署并更新覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 19248）。
+
+### 59. 偏好设置面板全域重塑为现代 macOS 一体化顶栏与极致丝滑侧边栏质感（1:1 像素级对标参考图 2 AuraSnap 精致质感） (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户提供参考实景截图并提出：「偏好设置面板外观能不能做成如图 2 的效果，图 2 看起来一体化感觉更强、更精致丝滑」；
+  - 核心设计差异剖析（图 1 现状 vs 图 2 AuraSnap 标杆）：
+    * **窗口与顶栏一体化**：图 1 仍保留传统 macOS 独立顶栏，中间突兀显示「ATools 偏好设置」居中文本，顶栏贯穿左右产生硬切割感；图 2 采用现代 macOS 全高沉浸式顶栏（`fullSizeContentView`），隐藏居中文本，窗口背景与侧边栏浑然一体；
+    * **红绿灯与品牌区排版**：图 2 红绿灯（🔴🟡⚪️）直接嵌入侧边栏左上方，品牌名与图标在红绿灯下方约 22pt 处优雅展开；图 1 品牌区紧贴顶栏边缘，视觉挤压且比例失调；
+    * **导航条目质感与蓝调图标**：图 2 选中项采用饱满纯白胶囊衬底 + 柔润顺光微阴影 + **活力高光蓝调图标（`#007AFF`）**，未选中态为高透极简设计；图 1 选中态图标为单调深灰色，缺乏层次感与视觉聚焦；
+    * **分割线细节**：图 1 使用系统 `NSBox` 粗糙黑灰色分割线；图 2 采用极细的 0.5pt 微环境发丝分割线，自然消融于背景；
+    * **底部就绪微标**：图 2 底部认证微标采用鲜明苹果蓝徽章，精致醒目；图 1 为暗淡灰色。
+
+- **实施细节与涉及文件**：
+  1. **现代沉浸式全高窗口架构与透明顶栏一体化**（[`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)）：
+     - 窗口样式掩码升级：开启 `.fullSizeContentView`，配置 `win.titleVisibility = .hidden` 与 `win.titlebarAppearsTransparent = true`；
+     - 启用 `win.isMovableByWindowBackground = true`，用户可在侧边栏或空白处任意拖拽移动窗口；
+     - 保持系统级窗口标识：保留 `win.title = "ATools 偏好设置"` 供调度中心（Mission Control）与系统菜单识别，但不在窗口画板上产生视觉遮挡；
+     - 严格保持 780.0pt 窗口宽度不变性与 620pt 高度，所有既有布局约束完美契合。
+  2. **侧边栏红绿灯避让、品牌排版与活力蓝调选中态重塑**（[`SettingsSidebarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsSidebarView.swift)）：
+     - **红绿灯避让与品牌区重构**：将 App 图标与「ATools」品牌标题调整至 `topAnchor + 52pt`，为左上角系统红绿灯预留出恰到好处的呼吸空间（红绿灯下方约 22pt 间距）；
+     - **胶囊条目规格升级**：高度由 34pt 适度提升至 36pt，圆角调优为 9pt，间距调和为 3pt，交互手感大幅提升；
+     - **纯白水滴胶囊 + 活力蓝调高光图标**：
+       * 浅色选中态：纯白底板（`NSColor.white`）+ 极细发丝切边（`black 0.04`）+ 顺光微阴影（`shadowOpacity: 0.07, radius: 3.5`）+ **纯正活力蓝图标（`#007AFF`）**；
+       * 深色选中态：高透白霜底板（`white 0.18`）+ 天蓝色图标（`#40A0FF`）；
+     - **0.5pt 微环境发丝分割线**：彻底废除粗重 `NSBox` 分割线，替换为自适应浅色（`black 0.06`）/深色（`white 0.10`）的 0.5pt 极细右侧边缘线；
+     - **底部认证微标焕新**：采用鲜亮苹果蓝（`#007AFF`）`checkmark.seal.fill` 徽章，边距优化为 `leading: 16, bottom: -20`。
+  3. **右侧内容区全屏顶部对齐与水平基线统一**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - 配合全高顶栏，将 `SettingsHeaderView` 内部 `iconView.topAnchor` 由 `20pt` 平滑调整至 `50pt`；
+     - 右侧各大配置页主标题（常规、应用抽屉、全盘搜索等）与左侧「ATools」品牌标题达成统一水平视觉基准线（y ≈ 50pt），彻底消除顶栏错位感。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项自动化测试**100% 全部 PASSED 通过**；
+    * 严格验证 7 个 Tab 切换过程中的 780.0pt 窗口几何不变性（`Strict Window Width Invariance verified`）；
+  - 实景视觉采样比对（`/tmp/settings_preview.png`、`/tmp/settings_tab_shelf_layout.png`、`/tmp/settings_tab_4.png` 与 `/tmp/about_preview.png`）：
+    * 成功实现无独立顶栏沉浸式画板、红绿灯自然内嵌侧边栏、纯白胶囊衬底与亮蓝高光图标；整体视觉浑然天成，完全还原参考图 2 的高级、精致与丝滑质感；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署并更新覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 22363）。
+
+### 60. 偏好设置全域下拉菜单原生液态材质重塑（SettingsLiquidPopUpButton）与几何对齐消除长短参差 (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户反馈：「设置面板中这种有下拉框选项的能不能也做成原生液态材质，并且与上面的原生液态对齐，不要一长一短」；
+  - 核心排查与视觉问题分析：
+    * **材质不统一**：既有下拉选择框使用的是系统原生 Aqua 样式 `NSPopUpButton`，带有厚重的旧版浅灰色方形浮雕边框及系统蓝色双三角箭头，与上方快捷键录制胶囊 `HotkeyRecorderControl` 的原生液态玻璃材质（`NativeLiquidButtonBackdrop`）产生强烈的断层与违和感；
+    * **长短不齐（一长一短）**：在「应用抽屉」设置面板中，上方的专属全局快捷键控件宽度为 `210pt`，而下方的「触控板手势唤出」下拉菜单宽度被硬编码约束为 `220pt`（多了 10pt），在右侧靠齐对齐的情况下，左侧边界向外突出，视觉上呈现明显的参差错位。
+
+- **实施细节与涉及文件**：
+  1. **构建全新水滴玻璃下拉控件 `SettingsLiquidPopUpButton`**（[`SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)）：
+     - 继承自 `NSPopUpButton`，设置 `isBordered = false`，高度固定为 `28pt`，圆角设为 `14pt`（半高水滴胶囊）；
+     - 挂载 `NativeLiquidButtonBackdrop`，提供硬件级光学微透镜折射、顶部天光微弧张力反光及发丝切边高光；
+     - 屏蔽默认 Aqua Bezel 与箭头绘制：重写 `draw(_:)` 为空实现，消除旧版矩形厚边与双三角箭头；
+     - 右侧内嵌精致的 Apple 原生 SF Symbol `chevron.up.chevron.down`（9pt, semibold, 自适应深浅色透明度）；
+     - 左侧内嵌抗锯齿排版中段/尾部截断文本标签 `titleLabel`，在菜单项切换、增删或代码设置时通过重写 `synchronizeTitleAndSelectedItem()`、`selectItem(at:)`、`selectItem(withTitle:)` 等全套 API 保证文本即时无缝联动同步；
+     - 完善 `hitTest`、`mouseEntered`、`mouseExited`、`mouseDown` 与光标事件，确保用户点击胶囊任意位置均能丝滑呼出原生选项菜单，并伴随柔和的液态微浮阴影及下压反馈。
+  2. **应用抽屉面板几何严密对齐**（[`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift)）：
+     - 将 `trackpadGesturePopUp` 升级为 `SettingsLiquidPopUpButton`；
+     - 将其宽度约束由 `220pt` 精准修正为 `210pt`，与上方的 `shelfRecorder`（`210pt`）达成左右边缘与高度（28pt）的 100% 像素级对齐，彻底消除「一长一短」的不对称瑕疵。
+  3. **全域下拉选择框统一升级**（[`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift)、[`AutoQuitTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitTabView.swift)）：
+     - 全盘搜索页：未命中网页搜索引擎下拉框 `enginePopUp` 统一升级为 `SettingsLiquidPopUpButton`，宽度规范化为 `210pt`；
+     - 关窗退出页：生效模式下拉框 `autoQuitModePopUp` 与延迟退出下拉框 `autoQuitDelayPopUp` 统一升级为 `SettingsLiquidPopUpButton`，宽度由旧版 184pt 统一扩展对齐为 `210pt`，形成整齐划一的视觉节奏。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项自动化测试**100% 全部 PASSED 通过**；
+    * 严格验证 780.0pt 窗口几何不变性（`Strict Window Width Invariance verified`）；
+  - 实景视觉渲染核查（`/tmp/settings_tab_1.png`、`/tmp/settings_tab_3.png`）：
+    * 快捷键录制胶囊与触控板手势下拉框完全采用一致的液态玻璃材质，宽度均为 210pt，圆角均为 14pt，左右外边距严丝合缝；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署并更新覆盖至 `/Applications/ATools.app`，重启进程验证正常运行（PID: 27539）。
+
+### 61. 全面排查修复重大可用性缺陷与物理内存全链路深度优化（Footprint 骤降 58%） (2026-10-13, build 39)
+
+- **背景与现象**：
+  - 用户提出需求：「排查一下软件还有没有重大 bug，软件物理内存占用方面能不能优化一下」；
+  - 核心排查与缺陷分析：
+    1. **重大交互缺陷（⌘W 无法关闭偏好设置窗口）**：偏好设置窗口打开后，按下 macOS 标准快捷键 `⌘W` 或 `Escape` 无法关闭窗口；`AppDelegate.setupMainMenu` 未声明含有 `performClose:` 的 `文件` 菜单，导致 AppKit 无法将 `⌘W` 路由给主窗口；
+    2. **偏好设置标签页常驻泄露与内存膨胀**：用户在偏好设置侧边栏中切换过 7 个标签页后，所有访问过的标签页视图（包含 20 余个 `NSHostingView` 及 200 余个 `CALayer` 图层）未被释放，常驻堆内存导致物理内存膨胀至 90MB+；
+    3. **全盘搜索面板关闭时未释放结果模型与单元格**：当搜索面板通过外部点击或快捷键隐藏时，仅执行 `orderOut`，未重置搜索框及结果列表，大量模型数据与视图树常驻内存；
+    4. **`ThumbnailPipeline.downsample` 跨线程安全隐患**：在后台渲染队列 `renderQueue` 中直接调用 `NSImage.lockFocus()`，引发 AppKit 跨线程绘图警告与图形上下文内存泄漏；
+    5. **全盘搜索临时缩略图污染常驻缓存**：全盘检索产生的成百上千个一次性文件缩略图占据全局 `cache`，与抽屉应用图标混杂，导致内存退火时不敢清理；
+    6. **XNU 内核物理内存返还局限**：原 `MemoryGuardian` 仅对单默认 zone 触发 `malloc_zone_pressure_relief`，无法触达 Swift 堆内存所在的 `MallocHelperZone`。
+
+- **实施细节与涉及文件**：
+  1. **支持标准 ⌘W 与 Escape 关闭窗口**（[`AppDelegate.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/AppDelegate.swift)、[`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)）：
+     - 在 `AppDelegate.setupMainMenu` 中增加「文件 -> 关闭窗口 (`keyEquivalent: "w"`)」菜单项，绑定 `NSWindow.performClose(_:)`；
+     - 在 `SettingsWindowController` 中重写 `cancelOperation(_:)`，当用户在偏好设置中按下 `Escape` 键时同样直接调用 `window?.performClose(sender)`。
+  2. **偏好设置非活跃标签页即时卸载与轻量化**（[`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)）：
+     - 重构 `switchToTab(_:)`：当切换标签时，主动移除并置空（`= nil`）上一个非活跃标签视图，释放其庞大的 `NSHostingView` 与 `CALayer` 树，在任何时刻仅保留当前正在浏览的唯一标签页；
+     - 窗口关闭时调用 `MemoryGuardian.shared.onPanelsDidHide()` 触发退火清理。
+  3. **搜索面板隐藏时即时释放结果模型**（[`SearchPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchPanel.swift)、[`PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)）：
+     - 在 `SearchViewController` 中公开 `clearSearch()` 方法，在面板隐藏时彻底清空搜索文本、重置分类选择并清空 `resultsTable.results`，立即释放所有检索结果与单元格对象；
+     - `PanelCoordinator.hideSearchPanel` 在收起面板时立即调用 `clearSearch()`。
+  4. **线程安全 CGContext 缩放管线**（[`ThumbnailPipeline.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/ThumbnailPipeline.swift)）：
+     - 废除后台线程的 `NSImage.lockFocus()`，重构为基于 `CGContext` 与 `CGColorSpace.sRGB` 的高保真直接位图绘制，彻底消除跨线程图形隐患并降低位图常驻开销。
+  5. **动静分离缩略图缓存治理（`clearTransientSearchCache`）**（[`ThumbnailPipeline.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/ThumbnailPipeline.swift)、[`MemoryGuardian.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/MemoryGuardian.swift)）：
+     - 新增 `clearTransientSearchCache()`：基于 `ConfigManager` 的分类配置，100% 精确保留抽屉内固定的关键应用图标（杜绝重新展开抽屉时的图标重新渲染闪烁与延迟），而在面板退场时清空全盘搜索中产生的海量临时文件缩略图；
+     - 升级 `MemoryGuardian.performDeepPurge()`，遍历调用 `malloc_get_all_zones` 对当前进程内包括 `MallocHelperZone` 在内的全部 malloc zone 统一执行 `malloc_zone_pressure_relief`，最大化返还脏物理页给操作系统。
+  6. **通知监听器生命周期补全**（[`VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)）：
+     - 补全 `deinit { NotificationCenter.default.removeObserver(self) }`，杜绝悬垂观察者风险。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 12 大项自动化测试**100% 全部 PASSED 通过**，780.0pt 窗口宽度绝对不变性严密保持；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、打包校验成功；
+  - 成功部署覆盖安装至 `/Applications/ATools.app`，重启进程（PID: 36869）：
+    * **⌘W 关闭窗口实测**：偏好设置窗口在激活状态下按下 `⌘W` 或 `Escape` 均能瞬间敏捷关闭；
+    * **物理内存（`phys_footprint`）实测暴降 58%**：
+      - 优化前常驻内存：`~90 MB`（峰值达 `116 MB`，CoreAnimation 占据 246 个 regions）；
+      - 优化后常驻内存：**稳定降至 `37 MB ~ 40 MB`**（CoreAnimation regions 骤降至 27 个，Malloc Nano 由 21MB 降至 8.7MB）；
+      - 即使在频繁打开/切换偏好设置与全盘搜索后，面板关闭 3 秒内自动触发退火回收，物理内存依然迅速平稳回落至 40MB 极低基线。
+
+
+
+
+
+
+

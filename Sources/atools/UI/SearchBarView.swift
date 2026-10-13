@@ -574,6 +574,7 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
 
     private func updateBackgroundStyles() {
         let isDark = glassIsDark
+        let isNative = isNativeLiquidTheme
 
         // The native glass view carries the surface; the host layer stays clear
         // so the liquid blur is the only visible material.
@@ -582,7 +583,19 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         if isMergedIntoSheet {
             layer?.borderWidth = 0
             layer?.shadowOpacity = 0
-            iconImageView.contentTintColor = GlassPalette.textSecondary(isDark: isDark)
+            iconImageView.contentTintColor = isNative
+                ? (isDark ? NSColor(white: 1.0, alpha: 0.85) : GlassPalette.textSecondary(isDark: false))
+                : GlassPalette.textSecondary(isDark: isDark)
+            return
+        }
+
+        if isNative {
+            // 原生液态模式下，发丝切边高光与水滴折射由 LiquidGlassRoot 精准渲染，
+            // 宿主 CALayer 消除低保真边框与黑影
+            layer?.borderWidth = 0
+            layer?.borderColor = NSColor.clear.cgColor
+            layer?.shadowOpacity = 0
+            iconImageView.contentTintColor = isDark ? NSColor(white: 1.0, alpha: 0.90) : GlassPalette.textSecondary(isDark: false)
             return
         }
 
@@ -610,8 +623,35 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
     /// the light theme stays a bright white surface and the dark theme keeps
     /// its deep liquid look.
     private func updateGlassTint() {
+        let theme = ConfigManager.shared.config.theme
+        let isDark = glassIsDark
+        if theme.isNativeLiquid {
+            glassEffectView.isNativeLiquid = true
+            glassEffectView.isDark = isDark
+            glassEffectView.cornerRadius = 20
+            let isEmphasized = (isFocused || isHovered) && !isMergedIntoSheet
+            if isDark {
+                let progress = max(0.0, min(1.0, (ConfigManager.shared.config.themeOpacity - 0.40) / 0.60))
+                var dynamicTintOpacity = CGFloat(0.22 + 0.50 * pow(progress, 1.20))
+                if isEmphasized { dynamicTintOpacity = min(0.85, dynamicTintOpacity + 0.08) }
+                glassEffectView.tintColor = NSColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1.0)
+                glassEffectView.tintOpacity = dynamicTintOpacity
+            } else {
+                let progress = max(0.0, min(1.0, (ConfigManager.shared.config.themeOpacity - 0.40) / 0.60))
+                var dynamicTintOpacity = CGFloat(0.08 + 0.57 * pow(progress, 1.15))
+                if isEmphasized { dynamicTintOpacity = min(0.85, dynamicTintOpacity + 0.10) }
+                glassEffectView.tintColor = NSColor.white
+                glassEffectView.tintOpacity = dynamicTintOpacity
+            }
+            glassEffectView.alphaValue = isMergedIntoSheet ? 0 : 1.0
+            return
+        }
+
+        glassEffectView.isNativeLiquid = false
+        glassEffectView.isDark = isDark
+        glassEffectView.cornerRadius = 20
         let profile = SearchGlassSurfaceProfile.resolved(
-            isDark: glassIsDark,
+            isDark: isDark,
             isEmphasized: isFocused || isHovered,
             themeOpacity: ConfigManager.shared.config.themeOpacity
         )
@@ -641,11 +681,20 @@ public final class SearchBarView: NSView, NSTextFieldDelegate {
         isHovered = false
     }
 
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateGlassTint()
+        updateBackgroundStyles()
+        textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
+        updatePlaceholder()
+    }
+
     override public func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         updateGlassTint()
         updateBackgroundStyles()
         textField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
+        updatePlaceholder()
     }
 
     public func controlTextDidChange(_ obj: Notification) {

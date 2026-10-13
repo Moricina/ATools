@@ -5,18 +5,18 @@ import AppKit
 enum GlassPalette {
     static let darkBaseTop = NSColor(white: 0.12, alpha: 1.0)
     static let darkBaseBottom = NSColor(white: 0.075, alpha: 1.0)
-    static let lightGlassTint = NSColor(white: 0.96, alpha: 1.0)
-    static let lightGlassTintBright = NSColor(white: 0.985, alpha: 1.0)
+    static let lightGlassTint = NSColor(white: 1.0, alpha: 1.0)
+    static let lightGlassTintBright = NSColor(white: 1.0, alpha: 1.0)
     static let lightHoverFill = NSColor(white: 0.0, alpha: 0.045)
     static let lightSelectedFill = NSColor(white: 0.0, alpha: 0.075)
     static let lightPressedFill = NSColor(white: 0.0, alpha: 0.11)
 
     static func textPrimary(isDark: Bool) -> NSColor {
-        isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0) // #1D1D1F
+        return isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0) // #1D1D1F
     }
 
     static func textSecondary(isDark: Bool) -> NSColor {
-        isDark ? NSColor(white: 1.0, alpha: 0.78) : NSColor(white: 0.0, alpha: 0.50)
+        return isDark ? NSColor(white: 1.0, alpha: 0.78) : NSColor(white: 0.0, alpha: 0.55)
     }
 
     static func textTertiary(isDark: Bool) -> NSColor {
@@ -24,7 +24,10 @@ enum GlassPalette {
     }
 
     static func panelBorder(isDark: Bool) -> NSColor {
-        isDark ? NSColor(white: 1.0, alpha: 0.12) : NSColor(white: 0.0, alpha: 0.10)
+        if ConfigManager.shared.config.theme.isNativeLiquid {
+            return isDark ? NSColor(white: 1.0, alpha: 0.22) : NSColor(white: 0.0, alpha: 0.15)
+        }
+        return isDark ? NSColor(white: 1.0, alpha: 0.12) : NSColor(white: 0.0, alpha: 0.10)
     }
 
     static func controlFill(isDark: Bool) -> NSColor {
@@ -32,11 +35,17 @@ enum GlassPalette {
     }
 
     static func controlHoverFill(isDark: Bool) -> NSColor {
-        isDark ? NSColor(white: 1.0, alpha: 0.06) : lightHoverFill
+        if ConfigManager.shared.config.theme.isNativeLiquid {
+            return isDark ? NSColor(white: 1.0, alpha: 0.10) : NSColor(white: 0.0, alpha: 0.06)
+        }
+        return isDark ? NSColor(white: 1.0, alpha: 0.06) : lightHoverFill
     }
 
     static func selectedFill(isDark: Bool) -> NSColor {
-        isDark ? NSColor(white: 1.0, alpha: 0.12) : lightSelectedFill
+        if ConfigManager.shared.config.theme.isNativeLiquid {
+            return isDark ? NSColor(white: 1.0, alpha: 0.18) : NSColor(white: 0.0, alpha: 0.10)
+        }
+        return isDark ? NSColor(white: 1.0, alpha: 0.12) : lightSelectedFill
     }
 
     static func pressedFill(isDark: Bool) -> NSColor {
@@ -67,9 +76,14 @@ extension NSView {
             let app = win.appearance ?? win.effectiveAppearance
             return app.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         }
-        if effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua {
-            return true
+        let app = NSApp?.effectiveAppearance ?? effectiveAppearance
+        if let match = app.bestMatch(from: [.darkAqua, .aqua]) {
+            return match == .darkAqua
         }
         return ConfigManager.shared.config.theme.isDark
+    }
+
+    var isNativeLiquidTheme: Bool {
+        ConfigManager.shared.config.theme.isNativeLiquid
     }
 }

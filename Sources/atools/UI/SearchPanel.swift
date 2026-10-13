@@ -77,8 +77,18 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         )
     }
 
-    private func updateHintsColor() {
-        hintsBar.textColor = GlassPalette.textTertiary(isDark: ConfigManager.shared.config.theme.isDark)
+    internal func updateHintsColor() {
+        hintsBar.textColor = GlassPalette.textTertiary(isDark: hintsBar.glassIsDark)
+    }
+
+    internal func updateAppearanceForTheme() {
+        updateHintsColor()
+        if let hostLayer = view.window?.contentView?.layer,
+           let rim = hostLayer.sublayers?.first(where: { $0.name == revealRimKey }) {
+            let theme = ConfigManager.shared.config.theme
+            rim.borderWidth = theme.isNativeLiquid ? 0 : 0.75
+            rim.borderColor = theme.isNativeLiquid ? NSColor.clear.cgColor : GlassPalette.panelBorder(isDark: theme.isDark).cgColor
+        }
     }
 
     public func setInitialScreenAnchor(topY: CGFloat) {
@@ -155,6 +165,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
     }
 
     public func prepareForDisplay(prefilledText: String? = nil) {
+        updateHintsColor()
         SearchCoordinator.shared.cancelPendingSearches()
         SpotlightBridge.shared.warmHotFolderCache(maxAge: 5)
         searchBar.setSyntaxCommand(nil)
@@ -356,6 +367,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             CATransaction.commit()
         }
 
+        let isNative = ConfigManager.shared.config.theme.isNativeLiquid
         let rim: CALayer
         if let existing = hostLayer.sublayers?.first(where: { $0.name == revealRimKey }) {
             rim = existing
@@ -364,12 +376,13 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             rim.name = revealRimKey
             rim.cornerRadius = Self.sheetCornerRadius
             rim.cornerCurve = .continuous
-            rim.borderWidth = 0.75
+            rim.borderWidth = isNative ? 0 : 0.75
             rim.anchorPoint = CGPoint(x: 0.5, y: 1.0)
             rim.zPosition = 1000
             hostLayer.addSublayer(rim)
         }
-        rim.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
+        rim.borderWidth = isNative ? 0 : 0.75
+        rim.borderColor = isNative ? NSColor.clear.cgColor : GlassPalette.panelBorder(isDark: isDark).cgColor
         return (mask, rim)
     }
 
@@ -680,14 +693,18 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         }
     }
 
-    private func dismissSearchPanel() {
-        PanelCoordinator.shared.hideSearchPanel()
+    public func clearSearch() {
         searchBar.text = ""
         searchBar.setSyntaxCommand(nil)
         filterBar.showTypeFilters()
         filterBar.selectedFilter = .all
         resultsTable.updateResults([])
         setPanelExpanded(false, animated: false)
+    }
+
+    private func dismissSearchPanel() {
+        PanelCoordinator.shared.hideSearchPanel()
+        clearSearch()
     }
 
     // MARK: - SearchResultsTableDelegate
@@ -766,6 +783,7 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
         searchViewController.view.autoresizingMask = [.width, .height]
         hostView.addSubview(searchViewController.view)
 
+        updateWindowAppearanceForTheme()
 
         NotificationCenter.default.addObserver(
             self,
@@ -773,7 +791,6 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
             name: .atoolsThemeDidChange,
             object: nil
         )
-        updateWindowAppearanceForTheme()
     }
 
     @objc private func handleThemeChanged() {
@@ -782,7 +799,12 @@ public final class SearchPanel: NSPanel, PanelVisibleFrameProviding {
 
     private func updateWindowAppearanceForTheme() {
         let theme = ConfigManager.shared.config.theme
-        self.appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
+        let app = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
+        self.appearance = app
+        contentView?.appearance = app
+        searchViewController.view.appearance = app
+        searchViewController.backdropView?.appearance = app
+        searchViewController.updateAppearanceForTheme()
     }
 
     override public var canBecomeKey: Bool { true }

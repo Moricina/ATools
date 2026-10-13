@@ -3,8 +3,8 @@ import AppKit
 
 public final class AutoQuitTabView: NSView {
     private var autoQuitSwitch: NSSwitch!
-    private var autoQuitModePopUp: NSPopUpButton!
-    private var autoQuitDelayPopUp: NSPopUpButton!
+    private var autoQuitModePopUp: SettingsLiquidPopUpButton!
+    private var autoQuitDelayPopUp: SettingsLiquidPopUpButton!
     private var autoQuitRulesButton: SettingsPillButton!
     private var autoQuitPermissionLabel: NSTextField!
     private var autoQuitChangeObserver: NSObjectProtocol?
@@ -76,7 +76,7 @@ public final class AutoQuitTabView: NSView {
         )
         card1.addRow(rowSwitch)
 
-        autoQuitModePopUp = NSPopUpButton()
+        autoQuitModePopUp = SettingsLiquidPopUpButton()
         autoQuitModePopUp.target = self
         autoQuitModePopUp.action = #selector(autoQuitModeChanged(_:))
         for mode in AutoQuitMode.allCases {
@@ -90,14 +90,14 @@ public final class AutoQuitTabView: NSView {
         )
         card1.addRow(rowMode)
 
-        autoQuitDelayPopUp = NSPopUpButton()
+        autoQuitDelayPopUp = SettingsLiquidPopUpButton()
         autoQuitDelayPopUp.target = self
         autoQuitDelayPopUp.action = #selector(autoQuitDelayChanged(_:))
         for opt in autoQuitDelayOptions {
             autoQuitDelayPopUp.addItem(withTitle: opt.title)
         }
-        autoQuitModePopUp.widthAnchor.constraint(equalToConstant: 184).isActive = true
-        autoQuitDelayPopUp.widthAnchor.constraint(equalToConstant: 184).isActive = true
+        autoQuitModePopUp.widthAnchor.constraint(equalToConstant: 210).isActive = true
+        autoQuitDelayPopUp.widthAnchor.constraint(equalToConstant: 210).isActive = true
         let rowDelay = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "timer"),
             title: "关闭后延迟退出",

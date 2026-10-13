@@ -81,20 +81,35 @@ public final class SearchResultCellView: NSTableCellView {
 
     public func updateSelectionState(isSelected: Bool) {
         let isDark = glassIsDark
+        let isNative = isNativeLiquidTheme
         if isSelected {
             titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
-            subtitleLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
+            subtitleLabel.textColor = isNative
+                ? (isDark ? NSColor(white: 1.0, alpha: 0.85) : GlassPalette.textSecondary(isDark: false))
+                : GlassPalette.textSecondary(isDark: isDark)
             badgeLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
             badgeContainer.layer?.backgroundColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.18).cgColor
                 : NSColor(white: 0.0, alpha: 0.10).cgColor
         } else {
             titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
-            subtitleLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
+            subtitleLabel.textColor = isNative
+                ? (isDark ? NSColor(white: 1.0, alpha: 0.72) : GlassPalette.textSecondary(isDark: false))
+                : GlassPalette.textSecondary(isDark: isDark)
             badgeLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
             badgeContainer.layer?.backgroundColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.07).cgColor
                 : NSColor(white: 0.0, alpha: 0.04).cgColor
+        }
+
+        if isNative && isDark {
+            let sh = NSShadow()
+            sh.shadowColor = NSColor.black.withAlphaComponent(0.65)
+            sh.shadowOffset = NSSize(width: 0, height: -1)
+            sh.shadowBlurRadius = 2.0
+            titleLabel.shadow = sh
+        } else {
+            titleLabel.shadow = nil
         }
     }
 
@@ -321,9 +336,37 @@ public final class ContextualSearchTableView: NSTableView {
 public final class SearchResultRowView: NSTableRowView {
     override public var mouseDownCanMoveWindow: Bool { false }
 
+    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 10)
+
+    override public init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setupViews()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupViews()
+    }
+
+    private func setupViews() {
+        wantsLayer = true
+        liquidBackdrop.contactShadowEnabled = true
+        liquidBackdrop.customShadowRadius = 5.0
+        liquidBackdrop.customShadowOpacity = 0.04
+        liquidBackdrop.isHidden = true
+        addSubview(liquidBackdrop, positioned: .below, relativeTo: nil)
+    }
+
+    override public func layout() {
+        super.layout()
+        let pillRect = bounds.insetBy(dx: 8, dy: 3)
+        liquidBackdrop.frame = pillRect
+    }
+
     override public var isSelected: Bool {
         didSet {
             updateCellColors()
+            updateSelectionBackdrop()
             needsDisplay = true
         }
     }
@@ -331,7 +374,23 @@ public final class SearchResultRowView: NSTableRowView {
     override public var isEmphasized: Bool {
         didSet {
             updateCellColors()
+            updateSelectionBackdrop()
             needsDisplay = true
+        }
+    }
+
+    public func updateSelectionBackdrop() {
+        let isDark = glassIsDark
+        let isNative = isNativeLiquidTheme
+        if isNative && isSelected {
+            liquidBackdrop.isHidden = false
+            liquidBackdrop.isDark = isDark
+            liquidBackdrop.isSelected = true
+            liquidBackdrop.customShadowOpacity = isDark ? 0.12 : 0.04
+            liquidBackdrop.customShadowRadius = 5.0
+            liquidBackdrop.updateStyles()
+        } else {
+            liquidBackdrop.isHidden = true
         }
     }
 
@@ -349,14 +408,24 @@ public final class SearchResultRowView: NSTableRowView {
 
     override public func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
-        guard isSelected else { return }
+        guard isSelected else {
+            liquidBackdrop.isHidden = true
+            return
+        }
 
         let isDark = glassIsDark
-        // Inset horizontally by 8pt so the pill does not extend under the
-        // overlay scroller on the right edge; 3pt vertical keeps a tight row.
+        let isNative = isNativeLiquidTheme
+        if isNative {
+            liquidBackdrop.isHidden = false
+            liquidBackdrop.isDark = isDark
+            liquidBackdrop.isSelected = true
+            liquidBackdrop.updateStyles()
+            return
+        }
+
+        liquidBackdrop.isHidden = true
         let pillRect = bounds.insetBy(dx: 8, dy: 3)
         let path = NSBezierPath(roundedRect: pillRect, xRadius: 10, yRadius: 10)
-
         if isDark {
             NSColor(white: 1.0, alpha: 0.11).setFill()
         } else {

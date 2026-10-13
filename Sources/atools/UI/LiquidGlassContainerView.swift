@@ -13,8 +13,8 @@ struct SearchGlassSurfaceProfile {
 
     private static let darkBaseTintOpacity: CGFloat = 0.76
     private static let darkEmphasizedTintOpacity: CGFloat = 0.82
-    private static let lightBaseTintOpacity: CGFloat = 0.58
-    private static let lightEmphasizedTintOpacity: CGFloat = 0.66
+    private static let lightBaseTintOpacity: CGFloat = 0.85
+    private static let lightEmphasizedTintOpacity: CGFloat = 0.92
 
     static func resolved(isDark: Bool, isEmphasized: Bool, themeOpacity: Double) -> SearchGlassSurfaceProfile {
         let clampedOpacity = CGFloat(max(0.40, min(1.00, themeOpacity)))
@@ -67,6 +67,22 @@ class LiquidGlassContainerView: NSView {
         didSet { if oldValue != usesRegularGlass { update() } }
     }
 
+    /// When true, renders using macOS official system liquid-glass optics:
+    /// true background refraction, dual-layer specular hairline highlights, and pure crystal translucency.
+    var isNativeLiquid: Bool = false {
+        didSet { if oldValue != isNativeLiquid { update() } }
+    }
+
+    /// Explicit dark vs light appearance for optics and colorScheme.
+    var isDark: Bool = true {
+        didSet {
+            if oldValue != isDark {
+                fallbackEffect.material = isDark ? .hudWindow : .popover
+                update()
+            }
+        }
+    }
+
     private var isLightSurface: Bool {
         guard let rgb = tintColor.usingColorSpace(.deviceRGB) else { return false }
         let luminance = 0.2126 * rgb.redComponent + 0.7152 * rgb.greenComponent + 0.0722 * rgb.blueComponent
@@ -105,6 +121,8 @@ class LiquidGlassContainerView: NSView {
             let hosting = NSHostingView(rootView: root)
             hosting.wantsLayer = true
             hosting.layer?.backgroundColor = NSColor.clear.cgColor
+            hosting.layer?.cornerRadius = cornerRadius
+            hosting.layer?.masksToBounds = true
             hosting.translatesAutoresizingMaskIntoConstraints = false
             addSubview(hosting)
             NSLayoutConstraint.activate([
@@ -132,6 +150,9 @@ class LiquidGlassContainerView: NSView {
 
     private func update() {
         layer?.cornerRadius = cornerRadius
+        layer?.masksToBounds = true
+        hostingView?.layer?.cornerRadius = cornerRadius
+        hostingView?.layer?.masksToBounds = true
         updateSoftEdgeMask()
         updateFallbackMask()
         if #available(macOS 26.0, *) {
@@ -203,10 +224,10 @@ class LiquidGlassContainerView: NSView {
                                   start: CGPoint(x: 0.5, y: 0), end: CGPoint(x: 0.5, y: 1),
                                   colors: [opaque, transparent]))
         mask.addSublayer(makeBand(frame: CGRect(x: 0, y: 0, width: feather, height: bounds.height),
-                                  start: CGPoint(x: 0, y: 0.5), end: CGPoint(x: 1, y: 0.5),
+                                  start: CGPoint(x: 0.5, y: 0), end: CGPoint(x: 1, y: 0.5),
                                   colors: [transparent, opaque]))
         mask.addSublayer(makeBand(frame: CGRect(x: bounds.width - feather, y: 0, width: feather, height: bounds.height),
-                                  start: CGPoint(x: 0, y: 0.5), end: CGPoint(x: 1, y: 0.5),
+                                  start: CGPoint(x: 0.5, y: 0), end: CGPoint(x: 1, y: 0.5),
                                   colors: [opaque, transparent]))
 
         layer?.mask = mask
@@ -228,7 +249,9 @@ class LiquidGlassContainerView: NSView {
             tintColor: Color(nsColor: tintColor),
             tintOpacity: Double(tintOpacity),
             usesRegularGlass: usesRegularGlass,
-            isLight: isLightSurface
+            isLight: isLightSurface,
+            isNativeLiquid: isNativeLiquid,
+            isDark: isDark
         )
     }
 
@@ -237,6 +260,9 @@ class LiquidGlassContainerView: NSView {
     override func layout() {
         super.layout()
         layer?.cornerRadius = cornerRadius
+        layer?.masksToBounds = true
+        hostingView?.layer?.cornerRadius = cornerRadius
+        hostingView?.layer?.masksToBounds = true
         updateFallbackMask()
         // Rebuilding the mask layers is only needed when the size actually changes.
         if softEdgeEnabled, bounds.size != lastMaskedSize {
@@ -261,22 +287,160 @@ private struct LiquidGlassRoot: View {
     let tintOpacity: Double
     let usesRegularGlass: Bool
     let isLight: Bool
+    let isNativeLiquid: Bool
+    let isDark: Bool
 
     var body: some View {
         let glass = usesRegularGlass ? Glass.regular : Glass.clear
-        let rimColor: Color = isLight
-            ? Color.black.opacity(0.10)
-            : Color.white.opacity(0.12)
-        ZStack {
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .glassEffect(
-                    glass.tint(tintColor.opacity(tintOpacity)),
-                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                )
+        Group {
+            if isNativeLiquid {
+                // 🌟 1:1 严格对标 Apple 原生硬件级 Liquid Glass 规范 🌟
+                // 浅色模式保持纯水滴透镜 (Glass.clear)；
+                // 深色模式：低透明度（40%~55%）动态切入纯水滴透镜 (Glass.clear) 纯净折射底层，且始终保留基准暗色底衬 (underlayAlpha >= 0.24) 塑造纯正深色底蕴；
+                // 高透明度（60%~100%）动态切换为 Glass.regular 漫射与强化暗色底衬 (0.58~0.68)，遮蔽背景杂色。
+                let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                let useRegular = (isDark && tintOpacity > 0.36) || (!isDark && tintOpacity > 0.36 && usesRegularGlass)
+                ZStack {
+                    // 1. 系统硬件级液态水滴玻璃主体
+                    Color.clear
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .glassEffect(
+                            tintOpacity <= 0.001
+                                ? Glass.clear
+                                : (useRegular ? Glass.regular : Glass.clear).tint(tintColor.opacity(tintOpacity)),
+                            in: shape
+                        )
 
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(rimColor, lineWidth: 0.75)
+                    // 1.5 专属底衬（遮蔽杂色并随透明度动态联动）：
+                    // - 深色模式：深邃黑曜石暗色底衬 (underlayAlpha: 0.24 ~ 0.68)
+                    // - 浅色模式：纯白水滴微熏透光底衬 (underlayAlpha: 0.08 ~ 0.68)
+                    if isDark {
+                        let clampedProgress = max(0.0, min(1.0, (tintOpacity - 0.22) / (0.72 - 0.22)))
+                        let underlayAlpha = 0.24 + 0.44 * pow(clampedProgress, 1.1)
+                        shape
+                            .fill(Color(red: 0.06, green: 0.07, blue: 0.10).opacity(underlayAlpha))
+                            .allowsHitTesting(false)
+                    } else if tintOpacity > 0.001 {
+                        let clampedProgress = max(0.0, min(1.0, (tintOpacity - 0.08) / (0.65 - 0.08)))
+                        let underlayAlpha = 0.08 + 0.60 * pow(clampedProgress, 1.1)
+                        shape
+                            .fill(Color.white.opacity(underlayAlpha))
+                            .allowsHitTesting(false)
+                    }
+
+                    // 2. 顶部物理微弧张力微光 (模拟真实晶体透镜受天光照射的漫反射，还原图一纯净光影)
+                    shape
+                        .fill(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: Color.white.opacity(0.08), location: 0.0),
+                                    .init(color: Color.white.opacity(0.02), location: 0.22),
+                                    .init(color: Color.clear, location: 0.45)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .allowsHitTesting(false)
+
+                    // 3. 内部焦散折射倒角 (产生真实 3-4mm 水滴水晶厚度感，纯净无黑色彩)
+                    shape
+                        .inset(by: 1.0)
+                        .strokeBorder(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: Color.white.opacity(isDark ? 0.35 : 0.22), location: 0.0),
+                                    .init(color: Color.clear, location: 0.35),
+                                    .init(color: Color.white.opacity(isDark ? 0.12 : 0.08), location: 1.0)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.75
+                        )
+
+                    // 4. 双色发丝切边高光 (天光反射 + 侧边微光 + 底部漫射，塑造柔润表面张力)
+                    shape
+                        .strokeBorder(
+                            LinearGradient(
+                                stops: [
+                                    .init(color: Color.white.opacity(isDark ? 0.80 : 0.48), location: 0.0),
+                                    .init(color: Color.white.opacity(isDark ? 0.30 : 0.18), location: 0.40),
+                                    .init(color: Color.white.opacity(isDark ? 0.14 : 0.08), location: 1.0)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.75
+                        )
+                }
+            } else {
+                let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                if isDark {
+                    let rimColor: Color = Color.white.opacity(0.12)
+                    ZStack {
+                        Color.clear
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .glassEffect(
+                                glass.tint(tintColor.opacity(tintOpacity)),
+                                in: shape
+                            )
+
+                        shape
+                            .strokeBorder(rimColor, lineWidth: 0.75)
+                    }
+                } else {
+                    // 🌟 液态玻璃 (浅色) 纯白晶莹磨砂质感 🌟
+                    // 结合系统级 Glass.regular 漫射与纯白透光磨砂底衬，
+                    // 彻底终结暗灰泥潭底色，呈现如同高级白瓷透光玻璃一样的优雅纯白微熏质感
+                    ZStack {
+                        // 1. 系统磨砂液态玻璃基底
+                        Color.clear
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .glassEffect(
+                                glass.tint(Color.white.opacity(tintOpacity)),
+                                in: shape
+                            )
+
+                        // 2. 纯白通透磨砂底衬 (伴随 tintOpacity 浓度平滑调节，呈现纯正白瓷透光效果)
+                        shape
+                            .fill(Color.white.opacity(0.70 + 0.20 * min(1.0, tintOpacity)))
+                            .allowsHitTesting(false)
+
+                        // 3. 顶部透亮天光微反射
+                        shape
+                            .fill(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: Color.white.opacity(0.45), location: 0.0),
+                                        .init(color: Color.white.opacity(0.10), location: 0.25),
+                                        .init(color: Color.clear, location: 0.50)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .allowsHitTesting(false)
+
+                        // 4. 精致双层高光边框，塑造高贵质感
+                        shape
+                            .strokeBorder(
+                                LinearGradient(
+                                    stops: [
+                                        .init(color: Color.white.opacity(0.95), location: 0.0),
+                                        .init(color: Color.white.opacity(0.55), location: 0.50),
+                                        .init(color: Color(white: 0.88).opacity(0.45), location: 1.0)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1.0
+                            )
+                    }
+                }
+            }
         }
+        .environment(\.colorScheme, isDark ? .dark : .light)
+        .environment(\.controlActiveState, .active)
     }
 }

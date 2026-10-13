@@ -60,11 +60,15 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     private init() {
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 620),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         win.title = "ATools 偏好设置"
+        win.titleVisibility = .hidden
+        win.titlebarAppearsTransparent = true
+        win.isMovableByWindowBackground = true
+        win.backgroundColor = NSColor.windowBackgroundColor
         win.isReleasedWhenClosed = false
         win.minSize = NSSize(width: 780, height: 600)
         win.maxSize = NSSize(width: 780, height: 800)
@@ -95,6 +99,10 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public func selectTab(_ item: SettingsSidebarItem) {
         sidebarView.selectItem(item)
+    }
+
+    override public func cancelOperation(_ sender: Any?) {
+        window?.performClose(sender)
     }
 
     public func windowWillClose(_ notification: Notification) {
@@ -161,6 +169,14 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             }
             current.removeFromSuperview()
             currentActiveView = nil
+            // 及时卸载上一个非活跃标签视图，释放其关联的 NSHostingView、CALayer 树与重型控件内存
+            generalView = nil
+            shelfView = nil
+            searchView = nil
+            autoQuitView = nil
+            themeView = nil
+            performanceView = nil
+            aboutView = nil
         }
 
         shelfView?.shelfRecorder?.stopRecording()

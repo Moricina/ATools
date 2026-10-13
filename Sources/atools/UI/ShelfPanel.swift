@@ -56,7 +56,7 @@ public final class ModernHeaderButton: NSButton {
     }
 
     public func updateAppearanceStyles() {
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let isDark = glassIsDark
         if isAccentActive {
             layer?.backgroundColor = GlassPalette.accentFill(isDark: isDark).cgColor
             layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
@@ -66,7 +66,7 @@ public final class ModernHeaderButton: NSButton {
             layer?.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
             layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
             layer?.borderWidth = 0.75
-            contentTintColor = .labelColor
+            contentTintColor = isNativeLiquidTheme ? (isDark ? .white : GlassPalette.textPrimary(isDark: false)) : .labelColor
         } else {
             layer?.backgroundColor = isDark
                 ? NSColor(white: 1.0, alpha: 0.06).cgColor
@@ -75,7 +75,7 @@ public final class ModernHeaderButton: NSButton {
                 ? NSColor(white: 1.0, alpha: 0.10).cgColor
                 : NSColor(white: 0.0, alpha: 0.06).cgColor
             layer?.borderWidth = 0.5
-            contentTintColor = .secondaryLabelColor
+            contentTintColor = isNativeLiquidTheme ? (isDark ? NSColor(white: 1.0, alpha: 0.80) : GlassPalette.textSecondary(isDark: false)) : .secondaryLabelColor
         }
     }
 
@@ -313,6 +313,23 @@ public final class ResizeHandleView: NSView {
 /// (pills, grid items, splitter, resize handle) each opt out explicitly.
 private final class ShelfRootView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 24
+        layer?.masksToBounds = true
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = 24
+        layer?.masksToBounds = true
+    }
 
     override func mouseDown(with event: NSEvent) {
         // Window-background dragging is not always dispatched from layered
@@ -891,6 +908,8 @@ public final class ShelfPanel: NSPanel {
         self.hasShadow = false
         self.isMovableByWindowBackground = true
 
+        updateWindowAppearanceForTheme()
+
         let backdrop = VisualEffectBackdropView(frame: contentRect)
         backdrop.autoresizingMask = [.width, .height]
         self.contentView = backdrop
@@ -898,6 +917,8 @@ public final class ShelfPanel: NSPanel {
         shelfViewController.view.frame = backdrop.bounds
         shelfViewController.view.autoresizingMask = [.width, .height]
         backdrop.addSubview(shelfViewController.view)
+
+        updateWindowAppearanceForTheme()
 
         // Observe resize end to persist window size without I/O thrashing during live drag
         NotificationCenter.default.addObserver(
@@ -913,16 +934,20 @@ public final class ShelfPanel: NSPanel {
             name: .atoolsThemeDidChange,
             object: nil
         )
-        updateWindowAppearanceForTheme()
     }
 
     @objc private func handleThemeChanged() {
         updateWindowAppearanceForTheme()
+        shelfViewController.loadData()
     }
 
     private func updateWindowAppearanceForTheme() {
         let theme = ConfigManager.shared.config.theme
-        self.appearance = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
+        let app = NSAppearance(named: theme.isDark ? .darkAqua : .aqua)
+        self.appearance = app
+        contentView?.appearance = app
+        shelfViewController.view.appearance = app
+        shelfViewController.categoryBar.updatePillsAppearance()
     }
 
     @objc private func windowDidEndLiveResize(_ notification: Notification) {
@@ -961,8 +986,10 @@ public final class ShelfPanel: NSPanel {
     }
 
     public func prepareForDisplay() {
+        updateWindowAppearanceForTheme()
         shelfViewController.resetKeyboardState()
         shelfViewController.loadData()
+        shelfViewController.categoryBar.updatePillsAppearance()
         // mouseExited is not guaranteed when the panel hides under the cursor;
         // clear stale hover so no leftover shadow shows on re-show.
         shelfViewController.shelfGrid.resetInteractionStates()

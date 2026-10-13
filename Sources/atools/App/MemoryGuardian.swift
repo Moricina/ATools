@@ -53,9 +53,20 @@ public final class MemoryGuardian {
             pendingHotCacheDrop = false
             SpotlightBridge.shared.dropHotFolderCache()
         }
-        // System kernel tier: actively return unused heap dirty pages back to XNU
+        // 清理全盘搜索产生的临时文件缩略图缓存，保留已固定的抽屉应用图标
+        ThumbnailPipeline.shared.clearTransientSearchCache()
+
+        // System kernel tier: actively return unused heap dirty pages back to XNU across all malloc zones
         DispatchQueue.global(qos: .background).async {
-            malloc_zone_pressure_relief(malloc_default_zone(), 0)
+            var zones: UnsafeMutablePointer<vm_address_t>?
+            var count: UInt32 = 0
+            if malloc_get_all_zones(mach_task_self_, nil, &zones, &count) == KERN_SUCCESS, let zones = zones {
+                for i in 0..<Int(count) {
+                    if let zone = UnsafeMutablePointer<malloc_zone_t>(bitPattern: UInt(zones[i])) {
+                        malloc_zone_pressure_relief(zone, 0)
+                    }
+                }
+            }
         }
     }
 }

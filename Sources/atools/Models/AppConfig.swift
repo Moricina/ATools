@@ -80,14 +80,19 @@ public struct HotkeyBinding: Codable, Equatable {
 }
 
 public enum AppTheme: String, Codable, CaseIterable {
-    case liquidDark = "liquidDark"     // 液态玻璃 (深色)
-    case liquidLight = "liquidLight"   // 液态玻璃 (浅色)
+    case liquidDark = "liquidDark"             // 液态玻璃 (深色)
+    case liquidLight = "liquidLight"           // 液态玻璃 (浅色)
+    case macosLiquidDark = "macosLiquidDark"   // 原生液态 (深色)
+    case macosLiquidLight = "macosLiquidLight" // 原生液态 (浅色)
 
     /// Maps stored values, including the retired "经典纯色" themes, onto the remaining ones.
     public static func migrated(from rawValue: String) -> AppTheme? {
         switch rawValue {
         case "liquidDark", "solidDark": return .liquidDark
         case "liquidLight", "solidLight": return .liquidLight
+        case "macosLiquidDark": return .macosLiquidDark
+        case "macosLiquidLight": return .macosLiquidLight
+        case "macosLiquid", "nativeLiquid": return .macosLiquidLight
         default: return nil
         }
     }
@@ -96,11 +101,20 @@ public enum AppTheme: String, Codable, CaseIterable {
         switch self {
         case .liquidDark: return "液态玻璃 (深色)"
         case .liquidLight: return "液态玻璃 (浅色)"
+        case .macosLiquidDark: return "原生液态 (深色)"
+        case .macosLiquidLight: return "原生液态 (浅色)"
         }
     }
 
     public var isDark: Bool {
-        return self == .liquidDark
+        switch self {
+        case .liquidDark, .macosLiquidDark: return true
+        case .liquidLight, .macosLiquidLight: return false
+        }
+    }
+
+    public var isNativeLiquid: Bool {
+        return self == .macosLiquidDark || self == .macosLiquidLight
     }
 }
 

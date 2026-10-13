@@ -92,6 +92,64 @@ public final class ThemeCardView: NSView {
 
     private func setupPreviewMockup() {
         let isDark = theme.isDark
+
+        if theme.isNativeLiquid {
+            // 🌟 macOS 官方原生极纯水滴液态玻璃预览 🌟
+            if isDark {
+                previewBox.layer?.backgroundColor = NSColor(red: 0.10, green: 0.11, blue: 0.15, alpha: 1.0).cgColor
+                previewBox.layer?.borderWidth = 0.5
+                previewBox.layer?.borderColor = NSColor.white.withAlphaComponent(0.20).cgColor
+
+                let winView = NSView(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
+                winView.translatesAutoresizingMaskIntoConstraints = false
+                winView.wantsLayer = true
+                winView.layer?.cornerRadius = 6
+                winView.layer?.borderWidth = 1.0
+                winView.layer?.backgroundColor = NSColor(red: 0.08, green: 0.09, blue: 0.13, alpha: 0.85).cgColor
+                winView.layer?.borderColor = NSColor.white.withAlphaComponent(0.85).cgColor
+
+                winView.layer?.shadowColor = NSColor.black.withAlphaComponent(0.25).cgColor
+                winView.layer?.shadowOffset = CGSize(width: 0, height: 2)
+                winView.layer?.shadowRadius = 4
+                winView.layer?.shadowOpacity = 1.0
+                previewBox.addSubview(winView)
+                NSLayoutConstraint.activate([
+                    winView.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
+                    winView.centerYAnchor.constraint(equalTo: previewBox.centerYAnchor),
+                    winView.widthAnchor.constraint(equalToConstant: 70),
+                    winView.heightAnchor.constraint(equalToConstant: 36)
+                ])
+                addWindowDetails(to: winView, isDark: true)
+                return
+            } else {
+                previewBox.layer?.backgroundColor = NSColor(red: 0.92, green: 0.94, blue: 0.98, alpha: 1.0).cgColor
+                previewBox.layer?.borderWidth = 0.5
+                previewBox.layer?.borderColor = NSColor.black.withAlphaComponent(0.12).cgColor
+
+                let winView = NSView(frame: NSRect(x: 0, y: 0, width: 70, height: 36))
+                winView.translatesAutoresizingMaskIntoConstraints = false
+                winView.wantsLayer = true
+                winView.layer?.cornerRadius = 6
+                winView.layer?.borderWidth = 1.0
+                winView.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.55).cgColor
+                winView.layer?.borderColor = NSColor.white.withAlphaComponent(0.95).cgColor
+
+                winView.layer?.shadowColor = NSColor.black.withAlphaComponent(0.10).cgColor
+                winView.layer?.shadowOffset = CGSize(width: 0, height: 2)
+                winView.layer?.shadowRadius = 4
+                winView.layer?.shadowOpacity = 1.0
+                previewBox.addSubview(winView)
+                NSLayoutConstraint.activate([
+                    winView.centerXAnchor.constraint(equalTo: previewBox.centerXAnchor),
+                    winView.centerYAnchor.constraint(equalTo: previewBox.centerYAnchor),
+                    winView.widthAnchor.constraint(equalToConstant: 70),
+                    winView.heightAnchor.constraint(equalToConstant: 36)
+                ])
+                addWindowDetails(to: winView, isDark: false)
+                return
+            }
+        }
+
         previewBox.layer?.backgroundColor = (isDark
             ? NSColor(white: 0.10, alpha: 1.0)
             : NSColor(white: 0.88, alpha: 1.0)).cgColor
@@ -155,28 +213,37 @@ public final class ThemeCardView: NSView {
         win.addSubview(line3)
     }
 
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            updateStyles()
+        }
+    }
+
     private func updateStyles() {
-        let isSysDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let isSysDark = glassIsDark
         checkmarkImageView.isHidden = !isSelected
 
         if isSelected {
-            layer?.borderWidth = 1.5
+            layer?.borderWidth = 2.0
             layer?.borderColor = (isSysDark
-                ? NSColor.white.withAlphaComponent(0.25)
-                : NSColor.black.withAlphaComponent(0.15)).cgColor
-            layer?.backgroundColor = GlassPalette.accentFill(isDark: isSysDark).cgColor
+                ? NSColor.white.withAlphaComponent(0.65)
+                : NSColor.black.withAlphaComponent(0.55)).cgColor
+            layer?.backgroundColor = (isSysDark
+                ? NSColor.white.withAlphaComponent(0.18)
+                : NSColor.black.withAlphaComponent(0.10)).cgColor
             layer?.shadowRadius = 4
-            layer?.shadowColor = NSColor.black.withAlphaComponent(isSysDark ? 0.2 : 0.1).cgColor
+            layer?.shadowColor = NSColor.black.withAlphaComponent(isSysDark ? 0.25 : 0.12).cgColor
             titleLabel.textColor = GlassPalette.textPrimary(isDark: isSysDark)
             titleLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         } else {
             layer?.borderWidth = 1.0
             layer?.borderColor = (isSysDark
-                ? NSColor.white.withAlphaComponent(0.08)
-                : NSColor.black.withAlphaComponent(0.06)).cgColor
+                ? NSColor.white.withAlphaComponent(isHovered ? 0.35 : 0.18)
+                : NSColor.black.withAlphaComponent(isHovered ? 0.28 : 0.14)).cgColor
             layer?.backgroundColor = isHovered
-                ? (isSysDark ? NSColor(white: 1.0, alpha: 0.06).cgColor : NSColor(white: 0.0, alpha: 0.04).cgColor)
-                : (isSysDark ? NSColor(white: 1.0, alpha: 0.03).cgColor : NSColor(white: 0.0, alpha: 0.02).cgColor)
+                ? (isSysDark ? NSColor(white: 1.0, alpha: 0.14).cgColor : NSColor(white: 0.0, alpha: 0.08).cgColor)
+                : (isSysDark ? NSColor(white: 1.0, alpha: 0.08).cgColor : NSColor(white: 0.0, alpha: 0.04).cgColor)
             layer?.shadowRadius = 3
             layer?.shadowColor = NSColor.black.withAlphaComponent(0.08).cgColor
             titleLabel.textColor = .labelColor

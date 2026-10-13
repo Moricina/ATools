@@ -30,6 +30,8 @@ public final class HotkeyRecorderControl: NSControl {
     override public var acceptsFirstResponder: Bool { true }
     override public var canBecomeKeyView: Bool { true }
 
+    private let backdrop = NativeLiquidButtonBackdrop(cornerRadius: SettingsPillButton.height / 2)
+
     public init(binding: HotkeyBinding? = nil, frame frameRect: NSRect = .zero) {
         self.currentBinding = binding
         super.init(frame: frameRect)
@@ -42,8 +44,18 @@ public final class HotkeyRecorderControl: NSControl {
 
     private func setupViews() {
         wantsLayer = true
-        layer?.cornerRadius = 8
-        layer?.borderWidth = 0
+        layer?.cornerRadius = SettingsPillButton.height / 2
+        layer?.masksToBounds = false
+
+        // Mount Native Liquid Backdrop
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backdrop.topAnchor.constraint(equalTo: topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
 
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.alignment = .center
@@ -55,8 +67,8 @@ public final class HotkeyRecorderControl: NSControl {
         addSubview(titleLabel)
 
         NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
             titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
             heightAnchor.constraint(equalToConstant: SettingsPillButton.height)
         ])
@@ -81,16 +93,31 @@ public final class HotkeyRecorderControl: NSControl {
         }
     }
 
-    /// Filled field, no outline (the old 0.75pt separator border read as a hard black line).
-    /// Colours are resolved explicitly per appearance: `cgColor` of a dynamic system colour is
-    /// frozen at the moment it's read and doesn't follow light/dark changes.
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            updateDisplay()
+        }
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateDisplay()
+    }
+
+    /// Visible bordered capsule control with native liquid glass backdrop.
     private func updateDisplay() {
         let isDark = glassIsDark
+        backdrop.isDark = isDark
+        backdrop.isHovered = isHovered
+        backdrop.isEnabled = isEnabled
+
         if isRecording {
             titleLabel.stringValue = "请按下快捷键，或连按两下修饰键"
             titleLabel.textColor = .controlAccentColor
-            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.28 : 0.16).cgColor
+            backdrop.isPrimary = true
         } else {
+            backdrop.isPrimary = false
             if let binding = currentBinding, !binding.displayString.isEmpty {
                 titleLabel.stringValue = binding.displayString
                 titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
@@ -98,8 +125,6 @@ public final class HotkeyRecorderControl: NSControl {
                 titleLabel.stringValue = "点击录制快捷键"
                 titleLabel.textColor = GlassPalette.textTertiary(isDark: isDark)
             }
-            let alpha: CGFloat = isHovered ? (isDark ? 0.18 : 0.10) : (isDark ? 0.12 : 0.06)
-            layer?.backgroundColor = (isDark ? NSColor(white: 1.0, alpha: alpha) : NSColor(white: 0.0, alpha: alpha)).cgColor
         }
         alphaValue = isEnabled ? 1.0 : 0.45
     }
@@ -122,11 +147,6 @@ public final class HotkeyRecorderControl: NSControl {
 
     override public var isEnabled: Bool {
         didSet { updateDisplay() }
-    }
-
-    override public func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateDisplay()
     }
 
     override public func mouseDown(with event: NSEvent) {

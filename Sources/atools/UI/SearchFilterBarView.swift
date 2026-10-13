@@ -6,6 +6,14 @@ public protocol SearchFilterBarDelegate: AnyObject {
     func searchFilterBar(_ bar: SearchFilterBarView, didSelectSyntaxCommand command: SearchSyntaxCommand)
 }
 
+private class NonInteractiveLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+private class NonInteractiveImageView: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 public final class SearchSyntaxPillButton: NSButton {
     public weak var barView: SearchFilterBarView?
     public let command: SearchSyntaxCommand
@@ -20,6 +28,9 @@ public final class SearchSyntaxPillButton: NSButton {
         }
     }
     private var trackingArea: NSTrackingArea?
+    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 6)
+    private let iconImageView = NonInteractiveImageView()
+    private let titleLabel = NonInteractiveLabel(labelWithString: "")
 
     public init(command: SearchSyntaxCommand) {
         self.command = command
@@ -37,21 +48,54 @@ public final class SearchSyntaxPillButton: NSButton {
         bezelStyle = .inline
         wantsLayer = true
         layer?.cornerRadius = 6
-        layer?.masksToBounds = true
+        layer?.masksToBounds = false
         title = ""
         toolTip = "\(command.trigger) \(command.name) - \(command.description) (按 Tab 补全)"
 
         let icon = ThumbnailPipeline.shared.symbolIcon(name: command.iconSymbolName, pointSize: 11, weight: .medium)
-        image = icon
-        imagePosition = .imageLeading
-        imageHugsTitle = true
+        iconImageView.image = icon
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        iconImageView.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(iconImageView)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.alignment = .center
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.stringValue = command.name
+        titleLabel.isBezeled = false
+        titleLabel.drawsBackground = false
+        titleLabel.isEditable = false
+        titleLabel.isSelectable = false
+        addSubview(titleLabel)
+
+        liquidBackdrop.contactShadowEnabled = true
+        liquidBackdrop.customShadowRadius = 4.0
+        liquidBackdrop.customShadowOpacity = 0.04
+        liquidBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(liquidBackdrop, positioned: .below, relativeTo: iconImageView)
+
+        NSLayoutConstraint.activate([
+            liquidBackdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            liquidBackdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+            liquidBackdrop.topAnchor.constraint(equalTo: topAnchor),
+            liquidBackdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            iconImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            iconImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconImageView.widthAnchor.constraint(equalToConstant: 12),
+            iconImageView.heightAnchor.constraint(equalToConstant: 12),
+
+            titleLabel.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 4),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
 
         updateAppearance()
     }
 
     override public var intrinsicContentSize: NSSize {
-        let base = super.intrinsicContentSize
-        return NSSize(width: base.width + 10, height: 24)
+        let textWidth = titleLabel.intrinsicContentSize.width
+        return NSSize(width: max(40, 7 + 12 + 4 + textWidth + 7), height: 24)
     }
 
     override public func updateTrackingAreas() {
@@ -89,46 +133,84 @@ public final class SearchSyntaxPillButton: NSButton {
 
     public func updateAppearance() {
         let isDark = glassIsDark
+        let isNative = isNativeLiquidTheme
         let font = NSFont.systemFont(ofSize: 12, weight: isHighlightedPill ? .semibold : .medium)
         let textColor: NSColor
 
-        if isHighlightedPill {
-            textColor = isDark ? NSColor(red: 0.45, green: 0.75, blue: 1.0, alpha: 1.0) : NSColor(red: 0.05, green: 0.4, blue: 0.9, alpha: 1.0)
-            layer?.backgroundColor = isDark
-                ? NSColor(red: 0.15, green: 0.45, blue: 0.95, alpha: 0.28).cgColor
-                : NSColor(red: 0.05, green: 0.35, blue: 0.85, alpha: 0.12).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
-                ? NSColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 0.45).cgColor
-                : NSColor(red: 0.1, green: 0.45, blue: 0.95, alpha: 0.30).cgColor
-        } else if isHovered {
-            textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
-            layer?.backgroundColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.12).cgColor
-                : NSColor(white: 0.0, alpha: 0.06).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.20).cgColor
-                : NSColor(white: 0.0, alpha: 0.12).cgColor
+        if isNative {
+            if isHighlightedPill {
+                liquidBackdrop.isHidden = false
+                liquidBackdrop.isSelected = true
+                liquidBackdrop.isHovered = false
+                liquidBackdrop.isDark = isDark
+                liquidBackdrop.customShadowOpacity = isDark ? 0.12 : 0.04
+                liquidBackdrop.customShadowRadius = 4.0
+                liquidBackdrop.updateStyles()
+                layer?.backgroundColor = NSColor.clear.cgColor
+                layer?.borderWidth = 0.0
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.10, alpha: 1.0)
+            } else if isHovered {
+                liquidBackdrop.isHidden = false
+                liquidBackdrop.isSelected = false
+                liquidBackdrop.isHovered = true
+                liquidBackdrop.isDark = isDark
+                liquidBackdrop.customShadowOpacity = isDark ? 0.08 : 0.03
+                liquidBackdrop.customShadowRadius = 3.5
+                liquidBackdrop.updateStyles()
+                layer?.backgroundColor = NSColor.clear.cgColor
+                layer?.borderWidth = 0.0
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.12, alpha: 1.0)
+            } else {
+                liquidBackdrop.isHidden = true
+                layer?.backgroundColor = isDark ? NSColor.white.withAlphaComponent(0.06).cgColor : NSColor.white.withAlphaComponent(0.18).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark ? NSColor.white.withAlphaComponent(0.12).cgColor : NSColor.white.withAlphaComponent(0.35).cgColor
+                textColor = isDark ? NSColor(white: 0.90, alpha: 0.85) : NSColor(white: 0.20, alpha: 0.75)
+            }
         } else {
-            textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
-            layer?.backgroundColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.05).cgColor
-                : NSColor(white: 0.0, alpha: 0.03).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
-                ? NSColor(white: 1.0, alpha: 0.10).cgColor
-                : NSColor(white: 0.0, alpha: 0.06).cgColor
+            liquidBackdrop.isHidden = true
+            if isHighlightedPill {
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.05, alpha: 1.0)
+                layer?.backgroundColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.20).cgColor
+                    : NSColor.black.withAlphaComponent(0.10).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.32).cgColor
+                    : NSColor.black.withAlphaComponent(0.18).cgColor
+            } else if isHovered {
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
+                layer?.backgroundColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.12).cgColor
+                    : NSColor.black.withAlphaComponent(0.06).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.20).cgColor
+                    : NSColor.black.withAlphaComponent(0.12).cgColor
+            } else {
+                textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
+                layer?.backgroundColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.05).cgColor
+                    : NSColor.black.withAlphaComponent(0.03).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.10).cgColor
+                    : NSColor.black.withAlphaComponent(0.06).cgColor
+            }
         }
 
-        contentTintColor = textColor
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        attributedTitle = NSAttributedString(string: " \(command.name)", attributes: [
-            .font: font,
-            .foregroundColor: textColor,
-            .paragraphStyle: style
-        ])
+        iconImageView.contentTintColor = textColor
+        titleLabel.textColor = textColor
+        titleLabel.font = font
+        if isNative && isDark && isHighlightedPill {
+            let sh = NSShadow()
+            sh.shadowColor = NSColor.black.withAlphaComponent(0.60)
+            sh.shadowOffset = NSSize(width: 0, height: -1)
+            sh.shadowBlurRadius = 2.0
+            titleLabel.shadow = sh
+        } else {
+            titleLabel.shadow = nil
+        }
     }
 }
 
@@ -148,6 +230,9 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
     private var trackingArea: NSTrackingArea?
     private var mouseDownPoint: NSPoint = .zero
     private var isDraggingSessionActive: Bool = false
+    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 6)
+    private let iconImageView = NonInteractiveImageView()
+    private let titleLabel = NonInteractiveLabel(labelWithString: "")
 
     public init(filter: SearchTypeFilter) {
         self.filter = filter
@@ -165,29 +250,52 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
         bezelStyle = .inline
         wantsLayer = true
         layer?.cornerRadius = 6
-        layer?.masksToBounds = true
+        layer?.masksToBounds = false
         title = ""
         toolTip = "\(filter.displayName) (可拖动排序)"
 
         let icon = ThumbnailPipeline.shared.symbolIcon(name: filter.iconSymbolName, pointSize: 11, weight: .medium)
-        image = icon
-        imagePosition = .imageLeading
-        imageHugsTitle = true
+        iconImageView.image = icon
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        iconImageView.imageScaling = .scaleProportionallyUpOrDown
+        addSubview(iconImageView)
 
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        attributedTitle = NSAttributedString(string: " \(filter.displayName)", attributes: [
-            .font: font,
-            .paragraphStyle: style
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.alignment = .center
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.stringValue = filter.displayName
+        titleLabel.isBezeled = false
+        titleLabel.drawsBackground = false
+        titleLabel.isEditable = false
+        titleLabel.isSelectable = false
+        addSubview(titleLabel)
+
+        liquidBackdrop.contactShadowEnabled = false
+        liquidBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(liquidBackdrop, positioned: .below, relativeTo: iconImageView)
+
+        NSLayoutConstraint.activate([
+            liquidBackdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            liquidBackdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+            liquidBackdrop.topAnchor.constraint(equalTo: topAnchor),
+            liquidBackdrop.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            iconImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 7),
+            iconImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconImageView.widthAnchor.constraint(equalToConstant: 12),
+            iconImageView.heightAnchor.constraint(equalToConstant: 12),
+
+            titleLabel.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 4),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -7),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
 
         updateAppearance()
     }
 
     override public var intrinsicContentSize: NSSize {
-        let base = super.intrinsicContentSize
-        return NSSize(width: base.width + 10, height: 24)
+        let textWidth = titleLabel.intrinsicContentSize.width
+        return NSSize(width: max(40, 7 + 12 + 4 + textWidth + 7), height: 24)
     }
 
     override public func updateTrackingAreas() {
@@ -299,46 +407,80 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
 
     public func updateAppearance() {
         let isDark = glassIsDark
+        let isNative = isNativeLiquidTheme
         let font = NSFont.systemFont(ofSize: 12, weight: isPillSelected ? .semibold : .medium)
         let textColor: NSColor
 
-        if isPillSelected {
-            textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.05, alpha: 1.0)
-            layer?.backgroundColor = isDark
-                ? NSColor.white.withAlphaComponent(0.20).cgColor
-                : NSColor.black.withAlphaComponent(0.10).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
-                ? NSColor.white.withAlphaComponent(0.32).cgColor
-                : NSColor.black.withAlphaComponent(0.18).cgColor
-        } else if isHovered {
-            textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
-            layer?.backgroundColor = isDark
-                ? NSColor.white.withAlphaComponent(0.12).cgColor
-                : NSColor.black.withAlphaComponent(0.06).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
-                ? NSColor.white.withAlphaComponent(0.20).cgColor
-                : NSColor.black.withAlphaComponent(0.12).cgColor
+        if isNative {
+            if isPillSelected {
+                liquidBackdrop.isHidden = false
+                liquidBackdrop.isSelected = true
+                liquidBackdrop.isHovered = false
+                liquidBackdrop.isDark = isDark
+                liquidBackdrop.updateStyles()
+                layer?.backgroundColor = NSColor.clear.cgColor
+                layer?.borderWidth = 0.0
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.10, alpha: 1.0)
+            } else if isHovered {
+                liquidBackdrop.isHidden = false
+                liquidBackdrop.isSelected = false
+                liquidBackdrop.isHovered = true
+                liquidBackdrop.isDark = isDark
+                liquidBackdrop.updateStyles()
+                layer?.backgroundColor = NSColor.clear.cgColor
+                layer?.borderWidth = 0.0
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.12, alpha: 1.0)
+            } else {
+                liquidBackdrop.isHidden = true
+                layer?.backgroundColor = isDark ? NSColor.white.withAlphaComponent(0.06).cgColor : NSColor.white.withAlphaComponent(0.18).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark ? NSColor.white.withAlphaComponent(0.12).cgColor : NSColor.white.withAlphaComponent(0.35).cgColor
+                textColor = isDark ? NSColor(white: 0.90, alpha: 0.85) : NSColor(white: 0.20, alpha: 0.75)
+            }
         } else {
-            textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
-            layer?.backgroundColor = isDark
-                ? NSColor.white.withAlphaComponent(0.05).cgColor
-                : NSColor.black.withAlphaComponent(0.03).cgColor
-            layer?.borderWidth = 0.5
-            layer?.borderColor = isDark
-                ? NSColor.white.withAlphaComponent(0.10).cgColor
-                : NSColor.black.withAlphaComponent(0.06).cgColor
+            liquidBackdrop.isHidden = true
+            if isPillSelected {
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.05, alpha: 1.0)
+                layer?.backgroundColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.20).cgColor
+                    : NSColor.black.withAlphaComponent(0.10).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.32).cgColor
+                    : NSColor.black.withAlphaComponent(0.18).cgColor
+            } else if isHovered {
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
+                layer?.backgroundColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.12).cgColor
+                    : NSColor.black.withAlphaComponent(0.06).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.20).cgColor
+                    : NSColor.black.withAlphaComponent(0.12).cgColor
+            } else {
+                textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
+                layer?.backgroundColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.05).cgColor
+                    : NSColor.black.withAlphaComponent(0.03).cgColor
+                layer?.borderWidth = 0.5
+                layer?.borderColor = isDark
+                    ? NSColor.white.withAlphaComponent(0.10).cgColor
+                    : NSColor.black.withAlphaComponent(0.06).cgColor
+            }
         }
 
-        contentTintColor = textColor
-        let style = NSMutableParagraphStyle()
-        style.alignment = .center
-        attributedTitle = NSAttributedString(string: " \(filter.displayName)", attributes: [
-            .font: font,
-            .foregroundColor: textColor,
-            .paragraphStyle: style
-        ])
+        iconImageView.contentTintColor = textColor
+        titleLabel.textColor = textColor
+        titleLabel.font = font
+        if isNative && isDark && isPillSelected {
+            let sh = NSShadow()
+            sh.shadowColor = NSColor.black.withAlphaComponent(0.60)
+            sh.shadowOffset = NSSize(width: 0, height: -1)
+            sh.shadowBlurRadius = 2.0
+            titleLabel.shadow = sh
+        } else {
+            titleLabel.shadow = nil
+        }
     }
 }
 

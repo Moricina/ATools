@@ -89,10 +89,38 @@ public final class VisualEffectBackdropView: NSView {
         layer?.cornerRadius = radius
         layer?.borderWidth = 0
         layer?.borderColor = NSColor.clear.cgColor
+        layer?.masksToBounds = true
         effectView.cornerRadius = radius
         effectView.usesRegularGlass = true
-
+        effectView.isDark = isDark
+        effectView.isNativeLiquid = theme.isNativeLiquid
         effectView.isHidden = false
+
+        if theme.isNativeLiquid {
+            // 🌟 原生液态模式（应用抽屉与搜索大面板均采用此 100% 水滴透镜）🌟
+            effectView.alphaValue = 1.0
+            tintOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
+
+            if isDark {
+                // 原生液态 (深色)：深邃黑曜石微熏透镜，联动 themeOpacity 滑块 (40% ~ 100%)
+                // 40% 时保留 0.22 基础微熏黑曜石浓度与暗色底衬，配合纯水滴透镜 (Glass.clear)，既能晶莹透出底层桌面，又具备纯正深色底蕴
+                // 100% 时浓度平滑升至 0.72，暗色底衬同步增至 0.68，有效遮蔽背景杂色，确保文字清晰聚焦
+                let progress = max(0.0, min(1.0, (ConfigManager.shared.config.themeOpacity - 0.40) / 0.60))
+                let dynamicTintOpacity = CGFloat(0.22 + 0.50 * pow(progress, 1.20))
+                effectView.tintColor = NSColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1.0)
+                effectView.tintOpacity = dynamicTintOpacity
+            } else {
+                // 原生液态 (浅色)：纯白水滴透光透镜，联动 themeOpacity 滑块 (40% ~ 100%)
+                // 40% 时保留 0.08 基础纯白水滴通透折射 (Glass.clear)，白底晶莹通透，透出底层桌面与应用窗口；
+                // 100% 时浓度平滑升至 0.65，配合 Glass.regular 漫射与纯白底衬，有效遮蔽杂乱背景，确保文字高对比度与清晰度
+                let progress = max(0.0, min(1.0, (ConfigManager.shared.config.themeOpacity - 0.40) / 0.60))
+                let dynamicTintOpacity = CGFloat(0.08 + 0.57 * pow(progress, 1.15))
+                effectView.tintColor = NSColor.white
+                effectView.tintOpacity = dynamicTintOpacity
+            }
+            window?.invalidateShadow()
+            return
+        }
 
         if matchesSearchCapsuleAppearance {
             // The expanded sheet uses the emphasized search-capsule profile.
@@ -106,7 +134,12 @@ public final class VisualEffectBackdropView: NSView {
             effectView.alphaValue = profile.surfaceAlpha
             effectView.tintColor = profile.tintColor
             effectView.tintOpacity = profile.tintOpacity
-            tintOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
+            if !isDark {
+                // 🌟 液态玻璃 (浅色) 纯白通透磨砂：配合白底微光底衬，消除暗沉杂色，纯净明亮 🌟
+                tintOverlayView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.20 * opacity).cgColor
+            } else {
+                tintOverlayView.layer?.backgroundColor = NSColor.clear.cgColor
+            }
             window?.invalidateShadow()
             return
         }
@@ -114,16 +147,28 @@ public final class VisualEffectBackdropView: NSView {
         effectView.alphaValue = opacity
 
         if isDark {
+            // 恢复液态玻璃（深色）先前的磨砂质感
             effectView.tintColor = GlassPalette.darkBaseTop
             effectView.tintOpacity = 0.76
             tintOverlayView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.08 * opacity).cgColor
         } else {
+            // 🌟 液态玻璃 (浅色) 纯白通透磨砂质感 🌟
             effectView.tintColor = GlassPalette.lightGlassTint
-            effectView.tintOpacity = 0.58
-            tintOverlayView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06 * opacity).cgColor
+            effectView.tintOpacity = 0.85
+            tintOverlayView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.20 * opacity).cgColor
         }
 
         window?.invalidateShadow()
+    }
+
+    override public func layout() {
+        super.layout()
+        let radius: CGFloat = matchesSearchCapsuleAppearance ? 20 : 24
+        layer?.cornerRadius = radius
+        layer?.masksToBounds = true
+        effectView.cornerRadius = radius
+        effectView.layer?.cornerRadius = radius
+        effectView.layer?.masksToBounds = true
     }
 
     override public func viewDidMoveToWindow() {
@@ -136,5 +181,9 @@ public final class VisualEffectBackdropView: NSView {
         super.viewDidChangeEffectiveAppearance()
         updateAppearanceColors()
         window?.invalidateShadow()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 }

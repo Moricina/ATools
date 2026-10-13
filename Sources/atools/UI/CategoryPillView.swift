@@ -38,7 +38,7 @@ public final class CategoryPillView: NSView {
     }
 
     public let isVertical: Bool
-    private let titleLabel = NSTextField(labelWithString: "")
+    internal let titleLabel = NSTextField(labelWithString: "")
     private var trackingArea: NSTrackingArea?
 
     public init(category: Category, isSelected: Bool, isVertical: Bool = false) {
@@ -88,8 +88,18 @@ public final class CategoryPillView: NSView {
         // Count badge removed per user requirement
     }
 
-    private func updateAppearanceStyles() {
-        let isDark = glassIsDark
+    private var pillIsDark: Bool {
+        if let win = window {
+            let app = win.appearance ?? win.effectiveAppearance
+            if let match = app.bestMatch(from: [.darkAqua, .aqua]) {
+                return match == .darkAqua
+            }
+        }
+        return ConfigManager.shared.config.theme.isDark
+    }
+
+    internal func updateAppearanceStyles() {
+        let isDark = pillIsDark
 
         layer?.shadowOffset = CGSize(width: 0, height: 3)
         layer?.shadowRadius = 8
@@ -100,11 +110,14 @@ public final class CategoryPillView: NSView {
         // so implicit animation has to be enabled through NSAnimationContext.
         // One font weight for every state: switching weights changed the pill width and made
         // neighbouring tabs jump while the selection capsule was gliding.
-        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: isSelected ? .semibold : .medium)
         NSAnimationContext.beginGrouping()
         NSAnimationContext.current.duration = window == nil ? 0 : 0.18
         NSAnimationContext.current.timingFunction = CAMediaTimingFunction(name: .easeOut)
         NSAnimationContext.current.allowsImplicitAnimation = true
+
+        let primaryTextColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0)
+        let secondaryTextColor = isDark ? NSColor(white: 1.0, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.78)
 
         if isDropTarget {
             layer?.borderWidth = 0.75
@@ -112,14 +125,14 @@ public final class CategoryPillView: NSView {
             layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
             layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
             layer?.shadowOpacity = 0.16
-            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+            titleLabel.textColor = primaryTextColor
         } else if isSelected {
             // The selected background is rendered by the shared flowing capsule
             // in CategoryBarView, so the pill only changes its text here.
             layer?.backgroundColor = NSColor.clear.cgColor
             layer?.borderWidth = 0.0
             layer?.shadowOpacity = 0.0
-            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+            titleLabel.textColor = primaryTextColor
         } else {
             if isHovered {
                 layer?.borderWidth = 0.75
@@ -127,14 +140,24 @@ public final class CategoryPillView: NSView {
                 layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
                 layer?.shadowColor = nil
                 layer?.shadowOpacity = 0.0
-                titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+                titleLabel.textColor = primaryTextColor
             } else {
                 layer?.borderWidth = 0.0
                 layer?.backgroundColor = NSColor.clear.cgColor
                 layer?.shadowColor = nil
                 layer?.shadowOpacity = 0.0
-                titleLabel.textColor = GlassPalette.textSecondary(isDark: isDark)
+                titleLabel.textColor = secondaryTextColor
             }
+        }
+
+        if isDark {
+            let sh = NSShadow()
+            sh.shadowColor = NSColor.black.withAlphaComponent(isNativeLiquidTheme ? 0.70 : 0.50)
+            sh.shadowOffset = NSSize(width: 0, height: -1)
+            sh.shadowBlurRadius = isNativeLiquidTheme ? 2.0 : 1.5
+            titleLabel.shadow = sh
+        } else {
+            titleLabel.shadow = nil
         }
 
         NSAnimationContext.endGrouping()
@@ -150,6 +173,11 @@ public final class CategoryPillView: NSView {
         // rounded-rect shadow derived from the layer's corner radius, avoiding
         // the macOS 14+ `cgPath` API while keeping the macOS 12 floor intact.
         layer?.shadowPath = nil
+    }
+
+    override public func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAppearanceStyles()
     }
 
     override public func viewDidChangeEffectiveAppearance() {
