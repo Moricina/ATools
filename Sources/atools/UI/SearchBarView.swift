@@ -16,16 +16,22 @@ public protocol SearchBarDelegate: AnyObject {
 }
 
 public final class VerticallyCenteredTextFieldCell: NSTextFieldCell {
+    /// 光学垂直对齐下沉偏移量 (pt)：
+    /// 系统中文字体（如苹方 PingFang SC）汉字不包含西文字符下延部（Descender），
+    /// 纯基于字号行高的几何居中会导致汉字字块的视觉重心天然比左侧放大镜图标和胶囊中心偏高。
+    /// 引入 1.0pt 光学下沉校准，使汉字视觉重心与放大镜图标及胶囊背景在 22.0pt 基准线上达到绝对平齐。
+    public static let opticalDownwardOffset: CGFloat = 1.0
+
     override public func drawingRect(forBounds rect: NSRect) -> NSRect {
         let newRect = super.drawingRect(forBounds: rect)
         let textSize = cellSize(forBounds: rect)
-        let delta = (rect.height - textSize.height) / 2.0
+        let delta = (rect.height - textSize.height) / 2.0 + Self.opticalDownwardOffset
         if delta > 0 {
             return NSRect(
                 x: newRect.origin.x,
                 y: newRect.origin.y + delta,
                 width: newRect.width,
-                height: newRect.height - delta
+                height: max(0, newRect.height - delta)
             )
         }
         return newRect

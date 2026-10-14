@@ -439,6 +439,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
+            guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
             guard !PanelCoordinator.shared.isShelfPinned else { return }
             if NSApp.modalWindow != nil { return }
             let mouseLoc = NSEvent.mouseLocation

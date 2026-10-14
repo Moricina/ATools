@@ -95,6 +95,7 @@ public final class TrackpadGestureManager {
     // 手势识别周期状态
     private struct TouchCycleState {
         var initialTimestamp: Double = 0
+        var lastFrameTimestamp: Double = 0
         var initialPositions: [Int32: (x: Float, y: Float)] = [:]
         var maxDisplacement: Float = 0
         var maxFingerCount: Int = 0
@@ -105,6 +106,7 @@ public final class TrackpadGestureManager {
     }
 
     private var cycleState = TouchCycleState()
+    private var activeGesture: ShelfTrackpadGesture = .none
     private var lastTriggerTimestamp: Double = 0
     private var pendingEndWorkItem: DispatchWorkItem?
 
@@ -159,14 +161,24 @@ public final class TrackpadGestureManager {
     public func startListeningIfEnabled() {
         let config = ConfigManager.shared.config
         guard config.enableShelfPanel && config.shelfTrackpadGesture != .none else {
+            os_unfair_lock_lock(&lock)
+            activeGesture = .none
+            os_unfair_lock_unlock(&lock)
             stopListening()
             return
         }
+        os_unfair_lock_lock(&lock)
+        activeGesture = config.shelfTrackpadGesture
+        os_unfair_lock_unlock(&lock)
         startListening()
     }
 
     public func updateConfiguration(_ gesture: ShelfTrackpadGesture) {
-        if gesture == .none || !ConfigManager.shared.config.enableShelfPanel {
+        let enabled = ConfigManager.shared.config.enableShelfPanel
+        os_unfair_lock_lock(&lock)
+        activeGesture = enabled ? gesture : .none
+        os_unfair_lock_unlock(&lock)
+        if gesture == .none || !enabled {
             stopListening()
         } else {
             startListening()
@@ -246,7 +258,7 @@ public final class TrackpadGestureManager {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
 
-        let configuredGesture = ConfigManager.shared.config.shelfTrackpadGesture
+        let configuredGesture = activeGesture
         guard configuredGesture != .none else { return }
 
         pendingEndWorkItem?.cancel()
@@ -279,6 +291,7 @@ public final class TrackpadGestureManager {
             // 开始新的触控追踪周期
             cycleState = TouchCycleState(
                 initialTimestamp: timestamp,
+                lastFrameTimestamp: timestamp,
                 initialPositions: [:],
                 maxDisplacement: 0,
                 maxFingerCount: touchingCount,
@@ -294,6 +307,7 @@ public final class TrackpadGestureManager {
                 }
             }
         } else {
+            cycleState.lastFrameTimestamp = timestamp
             cycleState.maxFingerCount = max(cycleState.maxFingerCount, touchingCount)
 
             // 计算位移与方向
@@ -342,7 +356,8 @@ public final class TrackpadGestureManager {
             guard let self = self else { return }
             os_unfair_lock_lock(&self.lock)
             defer { os_unfair_lock_unlock(&self.lock) }
-            self.evaluateTouchCycleEnd(timestamp: self.cycleState.initialTimestamp + 0.10, gesture: configuredGesture)
+            let endTs = max(self.cycleState.lastFrameTimestamp, self.cycleState.initialTimestamp + 0.05)
+            self.evaluateTouchCycleEnd(timestamp: endTs, gesture: configuredGesture)
         }
         pendingEndWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.07, execute: work)

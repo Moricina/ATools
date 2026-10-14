@@ -116,6 +116,11 @@ public enum AppTheme: String, Codable, CaseIterable {
     public var isNativeLiquid: Bool {
         return self == .macosLiquidDark || self == .macosLiquidLight
     }
+
+    /// 原生液态主题默认透明度为 40% (0.40)，经典液态玻璃主题默认透明度为 90% (0.90)
+    public var defaultOpacity: Double {
+        return isNativeLiquid ? 0.40 : 0.90
+    }
 }
 
 public enum ShelfTrackpadGesture: String, Codable, CaseIterable {
@@ -322,7 +327,7 @@ public struct AtoolsConfig: Codable {
     }
 
     public init(
-        version: Int = 4,
+        version: Int = 5,
         shelfHotkey: HotkeyBinding = .defaultShelf,
         searchHotkey: HotkeyBinding = .defaultSearch,
         categories: [Category] = [],
@@ -337,7 +342,7 @@ public struct AtoolsConfig: Codable {
         sidebarWidth: Double = 84,
         theme: AppTheme = .liquidDark,
         shelfIconScale: Double = 1.0,
-        themeOpacity: Double = 0.90,
+        themeOpacity: Double? = nil,
         enableShelfPanel: Bool = true,
         enableSearchPanel: Bool = true,
         enableFavoritesCategory: Bool = false,
@@ -384,7 +389,8 @@ public struct AtoolsConfig: Codable {
         self.sidebarWidth = sidebarWidth
         self.theme = theme
         self.shelfIconScale = shelfIconScale
-        self.themeOpacity = themeOpacity
+        let resolvedOpacity = themeOpacity ?? theme.defaultOpacity
+        self.themeOpacity = max(0.40, min(1.00, resolvedOpacity))
         self.enableShelfPanel = enableShelfPanel
         self.enableSearchPanel = enableSearchPanel
         self.enableFavoritesCategory = enableFavoritesCategory
@@ -457,10 +463,11 @@ public struct AtoolsConfig: Codable {
         self.shelfIconSize = (try? container.decode(ShelfIconSize.self, forKey: .shelfIconSize)) ?? .medium
         self.sidebarWidth = (try? container.decode(Double.self, forKey: .sidebarWidth)) ?? 84
         let rawTheme = (try? container.decode(String.self, forKey: .theme)) ?? ""
-        self.theme = AppTheme.migrated(from: rawTheme) ?? .liquidDark
+        let resolvedTheme = AppTheme.migrated(from: rawTheme) ?? .liquidDark
+        self.theme = resolvedTheme
         let rawScale = (try? container.decode(Double.self, forKey: .shelfIconScale)) ?? 1.0
         self.shelfIconScale = max(0.70, min(1.30, rawScale))
-        let rawOpacity = (try? container.decode(Double.self, forKey: .themeOpacity)) ?? 0.90
+        let rawOpacity = (try? container.decode(Double.self, forKey: .themeOpacity)) ?? resolvedTheme.defaultOpacity
         self.themeOpacity = max(0.40, min(1.00, rawOpacity))
 
         // New fields with strict non-destructive fallback defaults

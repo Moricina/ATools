@@ -119,17 +119,25 @@ if CommandLine.arguments.contains("--test") {
     let solidDarkJSON = "{\"theme\": \"solidDark\"}".data(using: .utf8)!
     TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidDarkJSON)).theme == .liquidDark, "solidDark -> liquidDark")
     let legacyNativeJSON = "{\"theme\": \"macosLiquid\"}".data(using: .utf8)!
-    TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: legacyNativeJSON)).theme == .macosLiquidLight, "macosLiquid -> macosLiquidLight")
+    let decodedLegacyNative = try! JSONDecoder().decode(AtoolsConfig.self, from: legacyNativeJSON)
+    TestAssertions.expect(decodedLegacyNative.theme == .macosLiquidLight, "macosLiquid -> macosLiquidLight")
+    TestAssertions.expect(decodedLegacyNative.themeOpacity == 0.40, "Native liquid theme default opacity should be 0.40 (40%)")
     ConfigManager.shared.updateTheme(.macosLiquidDark)
     TestAssertions.expect(ConfigManager.shared.config.theme == .macosLiquidDark, "Theme should update to .macosLiquidDark")
     TestAssertions.expect(ConfigManager.shared.config.theme.isDark == true, "macosLiquidDark isDark should be true")
     TestAssertions.expect(ConfigManager.shared.config.theme.isNativeLiquid == true, "macosLiquidDark isNativeLiquid should be true")
+    TestAssertions.expect(ConfigManager.shared.config.theme.defaultOpacity == 0.40, "macosLiquidDark defaultOpacity should be 0.40")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.40, "Switching to macosLiquidDark should set default opacity to 0.40")
     ConfigManager.shared.updateTheme(.macosLiquidLight)
     TestAssertions.expect(ConfigManager.shared.config.theme == .macosLiquidLight, "Theme should update to .macosLiquidLight")
     TestAssertions.expect(ConfigManager.shared.config.theme.isDark == false, "macosLiquidLight isDark should be false")
     TestAssertions.expect(ConfigManager.shared.config.theme.isNativeLiquid == true, "macosLiquidLight isNativeLiquid should be true")
+    TestAssertions.expect(ConfigManager.shared.config.theme.defaultOpacity == 0.40, "macosLiquidLight defaultOpacity should be 0.40")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.40, "macosLiquidLight opacity should remain at 0.40")
     ConfigManager.shared.updateTheme(.liquidLight)
     TestAssertions.expect(ConfigManager.shared.config.theme == .liquidLight, "Theme should update to .liquidLight")
+    TestAssertions.expect(ConfigManager.shared.config.theme.defaultOpacity == 0.90, "liquidLight defaultOpacity should be 0.90")
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.90, "Switching to liquidLight should set default opacity to 0.90")
 
     // Test shelfIconScale
     ConfigManager.shared.updateShelfIconScale(1.10)
@@ -158,10 +166,11 @@ if CommandLine.arguments.contains("--test") {
 
     // Test macosLiquidLight dynamic opacity linkage in VisualEffectBackdropView
     ConfigManager.shared.updateTheme(.macosLiquidLight)
+    TestAssertions.expect(ConfigManager.shared.config.themeOpacity == 0.40, "macosLiquidLight default opacity is 0.40")
     let backdropTest = VisualEffectBackdropView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
     ConfigManager.shared.updateThemeOpacity(0.40)
     ConfigManager.shared.updateThemeOpacity(1.00)
-    ConfigManager.shared.updateThemeOpacity(0.90)
+    ConfigManager.shared.updateThemeOpacity(0.40)
     _ = backdropTest
 
     // Test ShelfTrackpadGesture configuration & persistence

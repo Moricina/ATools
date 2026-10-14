@@ -377,4 +377,12 @@ extension CategoryPillView: NSDraggingSource {
     public func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         return context == .withinApplication ? .move : []
     }
+
+    public func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        PanelCoordinator.shared.isDraggingActive = true
+    }
+
+    public func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        PanelCoordinator.shared.isDraggingActive = false
+    }
 }

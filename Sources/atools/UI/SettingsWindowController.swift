@@ -163,6 +163,12 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     private func switchToTab(_ item: SettingsSidebarItem) {
+        shelfView?.shelfRecorder?.stopRecording()
+        searchView?.searchRecorder?.stopRecording()
+        if let sheet = window?.attachedSheet {
+            window?.endSheet(sheet)
+        }
+
         if let current = currentActiveView {
             if current === performanceView {
                 performanceView?.stopMonitor()
@@ -177,12 +183,6 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
             themeView = nil
             performanceView = nil
             aboutView = nil
-        }
-
-        shelfView?.shelfRecorder?.stopRecording()
-        searchView?.searchRecorder?.stopRecording()
-        if let sheet = window?.attachedSheet {
-            window?.endSheet(sheet)
         }
 
         let targetView: NSView

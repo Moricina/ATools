@@ -40,16 +40,30 @@ public final class DictionaryService {
     /// Dictionary services can be slow on their first call, so search never runs this on main.
     /// The generation token ensures late results from a previous query are silently dropped.
     public func lookup(_ word: String, generation: UInt64 = 0, completion: @escaping (String?) -> Void) {
+        cacheLock.lock()
+        let activeGen: UInt64
+        if generation > 0 {
+            currentGeneration = generation
+            activeGen = generation
+        } else {
+            currentGeneration &+= 1
+            activeGen = currentGeneration
+        }
+        cacheLock.unlock()
+
         queue.async { [weak self] in
             guard let self = self else { return }
+            self.cacheLock.lock()
+            let stillCurrentBefore = (self.currentGeneration == activeGen)
+            self.cacheLock.unlock()
+            guard stillCurrentBefore else { return }
+
             let result = self.lookup(word)
-            // If a generation was provided, check it is still current.
-            if generation > 0 {
-                self.cacheLock.lock()
-                let isCurrent = self.currentGeneration == generation
-                self.cacheLock.unlock()
-                guard isCurrent else { return }
-            }
+
+            self.cacheLock.lock()
+            let stillCurrentAfter = (self.currentGeneration == activeGen)
+            self.cacheLock.unlock()
+            guard stillCurrentAfter else { return }
             completion(result)
         }
     }

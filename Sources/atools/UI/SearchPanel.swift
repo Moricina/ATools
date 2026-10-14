@@ -476,6 +476,7 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
         let trimmed = currentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             filterBar.showTypeFilters()
+            resultsTable.updateResults([])
             // 文字删空立即执行主线程平滑折叠，无需等待后台异步队列回传
             SearchCoordinator.shared.search(query: "", filter: filterBar.selectedFilter) { _ in }
             setPanelExpanded(false, animated: true)
@@ -586,12 +587,14 @@ public final class SearchViewController: NSViewController, SearchBarDelegate, Se
             searchBar.text = ""
             filterBar.selectedFilter = filter
             filterBar.showTypeFilters()
+            resultsTable.updateResults([])
             view.window?.makeFirstResponder(searchBar.textField)
             performCurrentSearch()
         case .webSearch, .calculator:
             searchBar.setSyntaxCommand(command)
             searchBar.text = ""
             filterBar.showTypeFilters()
+            resultsTable.updateResults([])
             view.window?.makeFirstResponder(searchBar.textField)
             performCurrentSearch()
         case .systemAction(let id):

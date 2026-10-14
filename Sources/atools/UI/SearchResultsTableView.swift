@@ -276,6 +276,7 @@ public final class ContextualSearchTableView: NSTableView {
         if let path = sender.representedObject as? String {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(path, forType: .string)
+            PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
         }
         if let owner = owner {
             owner.delegate?.searchResultsTableDidRequestDismiss(owner)
@@ -298,8 +299,10 @@ public final class ContextualSearchTableView: NSTableView {
 
     @objc private func copyContentAction(_ sender: NSMenuItem) {
         if let text = sender.representedObject as? String {
+            let rawText = text.hasPrefix("= ") ? String(text.dropFirst(2)) : text
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            NSPasteboard.general.setString(rawText, forType: .string)
+            PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
         }
         if let owner = owner {
             owner.delegate?.searchResultsTableDidRequestDismiss(owner)

@@ -87,8 +87,8 @@ public final class SearchCoordinator {
         // 0.1 显式斜杠工具语法：/web 与 /calc
         if effectiveText.hasPrefix("/web ") || effectiveText.hasPrefix("/g ") {
             let query = String(effectiveText.dropFirst(effectiveText.hasPrefix("/web ") ? 5 : 3)).trimmingCharacters(in: .whitespaces)
+            let engine = ConfigManager.shared.config.webSearchEngine
             if !query.isEmpty {
-                let engine = ConfigManager.shared.config.webSearchEngine
                 let result = SearchResult(
                     id: "web_\(query)",
                     title: "在 \(engine.title) 中搜索 \"\(query)\"",
@@ -106,12 +106,18 @@ public final class SearchCoordinator {
                 DispatchQueue.main.async {
                     onResults([result])
                 }
-                return
+            } else {
+                SpotlightBridge.shared.stop()
+                DispatchQueue.main.async {
+                    onResults([])
+                }
             }
+            return
         }
 
         if effectiveText.hasPrefix("/calc ") {
             let expr = String(effectiveText.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            SpotlightBridge.shared.stop()
             if !expr.isEmpty, let mathResult = CalculatorEngine.shared.evaluate(expr) {
                 let result = SearchResult(
                     id: "calc_\(expr)",
@@ -123,14 +129,27 @@ public final class SearchCoordinator {
                     action: {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(mathResult, forType: .string)
+                        PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
                     }
                 )
-                SpotlightBridge.shared.stop()
                 DispatchQueue.main.async {
                     onResults([result])
                 }
-                return
+            } else {
+                let promptResult = SearchResult(
+                    id: "calc_prompt_\(expr)",
+                    title: expr.isEmpty ? "请输入数学表达式..." : "等待输入完整表达式: \(expr)",
+                    subtitle: "支持四则运算、括号、幂运算 (^)、取模 (%)、十六进制 (0x) 与数学函数 (sqrt/sin/cos)",
+                    type: .calculator,
+                    score: 1000,
+                    icon: ThumbnailPipeline.shared.symbolIcon(name: "equal", pointSize: 16, weight: .medium),
+                    action: nil
+                )
+                DispatchQueue.main.async {
+                    onResults([promptResult])
+                }
             }
+            return
         }
 
         // Layer 1: Instant In-Memory Synchronous Results (<1ms)
@@ -146,9 +165,11 @@ public final class SearchCoordinator {
                 subtitle: "按下回车键复制计算结果到剪贴板",
                 type: .calculator,
                 score: 1000,
+                icon: ThumbnailPipeline.shared.symbolIcon(name: "equal", pointSize: 16, weight: .medium),
                 action: {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(mathResult, forType: .string)
+                    PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
                 }
             ))
         }
