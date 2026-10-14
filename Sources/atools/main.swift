@@ -1798,6 +1798,119 @@ if CommandLine.arguments.contains("--test") {
         print("      ✓ Pinned shelf resilience & hotkey isolation verified.")
     }
 
+    // 13. Test P0 Features (Deep Item Editor, Missing Target Detection/Relocation/Cleanup, Backup/Pre-Validation/Snapshot Rollback/Self-Healing)
+    print("[13] Testing P0 Features (Deep Editor, Missing Item Maintenance, Backup & Self-Healing)...")
+    do {
+        let p0TempDir = FileManager.default.temporaryDirectory.appendingPathComponent("atools_p0_test_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: p0TempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: p0TempDir) }
+
+        // 13.1 Argument & Tag parsing + Custom Icon Management + ThumbnailPipeline priority
+        let parsedArgs = ExecutionContext.parseArguments("--incognito --user-data-dir=\"/Users/test/My Profile\" 'arg with space'")
+        TestAssertions.expect(parsedArgs == ["--incognito", "--user-data-dir=/Users/test/My Profile", "arg with space"], "ExecutionContext.parseArguments must handle quotes and spaces")
+
+        let parsedTags = LauncherItem.parseTags("wx, 微信，聊天; wechat  wx")
+        TestAssertions.expect(parsedTags == ["wx", "微信", "聊天", "wechat"], "LauncherItem.parseTags must split and deduplicate tags")
+
+        // Create a dummy PNG icon to test custom icon import & ThumbnailPipeline priority
+        let testIconURL = p0TempDir.appendingPathComponent("custom_source.png")
+        let dummyImg = NSImage(size: NSSize(width: 64, height: 64))
+        dummyImg.lockFocus()
+        NSColor.systemPurple.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 64, height: 64)).fill()
+        dummyImg.unlockFocus()
+        if let tiff = dummyImg.tiffRepresentation,
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:]) {
+            try png.write(to: testIconURL)
+        }
+
+        let cat = ConfigManager.shared.addCategory(name: "P0测试分类")
+        let validTargetURL = p0TempDir.appendingPathComponent("ValidScript.sh")
+        try "#!/bin/sh\necho ok\n".write(to: validTargetURL, atomically: true, encoding: .utf8)
+
+        var item1 = LauncherItem(name: "测试脚本", itemType: .fileOrFolder, target: validTargetURL.path)
+        ConfigManager.shared.addItem(item1, to: cat.id)
+
+        let managedIconPath = ConfigManager.shared.importCustomIcon(from: testIconURL, for: item1.id)
+        TestAssertions.expect(managedIconPath != nil && FileManager.default.fileExists(atPath: managedIconPath!), "importCustomIcon must save normalized 256x256 PNG to managed icons directory")
+
+        item1.name = "深度编辑后名称"
+        item1.customIconPath = managedIconPath
+        item1.tags = ["csjb", "多音字别名", "myscript"]
+        item1.executionContext = ExecutionContext(arguments: ["--fast", "--port=8080"], workingDirectory: p0TempDir.path)
+        let updateOK = ConfigManager.shared.updateItem(item1, in: cat.id)
+        TestAssertions.expect(updateOK, "ConfigManager.updateItem must succeed")
+
+        let storedItem1 = ConfigManager.shared.config.categories.first(where: { $0.id == cat.id })?.items.first(where: { $0.id == item1.id })
+        TestAssertions.expect(storedItem1 == item1, "Updated LauncherItem must persist all P0-1 deep editor properties")
+        TestAssertions.expect(storedItem1?.matchesFilter("myscript") == true, "LauncherItem.matchesFilter must match custom tags")
+        TestAssertions.expect(storedItem1?.matchesFilter("dyzbm") == true, "LauncherItem.matchesFilter must match pinyin initials of custom tags")
+        TestAssertions.expect((storedItem1?.searchMatchScore(for: "myscript") ?? 0) >= 800, "LauncherItem.searchMatchScore must score exact tag matches highly")
+
+        // 13.2 Missing Target Detection, Relocation & One-Click Cleanup
+        let missingTargetPath = p0TempDir.appendingPathComponent("UninstalledApp.app").path
+        let missingItem = LauncherItem(name: "已卸载软件", itemType: .application, target: missingTargetPath, tags: ["oldtag"])
+        ConfigManager.shared.addItem(missingItem, to: cat.id)
+        TestAssertions.expect(missingItem.checkTargetMissing() == true, "Missing target must be detected as missing")
+        TestAssertions.expect(item1.checkTargetMissing() == false, "Existing target must not be marked missing")
+
+        let scannedMissing = ConfigManager.shared.scanMissingItems()
+        TestAssertions.expect(scannedMissing.contains(where: { $0.item.id == missingItem.id }), "scanMissingItems must include missingItem")
+
+        // Test Relocation (preserving ID, custom name, sort order, tags)
+        let relocatedTargetURL = p0TempDir.appendingPathComponent("RelocatedApp.app")
+        try FileManager.default.createDirectory(at: relocatedTargetURL, withIntermediateDirectories: true)
+        let relocateOK = ConfigManager.shared.relocateItem(id: missingItem.id, in: cat.id, newTarget: relocatedTargetURL.path)
+        TestAssertions.expect(relocateOK, "relocateItem must succeed")
+
+        let afterRelocate = ConfigManager.shared.config.categories.first(where: { $0.id == cat.id })?.items.first(where: { $0.id == missingItem.id })
+        TestAssertions.expect(afterRelocate?.name == "已卸载软件" && afterRelocate?.tags == ["oldtag"] && afterRelocate?.checkTargetMissing() == false, "relocateItem must preserve ID, custom name, and tags while clearing missing status")
+
+        // Add another missing item and test one-click cleanup
+        let deadItem = LauncherItem(name: "待清理失效项", itemType: .fileOrFolder, target: p0TempDir.appendingPathComponent("ghost.txt").path)
+        ConfigManager.shared.addItem(deadItem, to: cat.id)
+        TestAssertions.expect(ConfigManager.shared.scanMissingItems().count >= 1, "scanMissingItems must find deadItem")
+        let cleanedCount = ConfigManager.shared.removeAllMissingItems()
+        TestAssertions.expect(cleanedCount >= 1 && ConfigManager.shared.scanMissingItems().isEmpty, "removeAllMissingItems must remove all missing items and leave zero missing")
+
+        // 13.3 Backup Export, Dry-Run Pre-Validation, Snapshot Rollback & Cross-Machine Self-Healing
+        let backupArchiveURL = p0TempDir.appendingPathComponent("TestExport.atoolsbackup", isDirectory: true)
+        let manifest = try BackupService.shared.exportBackup(to: backupArchiveURL, sourceHomeOverride: "/Users/old_mac_user")
+        TestAssertions.expect(manifest.customIcons.count >= 1, "Exported backup manifest must include custom icon checksums")
+
+        // Verify dry-run validation succeeds and heals cross-machine paths
+        let validationRes = BackupService.shared.validateBackup(at: backupArchiveURL, currentHomeOverride: p0TempDir.path)
+        switch validationRes {
+        case .success(let valid):
+            TestAssertions.expect(valid.categoriesCount == manifest.categoriesCount, "Dry-run validation categoriesCount matches manifest")
+        case .failure(let err):
+            TestAssertions.expect(false, "Valid backup failed dry-run validation: \(err)")
+        }
+
+        // Verify corrupted JSON / checksum is rejected by dry-run pre-validation without overwriting config
+        let corruptedBackupURL = p0TempDir.appendingPathComponent("Corrupted.atoolsbackup", isDirectory: true)
+        try FileManager.default.copyItem(at: backupArchiveURL, to: corruptedBackupURL)
+        try "{corrupted json".write(to: corruptedBackupURL.appendingPathComponent("config.json"), atomically: true, encoding: .utf8)
+        if case .success = BackupService.shared.validateBackup(at: corruptedBackupURL) {
+            TestAssertions.expect(false, "Corrupted config.json MUST be rejected by validateBackup")
+        }
+
+        // Mutate current config, then restore from backupArchiveURL (which creates pre-restore-* snapshot)
+        _ = ConfigManager.shared.addCategory(name: "恢复前临时分类")
+        let (_, snapshotURL) = try BackupService.shared.restoreBackup(from: backupArchiveURL, createSnapshot: true)
+        TestAssertions.expect(snapshotURL != nil && FileManager.default.fileExists(atPath: snapshotURL!.path), "restoreBackup must create pre-restore-* snapshot")
+        TestAssertions.expect(!ConfigManager.shared.config.categories.contains(where: { $0.name == "恢复前临时分类" }), "restoreBackup must replace config with backup state")
+
+        // Rollback to pre-restore snapshot and verify "恢复前临时分类" comes back
+        _ = try BackupService.shared.rollbackToLatestSnapshot()
+        TestAssertions.expect(ConfigManager.shared.config.categories.contains(where: { $0.name == "恢复前临时分类" }), "rollbackToLatestSnapshot must restore pre-restore state")
+
+        print("      ✓ P0 Deep Editor, Missing Item Maintenance & Backup/Self-Healing/Rollback verified.")
+    } catch {
+        TestAssertions.expect(false, "P0 Features diagnostic failed: \(error)")
+    }
+
     if TestAssertions.failures > 0 {
         print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")
         try? FileManager.default.removeItem(at: testFixtureURL)

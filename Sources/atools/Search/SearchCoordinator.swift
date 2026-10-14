@@ -198,13 +198,53 @@ public final class SearchCoordinator {
             instantResults.append(contentsOf: exactActionResults)
         }
 
-        // 3. In-Memory Apps (0ms) - 在 .all 模式展示前 15 条，在 .application 模式展示全量（上限 searchResultLimit）
+        // 3. In-Memory Apps & Custom Shelf Items (0ms) - 在 .all 模式展示前 15 条，在 .application 模式展示全量（上限 searchResultLimit）
         if effectiveFilter == .all || effectiveFilter == .application {
             let appLimit = (effectiveFilter == .application)
                 ? ConfigManager.shared.config.searchResultLimit
                 : AppConstants.instantAppResultCount
+
+            var seenAppPaths = Set<String>()
+
+            // 3a. P0-1: 优先匹配应用抽屉中设置了自定义搜索别名标签 (tags) 或自定义名称的启动项
+            let shelfItems = ConfigManager.shared.config.categories.flatMap { $0.items }
+            var matchedShelfItems: [(item: LauncherItem, score: Int)] = []
+            for item in shelfItems where !item.checkTargetMissing() {
+                if effectiveFilter == .application && item.itemType != .application {
+                    continue
+                }
+                if let matchScore = item.searchMatchScore(for: trimmed) {
+                    matchedShelfItems.append((item: item, score: matchScore))
+                }
+            }
+            matchedShelfItems.sort { $0.score > $1.score }
+
+            for entry in matchedShelfItems.prefix(appLimit) {
+                let item = entry.item
+                let canonicalPath = (item.target as NSString).resolvingSymlinksInPath
+                guard seenAppPaths.insert(canonicalPath).inserted else { continue }
+                let resultType: SearchResultType = (item.itemType == .application) ? .application : .file
+                let sub = item.tags.isEmpty ? item.target : "\(item.target)  •  别名: \(item.formattedTagsString)"
+                instantResults.append(SearchResult(
+                    id: "shelf_\(item.id.uuidString)",
+                    title: item.name,
+                    subtitle: sub,
+                    path: item.target,
+                    customIconPath: item.customIconPath,
+                    type: resultType,
+                    score: entry.score,
+                    action: {
+                        LauncherExecutor.open(item: item)
+                    }
+                ))
+            }
+
+            // 3b. 全量应用索引匹配（与已命中的抽屉自定义项去重）
             let apps = AppHotspotIndex.shared.search(trimmed)
-            for app in apps.prefix(appLimit) {
+            for app in apps {
+                guard instantResults.filter({ $0.type == .application }).count < appLimit else { break }
+                let canonicalPath = (app.path as NSString).resolvingSymlinksInPath
+                guard seenAppPaths.insert(canonicalPath).inserted else { continue }
                 let appPath = app.path
                 instantResults.append(SearchResult(
                     id: "app_\(appPath)",

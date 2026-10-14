@@ -69,6 +69,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("cc.atools.quitOtherInstances"),
+            object: nil,
+            queue: .main
+        ) { notif in
+            let senderPid = notif.object as? String ?? ""
+            if senderPid != "\(getpid())" {
+                NSApp.terminate(nil)
+            }
+        }
+
+        DistributedNotificationCenter.default().postNotificationName(
+            NSNotification.Name("cc.atools.quitOtherInstances"),
+            object: "\(getpid())",
+            userInfo: nil,
+            deliverImmediately: true
+        )
+
+        if CommandLine.arguments.contains("--show-ui") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                SettingsWindowController.shared.showSettingsWindow()
+                PanelCoordinator.shared.showShelfPanel()
+            }
+        }
     }
 
     /// AppKit routes ⌘C/⌘V/⌘X/⌘A/⌘Z to text fields through main-menu key equivalents. An

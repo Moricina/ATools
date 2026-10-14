@@ -145,7 +145,7 @@ public final class SearchResultCellView: NSTableCellView {
             // Clear the reused cell's previous icon, and ignore late callbacks for a row this
             // cell no longer shows.
             iconView.image = nil
-            ThumbnailPipeline.shared.icon(forPath: path) { [weak self] img in
+            ThumbnailPipeline.shared.icon(forPath: path, customIconPath: result.customIconPath) { [weak self] img in
                 guard let self = self, self.representedIconPath == path else { return }
                 self.iconView.image = img
             }

@@ -17,6 +17,7 @@ public struct SearchResult: Identifiable {
     public let title: String
     public let subtitle: String
     public let path: String?
+    public let customIconPath: String?
     public let type: SearchResultType
     public let score: Int
     public var icon: NSImage?
@@ -27,6 +28,7 @@ public struct SearchResult: Identifiable {
         title: String,
         subtitle: String,
         path: String? = nil,
+        customIconPath: String? = nil,
         type: SearchResultType,
         score: Int = 0,
         icon: NSImage? = nil,
@@ -36,6 +38,7 @@ public struct SearchResult: Identifiable {
         self.title = title
         self.subtitle = subtitle
         self.path = path
+        self.customIconPath = customIconPath
         self.type = type
         self.score = score
         self.icon = icon

@@ -4,9 +4,70 @@ import AppKit
 public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didLaunchItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem)
+    func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem)
+    func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String])
     func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int)
     func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int)
+}
+
+public extension ShelfGridDelegate {
+    func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem) {}
+    func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem) {}
+}
+
+/// P0-2：失效启动项右上角黄色感叹号微标视图
+private final class MissingTargetBadgeView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = false
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        return nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        let circleRect = bounds.insetBy(dx: 1.5, dy: 1.5)
+        ctx.saveGState()
+
+        // 柔和投影增强在亮/暗图标上的辨识度
+        ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 2.0, color: NSColor.black.withAlphaComponent(0.45).cgColor)
+        ctx.setFillColor(NSColor.systemYellow.cgColor)
+        ctx.fillEllipse(in: circleRect)
+        ctx.restoreGState()
+
+        // 细描边
+        ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.25).cgColor)
+        ctx.setLineWidth(0.8)
+        ctx.strokeEllipse(in: circleRect)
+
+        // 绘制中心深色感叹号 "!"
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .heavy),
+            .foregroundColor: NSColor(calibratedWhite: 0.12, alpha: 1.0),
+            .paragraphStyle: paragraph
+        ]
+        let str = NSAttributedString(string: "!", attributes: attrs)
+        let size = str.size()
+        let textRect = NSRect(
+            x: (bounds.width - size.width) / 2.0,
+            y: (bounds.height - size.height) / 2.0 - 0.5,
+            width: size.width,
+            height: size.height
+        )
+        str.draw(in: textRect)
+    }
 }
 
 public final class ShelfItemButton: NSControl {
@@ -18,6 +79,17 @@ public final class ShelfItemButton: NSControl {
     }
     public let iconImageView = NSImageView()
     public let titleLabel = NSTextField(labelWithString: "")
+    private let missingBadgeView = MissingTargetBadgeView(frame: NSRect(x: 0, y: 0, width: 18, height: 18))
+    private var rawIconImage: NSImage?
+
+    /// P0-2：标识当前启动项的目标路径是否已失效（文件被移动或软件已卸载）
+    public var isTargetMissing: Bool = false {
+        didSet {
+            if oldValue != isTargetMissing {
+                applyIconAndMissingState()
+            }
+        }
+    }
 
     private var iconTopConstraint: NSLayoutConstraint?
     private var iconWidthConstraint: NSLayoutConstraint?
@@ -60,6 +132,7 @@ public final class ShelfItemButton: NSControl {
     public init(item: LauncherItem, scale: Double = ConfigManager.shared.config.shelfIconScale, frame: NSRect = .zero) {
         self.item = item
         self.scale = scale
+        self.isTargetMissing = item.checkTargetMissing()
         super.init(frame: frame)
         setupViews()
     }
@@ -97,6 +170,10 @@ public final class ShelfItemButton: NSControl {
         iconImageView.wantsLayer = true
         addSubview(iconImageView)
 
+        missingBadgeView.translatesAutoresizingMaskIntoConstraints = false
+        missingBadgeView.isHidden = !isTargetMissing
+        addSubview(missingBadgeView)
+
         let initialFontSize = max(10, min(14, round(11.0 * scale)))
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = NSFont.systemFont(ofSize: initialFontSize, weight: .regular)
@@ -107,8 +184,6 @@ public final class ShelfItemButton: NSControl {
         titleLabel.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
         titleLabel.stringValue = item.name
         addSubview(titleLabel)
-
-        toolTip = "\(item.name)\n\(item.target)"
 
         let topPadding = max(4, round(6.0 * scale))
         let iconSize = round(48.0 * scale)
@@ -126,16 +201,61 @@ public final class ShelfItemButton: NSControl {
             widthC,
             heightC,
 
+            missingBadgeView.topAnchor.constraint(equalTo: iconImageView.topAnchor, constant: -3),
+            missingBadgeView.trailingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 4),
+            missingBadgeView.widthAnchor.constraint(equalToConstant: 18),
+            missingBadgeView.heightAnchor.constraint(equalToConstant: 18),
+
             titleLabel.topAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 4),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4)
         ])
 
-        ThumbnailPipeline.shared.icon(forPath: item.target) { [weak self] img in
-            self?.iconImageView.image = img
+        ThumbnailPipeline.shared.icon(forItem: item) { [weak self] img in
+            guard let self = self else { return }
+            self.rawIconImage = img
+            self.applyIconAndMissingState()
         }
 
+        applyIconAndMissingState()
         updateAppearanceStyles()
+    }
+
+    private func applyIconAndMissingState() {
+        missingBadgeView.isHidden = !isTargetMissing
+        if let raw = rawIconImage {
+            if isTargetMissing {
+                iconImageView.image = ThumbnailPipeline.shared.grayscaleImage(for: raw)
+                iconImageView.alphaValue = 0.52
+            } else {
+                iconImageView.image = raw
+                iconImageView.alphaValue = 1.0
+            }
+        }
+        titleLabel.alphaValue = isTargetMissing ? 0.62 : 1.0
+        updateToolTipText()
+    }
+
+    private func updateToolTipText() {
+        var lines: [String] = []
+        if isTargetMissing {
+            lines.append("\(item.name) ⚠️ [目标已失效或被移动]")
+            lines.append("原路径: \(item.target)")
+            lines.append("提示: 右键选择「重新定位目标...」或点击图标修复")
+        } else {
+            lines.append(item.name)
+            lines.append(item.target)
+            if let args = item.executionContext?.formattedArgumentsString, !args.isEmpty {
+                lines.append("启动参数: \(args)")
+            }
+            if let wd = item.executionContext?.workingDirectory, !wd.isEmpty {
+                lines.append("工作目录: \(wd)")
+            }
+            if !item.tags.isEmpty {
+                lines.append("搜索别名: \(item.formattedTagsString)")
+            }
+        }
+        toolTip = lines.joined(separator: "\n")
     }
 
     override public func layout() {
@@ -239,6 +359,7 @@ public final class ShelfItemButton: NSControl {
         }
 
         titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+        titleLabel.alphaValue = isTargetMissing ? 0.62 : 1.0
         if isNativeLiquidTheme {
             if isDark {
                 let sh = NSShadow()
@@ -396,6 +517,7 @@ public final class ShelfGridView: NSView {
     /// mouse leaves the icon, so no shadow lingers after the cursor moves away.
     private var pinnedSelectionID: UUID?
     private var activeFilter = ""
+    private var targetValidationGeneration: UInt64 = 0
 
     private let scrollView = NSScrollView()
     private let contentView = FlippedContentView()
@@ -484,8 +606,8 @@ public final class ShelfGridView: NSView {
         self.items = items
         emptyLabel.isHidden = !items.isEmpty
 
-        // Reuse existing buttons (keyed by item id) instead of tearing down every view,
-        // tracking area, context menu and icon request on each panel show or edit.
+        // Reuse existing buttons ONLY when the full LauncherItem (including customIconPath,
+        // executionContext, tags, name, target) matches.
         var reusable: [UUID: ShelfItemButton] = [:]
         for btn in itemButtons {
             reusable[btn.item.id] = btn
@@ -495,9 +617,7 @@ public final class ShelfGridView: NSView {
         var newButtons: [ShelfItemButton] = []
         var reusedAny = false
         for item in items {
-            if let existing = reusable[item.id],
-               existing.item.name == item.name,
-               existing.item.target == item.target {
+            if let existing = reusable[item.id], existing.item == item {
                 reusable.removeValue(forKey: item.id)
                 if existing.scale != scale {
                     existing.scale = scale
@@ -522,6 +642,9 @@ public final class ShelfGridView: NSView {
         }
         applyFilter(activeFilter)
 
+        // P0-2: 后台异步校验所有启动项的目标路径是否存在，防止软件卸载或文件移动后残留旧状态
+        validateItemTargetsAsynchronously(for: items)
+
         guard !items.isEmpty else {
             contentView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
             return
@@ -531,13 +654,30 @@ public final class ShelfGridView: NSView {
         relayoutButtons(animated: hadItems && reusedAny && window?.isVisible == true)
     }
 
+    /// 异步校验当前分类内所有项目的目标路径存活状态（对标 GlassDesk IsTargetMissing）
+    public func validateItemTargetsAsynchronously(for currentItems: [LauncherItem]) {
+        targetValidationGeneration &+= 1
+        let gen = targetValidationGeneration
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var missingMap: [UUID: Bool] = [:]
+            for item in currentItems {
+                missingMap[item.id] = item.checkTargetMissing()
+            }
+            DispatchQueue.main.async {
+                guard let self = self, self.targetValidationGeneration == gen else { return }
+                for btn in self.itemButtons {
+                    if let isMissing = missingMap[btn.item.id] {
+                        btn.isTargetMissing = isMissing
+                    }
+                }
+            }
+        }
+    }
+
     public func applyFilter(_ query: String) {
-        activeFilter = query.lowercased()
+        activeFilter = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         for button in itemButtons {
-            let haystack = [button.item.name, button.item.target, button.item.tags.joined(separator: " ")]
-                .joined(separator: " ")
-                .lowercased()
-            button.isHidden = !activeFilter.isEmpty && !haystack.contains(activeFilter)
+            button.isHidden = !activeFilter.isEmpty && !button.item.matchesFilter(activeFilter)
             button.isSelected = false
         }
         // Keep the current selection only if it is still visible; never fall back
@@ -652,11 +792,25 @@ public final class ShelfGridView: NSView {
         let menu = NSMenu(title: "ShelfItemMenu")
 
         let openItem = NSMenuItem(title: "打开", action: #selector(contextOpen(_:)), keyEquivalent: "")
+        openItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.forward.app", pointSize: 13)
         openItem.target = self
         openItem.representedObject = item
         menu.addItem(openItem)
 
+        let editItem = NSMenuItem(title: "编辑项目属性...", action: #selector(contextEditItem(_:)), keyEquivalent: "")
+        editItem.image = ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.3", pointSize: 13)
+        editItem.target = self
+        editItem.representedObject = item
+        menu.addItem(editItem)
+
+        let relocateItem = NSMenuItem(title: "重新定位目标...", action: #selector(contextRelocateItem(_:)), keyEquivalent: "")
+        relocateItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.triangle.2.circlepath", pointSize: 13)
+        relocateItem.target = self
+        relocateItem.representedObject = item
+        menu.addItem(relocateItem)
+
         let revealItem = NSMenuItem(title: "在访达中显示", action: #selector(contextReveal(_:)), keyEquivalent: "")
+        revealItem.image = ThumbnailPipeline.shared.symbolIcon(name: "folder", pointSize: 13)
         revealItem.target = self
         revealItem.representedObject = item
         menu.addItem(revealItem)
@@ -664,6 +818,7 @@ public final class ShelfGridView: NSView {
         menu.addItem(NSMenuItem.separator())
 
         let deleteItem = NSMenuItem(title: "从分类中移除", action: #selector(contextDelete(_:)), keyEquivalent: "")
+        deleteItem.image = ThumbnailPipeline.shared.symbolIcon(name: "trash", pointSize: 13)
         deleteItem.target = self
         deleteItem.representedObject = item
         menu.addItem(deleteItem)
@@ -774,8 +929,22 @@ public final class ShelfGridView: NSView {
         delegate?.shelfGrid(self, didLaunchItem: item)
     }
 
+    @objc private func contextEditItem(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? LauncherItem else { return }
+        delegate?.shelfGrid(self, didRequestEditItem: item)
+    }
+
+    @objc private func contextRelocateItem(_ sender: NSMenuItem) {
+        guard let item = sender.representedObject as? LauncherItem else { return }
+        delegate?.shelfGrid(self, didRequestRelocateItem: item)
+    }
+
     @objc private func contextReveal(_ sender: NSMenuItem) {
         guard let item = sender.representedObject as? LauncherItem else { return }
+        if item.checkTargetMissing() {
+            delegate?.shelfGrid(self, didRequestRelocateItem: item)
+            return
+        }
         NSWorkspace.shared.selectFile(item.target, inFileViewerRootedAtPath: "")
     }
 

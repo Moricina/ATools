@@ -1,9 +1,6 @@
 import Foundation
 import AppKit
 
-
-
-
 public final class ConfigManager {
     public static let shared = ConfigManager()
 
@@ -22,6 +19,34 @@ public final class ConfigManager {
     private var configURL: URL
     private var backupConfigURL: URL?
     private let fileManager = FileManager.default
+
+    /// 当前配置文件 URL
+    public var currentConfigURL: URL {
+        return configURL
+    }
+
+    /// 当前配置存储根目录（生产环境为 ~/Library/Application Support/ATools，测试环境为沙盒临时目录）
+    public var storageDirectoryURL: URL {
+        return configURL.deletingLastPathComponent()
+    }
+
+    /// 托管自定义图标目录（~/Library/Application Support/ATools/icons/）
+    public var iconsDirectoryURL: URL {
+        let dir = storageDirectoryURL.appendingPathComponent("icons", isDirectory: true)
+        if !fileManager.fileExists(atPath: dir.path) {
+            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    /// 自动快照与备份目录（~/Library/Application Support/ATools/backups/）
+    public var backupsDirectoryURL: URL {
+        let dir = storageDirectoryURL.appendingPathComponent("backups", isDirectory: true)
+        if !fileManager.fileExists(atPath: dir.path) {
+            try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
 
     private init() {
         if let custom = ConfigManager.overrideConfigURL {
@@ -239,6 +264,7 @@ public final class ConfigManager {
 
     public func updateTheme(_ theme: AppTheme) {
         self.config.theme = theme
+        self.config.themeOpacity = theme.defaultOpacity
         save()
         NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
     }
@@ -628,9 +654,183 @@ public final class ConfigManager {
 
     public func removeItem(id: UUID, from categoryId: UUID) {
         if let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) {
+            let removed = self.config.categories[idx].items.filter { $0.id == id }
             self.config.categories[idx].items.removeAll(where: { $0.id == id })
+            for item in removed {
+                removeManagedIconIfUnused(item.customIconPath, excludingItemId: item.id)
+                ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+            }
             save()
+            NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         }
+    }
+
+    // MARK: - P0-1: 启动项属性深度编辑与自定义图标托管
+
+    /// 将用户选择的 .png / .icns / .jpg / .app 图标归一化缩放裁剪为 256x256 PNG 并托管拷贝至 icons/ 目录
+    @discardableResult
+    public func importCustomIcon(from sourceURL: URL, for itemId: UUID) -> String? {
+        guard let pngData = ThumbnailPipeline.shared.normalizedCustomIconPNGData(from: sourceURL, pixelSize: 256) else {
+            return nil
+        }
+        let iconsDir = iconsDirectoryURL
+        let fileName = "\(itemId.uuidString).png"
+        let destURL = iconsDir.appendingPathComponent(fileName)
+
+        do {
+            try pngData.write(to: destURL, options: .atomic)
+            ThumbnailPipeline.shared.invalidateIcon(forPath: destURL.path, customIconPath: destURL.path)
+            return destURL.path
+        } catch {
+            print("[ConfigManager] Failed to save custom icon: \(error)")
+            return nil
+        }
+    }
+
+    /// 若托管在 icons/ 目录下的自定义图标不再被任何启动项引用，则将其从磁盘清理
+    public func removeManagedIconIfUnused(_ iconPath: String?, excludingItemId: UUID? = nil) {
+        guard let rawPath = iconPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawPath.isEmpty else { return }
+        let standardized = (rawPath as NSString).standardizingPath
+        let managedPrefix = (iconsDirectoryURL.path as NSString).standardizingPath + "/"
+        guard standardized.hasPrefix(managedPrefix) else { return }
+
+        let stillReferenced = config.categories.contains { cat in
+            cat.items.contains { item in
+                guard item.id != excludingItemId, let custom = item.customIconPath else { return false }
+                return (custom as NSString).standardizingPath == standardized
+            }
+        }
+        if !stillReferenced {
+            try? fileManager.removeItem(atPath: standardized)
+        }
+    }
+
+    /// 原位更新启动项属性（保持分类归属与排序位置不变），自动刷新图标缓存并广播通知
+    @discardableResult
+    public func updateItem(_ updatedItem: LauncherItem, in categoryId: UUID? = nil) -> Bool {
+        for catIdx in config.categories.indices {
+            if let categoryId = categoryId, config.categories[catIdx].id != categoryId {
+                continue
+            }
+            if let itemIdx = config.categories[catIdx].items.firstIndex(where: { $0.id == updatedItem.id }) {
+                let oldItem = config.categories[catIdx].items[itemIdx]
+                ThumbnailPipeline.shared.invalidateIcon(forItem: oldItem)
+                ThumbnailPipeline.shared.invalidateIcon(forItem: updatedItem)
+                config.categories[catIdx].items[itemIdx] = updatedItem
+                if oldItem.customIconPath != updatedItem.customIconPath {
+                    removeManagedIconIfUnused(oldItem.customIconPath)
+                }
+                save()
+                NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+                return true
+            }
+        }
+        return false
+    }
+
+    // MARK: - P0-2: 失效启动项检测、目标重新定位与一键清理 (LibraryMaintenance)
+
+    /// 重新定位启动项的目标路径（保持原有 ID、排序位置、自定义名称、自定义图标、启动参数与搜索别名标签不变）
+    @discardableResult
+    public func relocateItem(id: UUID, in categoryId: UUID? = nil, newTarget: String) -> Bool {
+        let trimmedTarget = (newTarget.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).standardizingPath
+        guard !trimmedTarget.isEmpty else { return false }
+
+        for catIdx in config.categories.indices {
+            if let categoryId = categoryId, config.categories[catIdx].id != categoryId {
+                continue
+            }
+            if let itemIdx = config.categories[catIdx].items.firstIndex(where: { $0.id == id }) {
+                var item = config.categories[catIdx].items[itemIdx]
+                ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+                item.target = trimmedTarget
+                if item.itemType == .application || item.itemType == .fileOrFolder {
+                    item.itemType = trimmedTarget.lowercased().hasSuffix(".app") ? .application : .fileOrFolder
+                }
+                config.categories[catIdx].items[itemIdx] = item
+                ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+                save()
+                NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 扫描所有分类中的失效启动项（目标文件已被移动或卸载）
+    public func scanMissingItems() -> [(category: Category, item: LauncherItem)] {
+        var result: [(category: Category, item: LauncherItem)] = []
+        for category in config.categories {
+            if !config.enableFavoritesCategory && category.isFavorites {
+                continue
+            }
+            for item in category.items where item.checkTargetMissing() {
+                result.append((category: category, item: item))
+            }
+        }
+        return result
+    }
+
+    /// 一键清理所有分类中的失效启动项，并自动清理孤立的托管自定义图标文件
+    @discardableResult
+    public func removeAllMissingItems() -> Int {
+        var removedItems: [LauncherItem] = []
+        for catIdx in config.categories.indices {
+            let missingInCat = config.categories[catIdx].items.filter { $0.checkTargetMissing() }
+            if !missingInCat.isEmpty {
+                removedItems.append(contentsOf: missingInCat)
+                config.categories[catIdx].items.removeAll { $0.checkTargetMissing() }
+            }
+        }
+        guard !removedItems.isEmpty else { return 0 }
+        for item in removedItems {
+            removeManagedIconIfUnused(item.customIconPath)
+            ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+        }
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+        return removedItems.count
+    }
+
+    /// 应用从备份或快照恢复的配置，并全量同步刷新各运行时子系统
+    public func applyRestoredConfig(_ restored: AtoolsConfig) {
+        var normalized = restored
+        if !normalized.enableFavoritesCategory && normalized.categories.contains(where: { $0.isFavorites }) {
+            normalized.categories.removeAll(where: { $0.isFavorites })
+            for i in 0..<normalized.categories.count {
+                normalized.categories[i].sortWeight = i
+            }
+        }
+        self.config = normalized
+        saveNow()
+
+        ThumbnailPipeline.shared.clearCache()
+        ThumbnailPipeline.shared.updateCostLimit(mb: normalized.thumbnailCacheLimitMB)
+        SpotlightBridge.shared.setExtraHotFolders(normalized.extraHotFolders)
+        SpotlightBridge.shared.dropHotFolderCache()
+        SearchExclusionEngine.shared.recompile(config: normalized)
+        TrackpadGestureManager.shared.updateConfiguration(normalized.shelfTrackpadGesture)
+
+        if normalized.enableShelfPanel {
+            HotkeyManager.shared.register(id: .shelf, binding: normalized.shelfHotkey)
+        } else {
+            HotkeyManager.shared.unregister(id: .shelf)
+        }
+        if normalized.enableSearchPanel {
+            HotkeyManager.shared.register(id: .search, binding: normalized.searchHotkey)
+        } else {
+            HotkeyManager.shared.unregister(id: .search)
+        }
+
+        NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsCategoryOrientationDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsShelfIconSizeDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsFavoritesToggleDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsAutoPasteOnSummonDidChange, object: nil)
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
     }
 
     @discardableResult
@@ -666,6 +866,10 @@ public final class ConfigManager {
         if let targetId = targetId,
            let targetIdx = self.config.categories.firstIndex(where: { $0.id == targetId }) {
             self.config.categories[targetIdx].items.append(contentsOf: categoryToDelete.items)
+        } else {
+            for item in categoryToDelete.items {
+                removeManagedIconIfUnused(item.customIconPath, excludingItemId: item.id)
+            }
         }
 
         self.config.categories.remove(at: idx)
@@ -721,4 +925,3 @@ public final class ConfigManager {
         save()
     }
 }
-

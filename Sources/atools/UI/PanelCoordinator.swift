@@ -75,6 +75,9 @@ public final class PanelCoordinator {
     /// 标记当前是否正处于向外部 App 拖拽文件的会话中，拖拽期间屏蔽一切外部失焦销毁
     public var isDraggingActive: Bool = false
 
+    /// 标记当前是否正处于属性编辑弹窗或目标重定位文件选择器打开期间，屏蔽自动收起
+    public var isModalDialogOpen: Bool = false
+
     /// Tracks whether a right-click context menu is currently open, so that
     /// the panel is not dismissed when the user right-clicks on a grid item.
     private var isRightClickMenuOpen: Bool = false
@@ -256,7 +259,7 @@ public final class PanelCoordinator {
                 isShelfPinned: isShelfPinned,
                 autoCloseOnDeactivate: ConfigManager.shared.config.autoCloseOnDeactivate,
                 isDraggingActive: isDraggingActive,
-                hasModalWindow: NSApp.modalWindow != nil,
+                hasModalWindow: NSApp.modalWindow != nil || isModalDialogOpen,
                 isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
                 isRightClickMenuOpen: isRightClickMenuOpen
             )
@@ -541,7 +544,7 @@ public final class PanelCoordinator {
 
     private func handleOutsideInteraction() {
         guard (shelfPanelCreated && shelfPanel.isVisible) || (searchPanelCreated && searchPanel.isVisible) else { return }
-        if isDraggingActive || NSApp.modalWindow != nil { return }
+        if isDraggingActive || NSApp.modalWindow != nil || isModalDialogOpen { return }
         if isRightClickMenuOpen { return }
 
         let clickLoc = NSEvent.mouseLocation
@@ -561,7 +564,7 @@ public final class PanelCoordinator {
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
-                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isRightClickMenuOpen { return }
+                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isRightClickMenuOpen { return }
                     // 再次检查此时是否发生了剪贴板协同变动
                     let initialCount = self.searchPanel.summonPasteboardChangeCount
                     if NSPasteboard.general.changeCount > initialCount {
@@ -581,7 +584,7 @@ public final class PanelCoordinator {
             if !NSPointInRect(clickLoc, visibleFrame) {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
-                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isRightClickMenuOpen { return }
+                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isRightClickMenuOpen { return }
                     if self.isShelfPinned { return }
                     self.hideShelfPanel(restoreFocus: true)
                 }

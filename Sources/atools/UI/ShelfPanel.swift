@@ -402,6 +402,13 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             name: .atoolsFavoritesToggleDidChange,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleShelfDataChanged),
+            name: .atoolsShelfDataDidChange,
+            object: nil
+        )
     }
 
     override public func viewDidLayout() {
@@ -433,7 +440,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
         guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
         guard !PanelCoordinator.shared.isShelfPinned else { return }
-        if NSApp.modalWindow != nil { return }
+        if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen { return }
 
         mouseExitWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -441,7 +448,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
             guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
             guard !PanelCoordinator.shared.isShelfPinned else { return }
-            if NSApp.modalWindow != nil { return }
+            if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen { return }
             let mouseLoc = NSEvent.mouseLocation
             if let window = self.view.window, !NSPointInRect(mouseLoc, window.frame) {
                 PanelCoordinator.shared.hideShelfPanel()
@@ -452,6 +459,10 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     @objc private func handleFavoritesToggleChanged() {
+        loadData()
+    }
+
+    @objc private func handleShelfDataChanged() {
         loadData()
     }
 
@@ -802,6 +813,11 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     // MARK: - ShelfGridDelegate
     public func shelfGrid(_ grid: ShelfGridView, didLaunchItem item: LauncherItem) {
+        // P0-2: 若启动项的目标路径已失效，拦截无响应点击并弹出友好重定位/清理引导
+        if item.checkTargetMissing() {
+            promptMissingItemAction(for: item)
+            return
+        }
         if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
             PanelCoordinator.shared.hideShelfPanel()
         }
@@ -812,6 +828,65 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         guard let cat = selectedCategory else { return }
         ConfigManager.shared.removeItem(id: item.id, from: cat.id)
         loadData()
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem) {
+        LauncherItemEditorDialog.present(for: item, in: selectedCategory?.id) { [weak self] _ in
+            self?.loadData()
+        }
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem) {
+        promptRelocateItem(item)
+    }
+
+    private func promptMissingItemAction(for item: LauncherItem) {
+        PanelCoordinator.shared.isModalDialogOpen = true
+        defer { PanelCoordinator.shared.isModalDialogOpen = false }
+
+        let alert = NSAlert()
+        alert.messageText = "启动项「\(item.name)」的目标已失效"
+        alert.informativeText = "未找到目标路径：\n\(item.target)\n\n该软件或文件可能已被移动、重命名或卸载。您可以立即重新定位目标（保留原有名称、图标、排序与别名），或将其从当前分类中移除。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "重新定位目标...")
+        alert.addButton(withTitle: "从分类中移除")
+        alert.addButton(withTitle: "取消")
+
+        let response = alert.runModalAboveFloatingWindows()
+        if response == .alertFirstButtonReturn {
+            promptRelocateItem(item)
+        } else if response == .alertSecondButtonReturn {
+            if let cat = selectedCategory {
+                ConfigManager.shared.removeItem(id: item.id, from: cat.id)
+                loadData()
+            }
+        }
+    }
+
+    private func promptRelocateItem(_ item: LauncherItem) {
+        PanelCoordinator.shared.isModalDialogOpen = true
+        defer { PanelCoordinator.shared.isModalDialogOpen = false }
+
+        let panel = NSOpenPanel()
+        panel.title = "重新定位「\(item.name)」的目标应用或文件"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)
+
+        let parentDir = (item.target as NSString).deletingLastPathComponent
+        if FileManager.default.fileExists(atPath: parentDir) {
+            panel.directoryURL = URL(fileURLWithPath: parentDir)
+        } else {
+            panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, let url = panel.url {
+            ConfigManager.shared.relocateItem(id: item.id, in: selectedCategory?.id, newTarget: url.path)
+            loadData()
+        }
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int) {
@@ -854,27 +929,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     private func executeLauncherItem(_ item: LauncherItem) {
-        switch item.itemType {
-        case .application, .fileOrFolder:
-            LauncherExecutor.open(path: item.target)
-        case .webURL:
-            if let url = URL(string: item.target) {
-                NSWorkspace.shared.open(url)
-            }
-        case .shellScript:
-            let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-            let task = Process()
-            task.launchPath = shell
-            task.arguments = ["-c", item.target]
-            try? task.run()
-        case .appleScript:
-            if let script = NSAppleScript(source: item.target) {
-                var err: NSDictionary?
-                script.executeAndReturnError(&err)
-            }
-        case .systemAction:
-            break
-        }
+        LauncherExecutor.open(item: item)
     }
 }
 
