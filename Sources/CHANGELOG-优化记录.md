@@ -2245,6 +2245,37 @@
   - 执行 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名、Ed25519 签名验证成功；
   - 成功部署覆盖安装至 `/Applications/ATools.app`，重启进程（PID: 89905）生效。
 
+---
+
+### 64. 借鉴 GlassDesk v1.3.1 核心架构：落地 P0 三大功能（启动项深度编辑器、失效项检测与维护、自描述配置备份/干跑预校验/快照回滚） (2026-10-15, build 41)
+
+- **背景与设计对标**：
+  - 深入分析 `GlassDesk v1.3.1` 开源仓库核心源码（`AppEntry.cs` / `AppEntryEditor.cs`、`IsTargetMissing` / `LibraryMaintenance.cs`、`BackupService.cs`），针对 ATools 启动器资产管理、失效项目可视化自愈以及配置全量备份回滚三大 P0 痛点进行工程级落地；
+  - **版本保护基线**：实施前基线 Commit 为 `9f9f956`，可随时通过 `git reset --hard 9f9f956` 一键回退。
+
+- **子代理架构与可用性审查结论（AppKit Architecture & Reliability Reviewer）**：
+  1. **浮动面板层级与模态弹窗防失焦收起保护**：`ShelfPanel` 处于 `.statusBar` 层级且支持失焦自动收起；在打开「编辑项目属性...」弹窗或「重新定位目标...」的 `NSOpenPanel` 期间，通过 `PanelCoordinator.shared.isModalDialogOpen` 保护锁阻止抽屉误收起，并将弹窗层级设为 `.popUpMenu + 2`。
+  2. **按钮复用状态完整性**：为 `LauncherItem` 与 `ExecutionContext` 实现完整 `Equatable`，修复原 `ShelfGridView.reloadData` 仅比较 `name` 与 `target` 导致修改自定义图标、启动参数或搜索别名后按钮与右键菜单上下文不刷新的缺陷。
+  3. **沙盒测试隔离性**：`ConfigManager` 的 `icons/`（自定义图标托管目录）与 `backups/`（恢复前自动快照目录）动态跟随 `configURL.deletingLastPathComponent()`，确保 `--test` 诊断套件运行时 100% 物理隔离，零污染生产环境。
+  4. **设置窗 780.0pt 宽度刚性不变性**：在 `GeneralTabView` 新增「备份与恢复数据」卡片及在 `ShelfTabView` 新增「启动项健康维护」卡片时严格遵循 580pt 内容区约束规范。
+
+- **实施细节与涉及文件**：
+  1. **P0-1：启动项深度编辑器（自定义图标 / 启动参数 / 工作目录 / 多音字搜索别名）**：
+     - [`LauncherItem.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Models/LauncherItem.swift)：扩展 `Equatable`、命令行参数智能分词解析 `ExecutionContext.parseArguments(_:)`、目标路径存活检测 `checkTargetMissing()` 与拼音匹配辅助方法；
+     - [`ConfigManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/ConfigManager.swift)：新增自定义图标托管目录 `iconsDirectoryURL`、`importCustomIcon(from:for:)`（支持 `.png` / `.icns` / `.jpg` / `.app`，自动归一化为 256×256 PNG 存入 `~/Library/Application Support/ATools/icons/`）、`removeManagedIconIfUnused(_:)`、`updateItem(_:in:)`；
+     - [`ThumbnailPipeline.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Search/ThumbnailPipeline.swift)：新增 `icon(forItem:completion:)` 与 `icon(forPath:customIconPath:completion:)`，优先读取 `customIconPath`（若丢失自动平滑回退原生图标），并在 `clearTransientSearchCache()` 中保护自定义图标缓存；新增 `grayscaleImage(for:)` 高保真灰阶渲染；
+     - [`LauncherItemEditorDialog.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/LauncherItemEditorDialog.swift)（新增）：可视化编辑显示名称、启动参数、工作目录、搜索别名标签（`tags`）以及更换/恢复自定义图标；
+     - [`LauncherExecutor.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/System/LauncherExecutor.swift) & [`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift) & [`SearchCoordinator.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Search/SearchCoordinator.swift)：执行启动项时完整注入 `executionContext`（`arguments`、`workingDirectory`、`environmentVars`）；抽屉内过滤与全盘搜索 Layer 1 全面支持 `tags` 别名与拼音/首字母检索。
+  2. **P0-2：失效启动项检测、灰阶+黄色感叹号微标与一键重定位/清理**：
+     - [`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)：抽屉加载时异步检测 `FileManager.default.fileExists(atPath:)`；对失效项目渲染半透明灰阶图标 + 右上角黄色感叹号角标（`exclamationmark.triangle.fill`）；右键菜单新增「编辑项目属性...」与「重新定位目标...」（保持原有 ID、排序位置和自定义名称/图标/标签不变）；左键点击失效项目时弹出「重新定位目标 / 从分类中移除」引导弹窗；
+     - [`ConfigManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/ConfigManager.swift) & [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/Settings/SettingsTabViews.swift)：新增 `relocateItem(id:in:newTarget:)`、`scanMissingItems()`、`removeAllMissingItems()`，并在设置页提供「一键清理全部失效项目」。
+  3. **P0-3：自描述配置与图标全量备份、恢复前干跑预校验与自动快照回滚**：
+     - [`BackupService.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/BackupService.swift)（新增）：
+       - 导出备份：将 `config.json`、托管图标目录 `icons/` 与含版本及 SHA-256 校验信息的 `manifest.json` 打包导出为 `.atoolsbackup` 归档目录；
+       - 恢复前内存干跑预校验（`validateBackup(at:)`）：在内存中完整校验 JSON 结构、版本兼容性与 SHA-256 哈希，若损坏立即拒绝覆盖并提示详细错误；
+       - 自动安全快照与跨机路径自愈（`restoreBackup(from:)`）：恢复前自动将当前配置与图标快照至 `backups/pre-restore-时间戳/`（支持一键回滚），并自动将归档中的自定义图标路径与家目录路径修复映射为当前机器的用户目录；
+     - [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/Settings/SettingsTabViews.swift)：在「常规」设置页新增「备份与恢复数据」卡片（支持导出备份、干跑校验导入恢复、一键回滚恢复前快照及一键清理失效启动项）。
+
 
 
 
