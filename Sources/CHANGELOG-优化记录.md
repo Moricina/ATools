@@ -2516,3 +2516,16 @@
   - [`PanelCoordinator.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/PanelCoordinator.swift)
   - [`ConfigManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/ConfigManager.swift)
 
+### 76. 正式发布 ATools v1.3.19 (build 44)：应用抽屉鼠标移出自动关闭修复、固定桌面最高优先级保护与跨分类回拖同步 (2026-10-15, build 44)
+
+- **版本迭代说明**：
+  - 正式将应用版本由 `1.3.18 (build 43)` 提升至 **`1.3.19 (build 44)`**；
+  - 严格保障「固定在桌面」(`isShelfPinned == true`) 的最高优先级保护，固定期间不受「鼠标移出面板后自动关闭」与「点击启动应用后自动关闭」影响，勾选时即时取消排队关闭任务，取消固定时热恢复移出检测；
+  - 修复未固定时「鼠标移出面板后自动关闭」失效问题：通过 `ShelfRootView.updateTrackingAreas()` + `.assumeInside`、全局/本地 `NSEvent` 鼠标移动监听与 `0.10s` `.common` 模式轮询双保险，以及自愈式菜单状态锁 `isEffectiveMenuOpen`，确保鼠标移出抽屉后稳定延时 `0.35s` 自动收起；
+  - 补全跨分类拖拽回到源分类胶囊松手时的分类状态同步，以及右键菜单切换固定状态与偏好设置窗口的实时通知联动。
+- **修改文件**：
+  - `Scripts/package_app.sh`：版本号提升至 `1.3.19`，构建编号升级至 `44`；
+  - `RELEASING.md` / `README.md`：同步更新发布版本号为 `1.3.19 (build 44)`；
+  - `Sources/atools/Storage/BackupService.swift`：版本号默认回退值对齐升级至 `1.3.19`。
+
+
