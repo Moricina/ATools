@@ -56,6 +56,9 @@ public final class MemoryGuardian {
         // 清理全盘搜索产生的临时文件缩略图缓存，保留已固定的抽屉应用图标
         ThumbnailPipeline.shared.clearTransientSearchCache()
 
+        // 显式释放隐藏面板的离屏非活跃状态与多余临时缓冲
+        PanelCoordinator.shared.purgeDormantOffscreenBuffers()
+
         // System kernel tier: actively return unused heap dirty pages back to XNU across all malloc zones
         DispatchQueue.global(qos: .background).async {
             var zones: UnsafeMutablePointer<vm_address_t>?

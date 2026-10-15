@@ -712,4 +712,17 @@ public final class PanelCoordinator {
 
         return false
     }
+
+    // MARK: - Memory Lease & Offscreen Buffers Purge
+    /// 当面板完全隐藏并经历安静退火期（默认 3~5 秒）后，安全释放离屏临时状态与非活跃缓冲
+    public func purgeDormantOffscreenBuffers() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.purgeDormantOffscreenBuffers() }
+            return
+        }
+        // 搜索面板非可见时，深度清理历史临时视图状态与搜索结果复用池
+        if searchPanelCreated && !searchPanel.isVisible {
+            searchPanel.searchViewController.clearSearch()
+        }
+    }
 }

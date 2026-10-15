@@ -209,31 +209,31 @@ public final class GeneralTabView: NSView {
         scrollContent.addSubview(permTip)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
+            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 8),
             sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            secBackupTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 18),
+            secBackupTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 16),
             secBackupTitle.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            backupCard.topAnchor.constraint(equalTo: secBackupTitle.bottomAnchor, constant: 8),
+            backupCard.topAnchor.constraint(equalTo: secBackupTitle.bottomAnchor, constant: 7),
             backupCard.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             backupCard.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            sec2Title.topAnchor.constraint(equalTo: backupCard.bottomAnchor, constant: 18),
+            sec2Title.topAnchor.constraint(equalTo: backupCard.bottomAnchor, constant: 16),
             sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            permTip.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 12),
+            permTip.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 10),
             permTip.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             permTip.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-            permTip.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
+            permTip.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -16)
         ])
     }
 
@@ -585,13 +585,13 @@ public final class ShelfTabView: NSView {
         card1.addRow(rowGesture, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: triggerScrollContent.topAnchor, constant: 14),
+            sec1Title.topAnchor.constraint(equalTo: triggerScrollContent.topAnchor, constant: 6),
             sec1Title.leadingAnchor.constraint(equalTo: triggerScrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: triggerScrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: triggerScrollContent.trailingAnchor, constant: -28),
-            card1.bottomAnchor.constraint(equalTo: triggerScrollContent.bottomAnchor, constant: -28)
+            card1.bottomAnchor.constraint(equalTo: triggerScrollContent.bottomAnchor, constant: -16)
         ])
 
         // Page 1: 驻留形态与关闭行为
@@ -647,13 +647,13 @@ public final class ShelfTabView: NSView {
         card2.addRow(rowCloseMouse, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec2Title.topAnchor.constraint(equalTo: behaviorScrollContent.topAnchor, constant: 14),
+            sec2Title.topAnchor.constraint(equalTo: behaviorScrollContent.topAnchor, constant: 6),
             sec2Title.leadingAnchor.constraint(equalTo: behaviorScrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: behaviorScrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: behaviorScrollContent.trailingAnchor, constant: -28),
-            card2.bottomAnchor.constraint(equalTo: behaviorScrollContent.bottomAnchor, constant: -28)
+            card2.bottomAnchor.constraint(equalTo: behaviorScrollContent.bottomAnchor, constant: -16)
         ])
 
         // Page 2: 分类与视觉排版
@@ -753,13 +753,13 @@ public final class ShelfTabView: NSView {
         card3.addRow(shelfMissingItemsRow, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec3Title.topAnchor.constraint(equalTo: layoutScrollContent.topAnchor, constant: 14),
+            sec3Title.topAnchor.constraint(equalTo: layoutScrollContent.topAnchor, constant: 6),
             sec3Title.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
 
-            card3.topAnchor.constraint(equalTo: sec3Title.bottomAnchor, constant: 8),
+            card3.topAnchor.constraint(equalTo: sec3Title.bottomAnchor, constant: 7),
             card3.leadingAnchor.constraint(equalTo: layoutScrollContent.leadingAnchor, constant: 28),
             card3.trailingAnchor.constraint(equalTo: layoutScrollContent.trailingAnchor, constant: -28),
-            card3.bottomAnchor.constraint(equalTo: layoutScrollContent.bottomAnchor, constant: -28)
+            card3.bottomAnchor.constraint(equalTo: layoutScrollContent.bottomAnchor, constant: -16)
         ])
 
         pages = [triggerPage, behaviorPage, layoutPage]
@@ -1079,17 +1079,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         card1.addRow(rowAutoPaste, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec0Title.topAnchor.constraint(equalTo: optionsScrollContent.topAnchor, constant: 14),
+            sec0Title.topAnchor.constraint(equalTo: optionsScrollContent.topAnchor, constant: 6),
             sec0Title.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
 
-            card0.topAnchor.constraint(equalTo: sec0Title.bottomAnchor, constant: 8),
+            card0.topAnchor.constraint(equalTo: sec0Title.bottomAnchor, constant: 7),
             card0.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
             card0.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28),
 
-            sec1Title.topAnchor.constraint(equalTo: card0.bottomAnchor, constant: 20),
+            sec1Title.topAnchor.constraint(equalTo: card0.bottomAnchor, constant: 16),
             sec1Title.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28)
         ])
@@ -1135,13 +1135,13 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         ])
 
         NSLayoutConstraint.activate([
-            secHotTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 20),
+            secHotTitle.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 16),
             secHotTitle.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
 
-            cardHot.topAnchor.constraint(equalTo: secHotTitle.bottomAnchor, constant: 8),
+            cardHot.topAnchor.constraint(equalTo: secHotTitle.bottomAnchor, constant: 7),
             cardHot.leadingAnchor.constraint(equalTo: optionsScrollContent.leadingAnchor, constant: 28),
             cardHot.trailingAnchor.constraint(equalTo: optionsScrollContent.trailingAnchor, constant: -28),
-            cardHot.bottomAnchor.constraint(equalTo: optionsScrollContent.bottomAnchor, constant: -28)
+            cardHot.bottomAnchor.constraint(equalTo: optionsScrollContent.bottomAnchor, constant: -16)
         ])
         reloadHotFolderRows()
 
@@ -1167,74 +1167,71 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         excludeCachesSwitch = NSSwitch()
         excludeCachesSwitch.target = self
         excludeCachesSwitch.action = #selector(toggleExcludeCaches(_:))
-        let rowCaches = SettingsRowView(
+        let tileCaches = SettingsToggleTileView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "archivebox"),
             title: "排除系统与应用缓存",
-            subtitle: "自动过滤 ~/Library/Caches, /Library/Caches 及各类 WebKit 临时缓存数据",
-            accessory: excludeCachesSwitch
+            toolTip: "自动过滤 ~/Library/Caches, /Library/Caches 及各类 WebKit 临时缓存数据",
+            toggleSwitch: excludeCachesSwitch
         )
-        cardPreset.addRow(rowCaches)
-
-        excludeLogsSwitch = NSSwitch()
-        excludeLogsSwitch.target = self
-        excludeLogsSwitch.action = #selector(toggleExcludeLogs(_:))
-        let rowLogs = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "doc.text.magnifyingglass"),
-            title: "排除系统日志与崩溃报告",
-            subtitle: "自动过滤 ~/Library/Logs, /var/log, DiagnosticReports 及系统崩溃堆栈文件",
-            accessory: excludeLogsSwitch
-        )
-        cardPreset.addRow(rowLogs)
-
-        excludeDevSwitch = NSSwitch()
-        excludeDevSwitch.target = self
-        excludeDevSwitch.action = #selector(toggleExcludeDev(_:))
-        let rowDev = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "hammer"),
-            title: "排除常见开发依赖与构建产物",
-            subtitle: "自动过滤 node_modules, DerivedData, .build, target, __pycache__, .gradle 等工程副产物",
-            accessory: excludeDevSwitch
-        )
-        cardPreset.addRow(rowDev)
 
         excludeUserLibSwitch = NSSwitch()
         excludeUserLibSwitch.target = self
         excludeUserLibSwitch.action = #selector(toggleExcludeUserLib(_:))
-        let rowUserLib = SettingsRowView(
+        let tileUserLib = SettingsToggleTileView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "folder.badge.gearshape"),
-            title: "排除用户资源库 (~/Library)",
-            subtitle: "参照 Alfred 核心规则过滤系统配置杂项；智能保留 iCloud 云盘与各类第三方网盘文档",
-            accessory: excludeUserLibSwitch
+            title: "排除资源库 (~/Library)",
+            toolTip: "参照 Alfred 核心规则过滤系统配置杂项；智能保留 iCloud 云盘与各类第三方网盘文档",
+            toggleSwitch: excludeUserLibSwitch
         )
-        cardPreset.addRow(rowUserLib)
+        cardPreset.addRow(makeDualTileRow(left: tileCaches, right: tileUserLib))
+
+        excludeLogsSwitch = NSSwitch()
+        excludeLogsSwitch.target = self
+        excludeLogsSwitch.action = #selector(toggleExcludeLogs(_:))
+        let tileLogs = SettingsToggleTileView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "doc.text.magnifyingglass"),
+            title: "排除系统日志与崩溃报告",
+            toolTip: "自动过滤 ~/Library/Logs, /var/log, DiagnosticReports 及系统崩溃堆栈文件",
+            toggleSwitch: excludeLogsSwitch
+        )
 
         excludeTrashSwitch = NSSwitch()
         excludeTrashSwitch.target = self
         excludeTrashSwitch.action = #selector(toggleExcludeTrash(_:))
-        let rowTrash = SettingsRowView(
+        let tileTrash = SettingsToggleTileView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "trash"),
             title: "排除废纸篓与临时目录",
-            subtitle: "自动过滤 ~/.Trash, /private/var/folders, /tmp 等已丢弃与临时文件夹",
-            accessory: excludeTrashSwitch
+            toolTip: "自动过滤 ~/.Trash, /private/var/folders, /tmp 等已丢弃与临时文件夹",
+            toggleSwitch: excludeTrashSwitch
         )
-        cardPreset.addRow(rowTrash)
+        cardPreset.addRow(makeDualTileRow(left: tileLogs, right: tileTrash))
+
+        excludeDevSwitch = NSSwitch()
+        excludeDevSwitch.target = self
+        excludeDevSwitch.action = #selector(toggleExcludeDev(_:))
+        let tileDev = SettingsToggleTileView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "hammer"),
+            title: "排除开发依赖与构建产物",
+            toolTip: "自动过滤 node_modules, DerivedData, .build, target, __pycache__, .gradle 等工程副产物",
+            toggleSwitch: excludeDevSwitch
+        )
 
         excludeHiddenSwitch = NSSwitch()
         excludeHiddenSwitch.target = self
         excludeHiddenSwitch.action = #selector(toggleExcludeHidden(_:))
-        let rowHidden = SettingsRowView(
+        let tileHidden = SettingsToggleTileView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "eye.slash"),
             title: "排除版本控制与隐藏文件",
-            subtitle: "自动过滤 .git, .svn 及以 \".\" 开头的系统级隐藏文件与隐藏文件夹",
-            accessory: excludeHiddenSwitch
+            toolTip: "自动过滤 .git, .svn 及以 \".\" 开头的系统级隐藏文件与隐藏文件夹",
+            toggleSwitch: excludeHiddenSwitch
         )
-        cardPreset.addRow(rowHidden, isLast: true)
+        cardPreset.addRow(makeDualTileRow(left: tileDev, right: tileHidden), isLast: true)
 
         NSLayoutConstraint.activate([
-            secPresetTitle.topAnchor.constraint(equalTo: exclusionScrollContent.topAnchor, constant: 10),
+            secPresetTitle.topAnchor.constraint(equalTo: exclusionScrollContent.topAnchor, constant: 6),
             secPresetTitle.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
 
-            cardPreset.topAnchor.constraint(equalTo: secPresetTitle.bottomAnchor, constant: 6),
+            cardPreset.topAnchor.constraint(equalTo: secPresetTitle.bottomAnchor, constant: 7),
             cardPreset.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
             cardPreset.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28)
         ])
@@ -1289,17 +1286,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         exclusionScrollContent.addSubview(exclusionTipLabel)
 
         NSLayoutConstraint.activate([
-            secCustomTitle.topAnchor.constraint(equalTo: cardPreset.bottomAnchor, constant: 12),
+            secCustomTitle.topAnchor.constraint(equalTo: cardPreset.bottomAnchor, constant: 16),
             secCustomTitle.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
 
-            cardCustom.topAnchor.constraint(equalTo: secCustomTitle.bottomAnchor, constant: 6),
+            cardCustom.topAnchor.constraint(equalTo: secCustomTitle.bottomAnchor, constant: 7),
             cardCustom.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
             cardCustom.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28),
 
             exclusionTipLabel.topAnchor.constraint(equalTo: cardCustom.bottomAnchor, constant: 10),
             exclusionTipLabel.leadingAnchor.constraint(equalTo: exclusionScrollContent.leadingAnchor, constant: 28),
             exclusionTipLabel.trailingAnchor.constraint(equalTo: exclusionScrollContent.trailingAnchor, constant: -28),
-            exclusionTipLabel.bottomAnchor.constraint(equalTo: exclusionScrollContent.bottomAnchor, constant: -12)
+            exclusionTipLabel.bottomAnchor.constraint(equalTo: exclusionScrollContent.bottomAnchor, constant: -16)
         ])
         reloadCustomExclusionRows()
 
@@ -1387,24 +1384,24 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         extScrollContent.addSubview(spotlightTip)
 
         NSLayoutConstraint.activate([
-            sec2Title.topAnchor.constraint(equalTo: extScrollContent.topAnchor, constant: 14),
+            sec2Title.topAnchor.constraint(equalTo: extScrollContent.topAnchor, constant: 6),
             sec2Title.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: extScrollContent.trailingAnchor, constant: -28),
 
-            secSpotTitle.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 20),
+            secSpotTitle.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 16),
             secSpotTitle.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
 
-            cardSpot.topAnchor.constraint(equalTo: secSpotTitle.bottomAnchor, constant: 8),
+            cardSpot.topAnchor.constraint(equalTo: secSpotTitle.bottomAnchor, constant: 7),
             cardSpot.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 28),
             cardSpot.trailingAnchor.constraint(equalTo: extScrollContent.trailingAnchor, constant: -28),
 
-            spotlightTip.topAnchor.constraint(equalTo: cardSpot.bottomAnchor, constant: 12),
+            spotlightTip.topAnchor.constraint(equalTo: cardSpot.bottomAnchor, constant: 10),
             spotlightTip.leadingAnchor.constraint(equalTo: extScrollContent.leadingAnchor, constant: 32),
             spotlightTip.trailingAnchor.constraint(equalTo: extScrollContent.trailingAnchor, constant: -28),
-            spotlightTip.bottomAnchor.constraint(equalTo: extScrollContent.bottomAnchor, constant: -28)
+            spotlightTip.bottomAnchor.constraint(equalTo: extScrollContent.bottomAnchor, constant: -16)
         ])
 
         // Page 2: 网络搜索
@@ -1483,17 +1480,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         webScrollContent.addSubview(tipLabel)
 
         NSLayoutConstraint.activate([
-            sec3Title.topAnchor.constraint(equalTo: webScrollContent.topAnchor, constant: 14),
+            sec3Title.topAnchor.constraint(equalTo: webScrollContent.topAnchor, constant: 6),
             sec3Title.leadingAnchor.constraint(equalTo: webScrollContent.leadingAnchor, constant: 28),
 
-            card3.topAnchor.constraint(equalTo: sec3Title.bottomAnchor, constant: 8),
+            card3.topAnchor.constraint(equalTo: sec3Title.bottomAnchor, constant: 7),
             card3.leadingAnchor.constraint(equalTo: webScrollContent.leadingAnchor, constant: 28),
             card3.trailingAnchor.constraint(equalTo: webScrollContent.trailingAnchor, constant: -28),
 
-            tipLabel.topAnchor.constraint(equalTo: card3.bottomAnchor, constant: 12),
+            tipLabel.topAnchor.constraint(equalTo: card3.bottomAnchor, constant: 10),
             tipLabel.leadingAnchor.constraint(equalTo: webScrollContent.leadingAnchor, constant: 28),
             tipLabel.trailingAnchor.constraint(equalTo: webScrollContent.trailingAnchor, constant: -28),
-            tipLabel.bottomAnchor.constraint(equalTo: webScrollContent.bottomAnchor, constant: -28)
+            tipLabel.bottomAnchor.constraint(equalTo: webScrollContent.bottomAnchor, constant: -16)
         ])
 
         pages = [optionsPage, exclusionPage, extPage, webPage]
@@ -1599,16 +1596,61 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
         let folders = ConfigManager.shared.config.extraHotFolders
         if folders.isEmpty {
-            addRow(makeHotFolderInfoRow(
-                subtitle: "默认热目录：下载 / 桌面 / 文档（深度 3 层）。可点击添加或从访达直接拖拽文件夹至此，搜索毫秒级命中；未覆盖目录由全盘检索兜底。"))
+            addRow(makeEmptyHotFolderRow())
         } else {
             for (index, path) in folders.enumerated() {
                 if index > 0 { addRow(makeSeparator()) }
                 addRow(makeHotFolderRow(path: path))
             }
             addRow(makeSeparator())
+            addRow(makeAddHotFolderRow(count: folders.count))
         }
-        addRow(makeAddHotFolderRow(count: folders.count))
+    }
+
+    private func makeEmptyHotFolderRow() -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "添加自定义热目录…")
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = .controlAccentColor
+        row.addSubview(titleLabel)
+
+        let subtitle = NSTextField(labelWithString: "默认已覆盖下载/桌面/文稿 · 可点击右侧添加，或直接从访达拖拽文件夹至此")
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+        subtitle.font = NSFont.systemFont(ofSize: 11)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.lineBreakMode = .byTruncatingTail
+        row.addSubview(subtitle)
+
+        let addBtn = SettingsIconButton(
+            symbolName: "plus.circle.fill",
+            accessibilityLabel: "添加",
+            target: self,
+            action: #selector(addHotFolderClicked(_:))
+        )
+        addBtn.normalTintColor = .controlAccentColor
+        addBtn.hoverTintColor = .controlAccentColor
+        addBtn.toolTip = "添加热目录"
+        row.addSubview(addBtn)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 44),
+
+            titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 6),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: addBtn.leadingAnchor, constant: -8),
+
+            subtitle.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitle.trailingAnchor.constraint(lessThanOrEqualTo: addBtn.leadingAnchor, constant: -8),
+            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -6),
+
+            addBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
+            addBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+        ])
+        return row
     }
 
     private func makeHotFolderRow(path: String) -> NSView {
@@ -1647,7 +1689,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         row.addSubview(removeBtn)
 
         NSLayoutConstraint.activate([
-            row.heightAnchor.constraint(equalToConstant: 46),
+            row.heightAnchor.constraint(equalToConstant: 42),
 
             icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
             icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
@@ -1658,13 +1700,13 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             removeBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
 
             titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 44),
-            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 5),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
 
             pathLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
             pathLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
-            pathLabel.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7)
+            pathLabel.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -5)
         ])
         return row
     }
@@ -1699,16 +1741,16 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         row.addSubview(addBtn)
 
         NSLayoutConstraint.activate([
-            row.heightAnchor.constraint(equalToConstant: 46),
+            row.heightAnchor.constraint(equalToConstant: 42),
 
             titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
-            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 5),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: addBtn.leadingAnchor, constant: -8),
 
             subtitle.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: addBtn.leadingAnchor, constant: -8),
-            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7),
+            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -5),
 
             addBtn.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
             addBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor)
@@ -1843,7 +1885,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         row.addSubview(removeBtn)
 
         NSLayoutConstraint.activate([
-            row.heightAnchor.constraint(equalToConstant: 46),
+            row.heightAnchor.constraint(equalToConstant: 42),
 
             icon.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
             icon.centerYAnchor.constraint(equalTo: row.centerYAnchor),
@@ -1854,13 +1896,13 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             removeBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
 
             titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 44),
-            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 5),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
 
             pathLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            pathLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
             pathLabel.trailingAnchor.constraint(lessThanOrEqualTo: removeBtn.leadingAnchor, constant: -8),
-            pathLabel.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7)
+            pathLabel.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -5)
         ])
         return row
     }
@@ -1903,16 +1945,16 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         row.addSubview(resetBtn)
 
         NSLayoutConstraint.activate([
-            row.heightAnchor.constraint(equalToConstant: 46),
+            row.heightAnchor.constraint(equalToConstant: 42),
 
             titleLabel.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 16),
-            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 7),
+            titleLabel.topAnchor.constraint(equalTo: row.topAnchor, constant: 5),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: resetBtn.leadingAnchor, constant: -8),
 
             subtitle.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitle.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: resetBtn.leadingAnchor, constant: -8),
-            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -7),
+            subtitle.bottomAnchor.constraint(lessThanOrEqualTo: row.bottomAnchor, constant: -5),
 
             resetBtn.trailingAnchor.constraint(equalTo: addBtn.leadingAnchor, constant: -8),
             resetBtn.centerYAnchor.constraint(equalTo: row.centerYAnchor),
@@ -2100,6 +2142,28 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             appleScript.executeAndReturnError(&error)
         }
     }
+
+    private func makeDualTileRow(left: NSView, right: NSView) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(left)
+        row.addSubview(right)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 38),
+
+            left.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            left.topAnchor.constraint(equalTo: row.topAnchor),
+            left.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+
+            right.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+            right.topAnchor.constraint(equalTo: row.topAnchor),
+            right.bottomAnchor.constraint(equalTo: row.bottomAnchor),
+            right.leadingAnchor.constraint(equalTo: left.trailingAnchor),
+            left.widthAnchor.constraint(equalTo: right.widthAnchor)
+        ])
+        return row
+    }
 }
 
 
@@ -2232,20 +2296,20 @@ public final class ThemeTabView: NSView {
         card2.addRow(rowOpacity, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
+            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 8),
             sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 20),
+            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 16),
             sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
+            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -16)
         ])
     }
 
@@ -2415,20 +2479,20 @@ public final class PerformanceTabView: NSView {
         card2.addRow(rowCache, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
+            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 8),
             sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 20),
+            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 16),
             sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
+            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -16)
         ])
     }
 
@@ -2723,20 +2787,20 @@ public final class AboutTabView: NSView {
         card2.addRow(rowStack, isLast: true)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
+            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 8),
             sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 20),
+            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 16),
             sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
+            card2.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -16)
         ])
     }
 

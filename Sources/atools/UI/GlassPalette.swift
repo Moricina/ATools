@@ -86,4 +86,10 @@ extension NSView {
     var isNativeLiquidTheme: Bool {
         ConfigManager.shared.config.theme.isNativeLiquid
     }
+
+    /// 当前屏幕或窗口严格对齐 1 个物理像素的 pt 值（Retina 2x 为 0.5pt，3x 为 0.333pt，普通屏 1x 为 1.0pt，杜绝发虚）
+    public var physicalOnePixel: CGFloat {
+        let scale = window?.screen?.backingScaleFactor ?? window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        return scale > 0 ? (1.0 / scale) : 0.5
+    }
 }

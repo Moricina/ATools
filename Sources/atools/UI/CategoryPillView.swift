@@ -133,8 +133,9 @@ public final class CategoryPillView: NSView {
         let primaryTextColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0)
         let secondaryTextColor = isDark ? NSColor(white: 1.0, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.78)
 
+        let px = physicalOnePixel
         if isSpringLoadingHovered {
-            layer?.borderWidth = 1.0
+            layer?.borderWidth = px * 1.5
             let highlightBorder = isDark ? NSColor.white.withAlphaComponent(0.65) : NSColor.black.withAlphaComponent(0.40)
             layer?.borderColor = highlightBorder.cgColor
             layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
@@ -143,7 +144,7 @@ public final class CategoryPillView: NSView {
             layer?.shadowRadius = 10
             titleLabel.textColor = primaryTextColor
         } else if isDropTarget {
-            layer?.borderWidth = 0.75
+            layer?.borderWidth = px
             layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
             layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
             layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
@@ -159,7 +160,7 @@ public final class CategoryPillView: NSView {
             titleLabel.textColor = primaryTextColor
         } else {
             if isHovered {
-                layer?.borderWidth = 0.75
+                layer?.borderWidth = px
                 layer?.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
                 layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
                 layer?.shadowColor = nil
@@ -174,15 +175,17 @@ public final class CategoryPillView: NSView {
             }
         }
 
+        let sh = NSShadow()
         if isDark {
-            let sh = NSShadow()
-            sh.shadowColor = NSColor.black.withAlphaComponent(isNativeLiquidTheme ? 0.70 : 0.50)
-            sh.shadowOffset = NSSize(width: 0, height: -1)
-            sh.shadowBlurRadius = isNativeLiquidTheme ? 2.0 : 1.5
-            titleLabel.shadow = sh
+            sh.shadowColor = NSColor.black.withAlphaComponent(isNativeLiquidTheme ? 0.68 : 0.50)
+            sh.shadowOffset = NSSize(width: 0, height: -1.0)
+            sh.shadowBlurRadius = isNativeLiquidTheme ? 1.5 : 1.2
         } else {
-            titleLabel.shadow = nil
+            sh.shadowColor = NSColor.white.withAlphaComponent(0.65)
+            sh.shadowOffset = NSSize(width: 0, height: 0.5)
+            sh.shadowBlurRadius = 1.0
         }
+        titleLabel.shadow = sh
 
         NSAnimationContext.endGrouping()
     }
@@ -206,6 +209,11 @@ public final class CategoryPillView: NSView {
 
     override public func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        updateAppearanceStyles()
+    }
+
+    override public func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
         updateAppearanceStyles()
     }
 

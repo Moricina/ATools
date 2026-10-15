@@ -156,24 +156,24 @@ public final class AutoQuitTabView: NSView {
         scrollContent.addSubview(tipLabel)
 
         NSLayoutConstraint.activate([
-            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 14),
+            sec1Title.topAnchor.constraint(equalTo: scrollContent.topAnchor, constant: 8),
             sec1Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 8),
+            card1.topAnchor.constraint(equalTo: sec1Title.bottomAnchor, constant: 7),
             card1.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card1.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 20),
+            sec2Title.topAnchor.constraint(equalTo: card1.bottomAnchor, constant: 16),
             sec2Title.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
 
-            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 8),
+            card2.topAnchor.constraint(equalTo: sec2Title.bottomAnchor, constant: 7),
             card2.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 28),
             card2.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
 
-            tipLabel.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 12),
+            tipLabel.topAnchor.constraint(equalTo: card2.bottomAnchor, constant: 10),
             tipLabel.leadingAnchor.constraint(equalTo: scrollContent.leadingAnchor, constant: 32),
             tipLabel.trailingAnchor.constraint(equalTo: scrollContent.trailingAnchor, constant: -28),
-            tipLabel.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -28)
+            tipLabel.bottomAnchor.constraint(equalTo: scrollContent.bottomAnchor, constant: -16)
         ])
     }
 

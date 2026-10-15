@@ -60,7 +60,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     private init() {
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 620),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 600),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
@@ -71,8 +71,8 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         win.isMovableByWindowBackground = true
         win.backgroundColor = NSColor.windowBackgroundColor
         win.isReleasedWhenClosed = false
-        win.minSize = NSSize(width: 780, height: 600)
-        win.maxSize = NSSize(width: 780, height: 800)
+        win.minSize = NSSize(width: 780, height: 560)
+        win.maxSize = NSSize(width: 780, height: 860)
         win.level = .normal
         super.init(window: win)
         SettingsWindowController.sharedInstanceCreated = true
@@ -90,7 +90,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         runtimeLog("[Settings] showSettingsWindow called from:\n" + Thread.callStackSymbols.prefix(16).joined(separator: "\n"))
         PanelCoordinator.shared.hideAllPanels(restoreFocus: false)
         guard let win = window else { return }
-        win.setContentSize(NSSize(width: 780, height: 620))
+        win.setContentSize(NSSize(width: 780, height: 600))
         win.center()
         win.makeKeyAndOrderFront(nil)
         win.orderFrontRegardless()

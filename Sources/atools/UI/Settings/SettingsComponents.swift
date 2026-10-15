@@ -171,7 +171,7 @@ public final class SettingsRowView: NSView {
         title: String,
         subtitle: String? = nil,
         accessory: NSView? = nil,
-        minHeight: CGFloat = 46
+        minHeight: CGFloat = 42
     ) {
         super.init(frame: .zero)
         setupUI(icon: icon, title: title, subtitle: subtitle, accessory: accessory, minHeight: minHeight)
@@ -245,12 +245,62 @@ public final class SettingsRowView: NSView {
 
         NSLayoutConstraint.activate([
             textStack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            textStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 8),
-            textStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+            textStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 6),
+            textStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6),
             textStack.trailingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: -12),
 
             accessoryContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             accessoryContainer.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
+    }
+}
+
+/// 紧凑型单行开关磁贴（用于双列网格排版，高度 38pt，长技术路径转为 ToolTip）
+public final class SettingsToggleTileView: NSView {
+    public let iconImageView = NSImageView()
+    public let titleLabel = NSTextField(labelWithString: "")
+    public let toggleSwitch: NSSwitch
+
+    public init(icon: NSImage?, title: String, toolTip: String? = nil, toggleSwitch: NSSwitch) {
+        self.toggleSwitch = toggleSwitch
+        super.init(frame: .zero)
+        self.toolTip = toolTip
+        setupUI(icon: icon, title: title)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setupUI(icon: NSImage?, title: String) {
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 38).isActive = true
+
+        iconImageView.translatesAutoresizingMaskIntoConstraints = false
+        iconImageView.image = icon
+        iconImageView.contentTintColor = .secondaryLabelColor
+        addSubview(iconImageView)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.stringValue = title
+        titleLabel.font = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+        titleLabel.textColor = .labelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        addSubview(titleLabel)
+
+        toggleSwitch.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(toggleSwitch)
+
+        NSLayoutConstraint.activate([
+            iconImageView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            iconImageView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            iconImageView.widthAnchor.constraint(equalToConstant: 16),
+            iconImageView.heightAnchor.constraint(equalToConstant: 16),
+
+            toggleSwitch.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            toggleSwitch.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            titleLabel.leadingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: toggleSwitch.leadingAnchor, constant: -6)
         ])
     }
 }
@@ -628,7 +678,7 @@ public final class SettingsHeaderView: NSView {
 
         NSLayoutConstraint.activate([
             iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
-            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 50),
+            iconView.topAnchor.constraint(equalTo: topAnchor, constant: 34),
             iconView.widthAnchor.constraint(equalToConstant: 26),
             iconView.heightAnchor.constraint(equalToConstant: 26),
 
@@ -648,11 +698,11 @@ public final class SettingsHeaderView: NSView {
             NSLayoutConstraint.activate([
                 segmentedControl.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 14),
                 segmentedControl.centerXAnchor.constraint(equalTo: centerXAnchor),
-                segmentedControl.heightAnchor.constraint(equalToConstant: 32),
-                segmentedControl.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12)
+                segmentedControl.heightAnchor.constraint(equalToConstant: 30),
+                segmentedControl.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8)
             ])
         } else {
-            bottomAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12).isActive = true
+            bottomAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10).isActive = true
         }
     }
 }

@@ -203,6 +203,11 @@ private final class SidebarRowButton: NSButton {
         updateAppearance()
     }
 
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        updateAppearance()
+    }
+
     override func layout() {
         super.layout()
         if isCurrentSelected, let op = layer?.shadowOpacity, op > 0 {
@@ -219,11 +224,16 @@ private final class SidebarRowButton: NSButton {
 
     func updateAppearance() {
         let isDark = isDarkAppearance
+        let px = physicalOnePixel
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
         if isCurrentSelected {
             // 🌟 纯白液态水滴质感选中高亮 + 活力蓝调图标 (1:1 完美对标图 2 AuraSnap 精致一体化风格) 🌟
             if isDark {
                 layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.18).cgColor
-                layer?.borderWidth = 0.5
+                layer?.borderWidth = px
                 layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
                 layer?.shadowColor = NSColor.black.cgColor
                 layer?.shadowOffset = CGSize(width: 0, height: 1.0)
@@ -233,7 +243,7 @@ private final class SidebarRowButton: NSButton {
                 iconView.contentTintColor = NSColor(red: 0.25, green: 0.65, blue: 1.0, alpha: 1.0)
             } else {
                 layer?.backgroundColor = NSColor.white.cgColor
-                layer?.borderWidth = 0.5
+                layer?.borderWidth = px
                 layer?.borderColor = NSColor.black.withAlphaComponent(0.04).cgColor
                 layer?.shadowColor = NSColor.black.cgColor
                 layer?.shadowOffset = CGSize(width: 0, height: 1.0)
@@ -250,13 +260,13 @@ private final class SidebarRowButton: NSButton {
             if isHovered {
                 if isDark {
                     layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.08).cgColor
-                    layer?.borderWidth = 0.5
+                    layer?.borderWidth = px
                     layer?.borderColor = NSColor.white.withAlphaComponent(0.06).cgColor
                     titleLabel.textColor = NSColor(white: 1.0, alpha: 0.95)
                     iconView.contentTintColor = NSColor(white: 1.0, alpha: 0.88)
                 } else {
                     layer?.backgroundColor = NSColor.white.withAlphaComponent(0.55).cgColor
-                    layer?.borderWidth = 0.5
+                    layer?.borderWidth = px
                     layer?.borderColor = NSColor.black.withAlphaComponent(0.02).cgColor
                     titleLabel.textColor = NSColor(white: 0.10, alpha: 1.0)
                     iconView.contentTintColor = NSColor(white: 0.20, alpha: 1.0)
@@ -275,6 +285,8 @@ private final class SidebarRowButton: NSButton {
             }
             titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .regular)
         }
+
+        CATransaction.commit()
     }
 
     override func resetCursorRects() {
@@ -454,8 +466,7 @@ public final class SettingsSidebarView: NSView {
         effectView.state = .active
         addSubview(effectView)
 
-        // 🌟 0.5pt 极细微环境发丝分割线（彻底替换生硬的 NSBox 粗黑线，实现一体化自然消融）🌟
-        rightDivider.translatesAutoresizingMaskIntoConstraints = false
+        // 🌟 物理单像素极细微环境发丝分割线（在 layout() 中对齐物理像素，免除 AutoLayout 抖动）🌟
         rightDivider.wantsLayer = true
         addSubview(rightDivider)
 
@@ -463,12 +474,7 @@ public final class SettingsSidebarView: NSView {
             effectView.topAnchor.constraint(equalTo: topAnchor),
             effectView.bottomAnchor.constraint(equalTo: bottomAnchor),
             effectView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            effectView.trailingAnchor.constraint(equalTo: trailingAnchor),
-
-            rightDivider.trailingAnchor.constraint(equalTo: trailingAnchor),
-            rightDivider.topAnchor.constraint(equalTo: topAnchor),
-            rightDivider.bottomAnchor.constraint(equalTo: bottomAnchor),
-            rightDivider.widthAnchor.constraint(equalToConstant: 0.5)
+            effectView.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
 
         // 1. Top App Brand Row（在红绿灯下方约 22pt 处优雅展开，1:1 对标图 2 AuraSnap 顶底间距）
@@ -582,8 +588,15 @@ public final class SettingsSidebarView: NSView {
         appIconBadge.updateBorderColor(isDark: isDark)
     }
 
+    public override func layout() {
+        super.layout()
+        let px = physicalOnePixel
+        rightDivider.frame = NSRect(x: bounds.width - px, y: 0, width: px, height: bounds.height)
+    }
+
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        needsLayout = true
         updateColors()
         if window != nil {
             refreshUpdateBadges()
@@ -592,6 +605,12 @@ public final class SettingsSidebarView: NSView {
 
     public override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
+        updateColors()
+    }
+
+    public override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
         updateColors()
     }
 
