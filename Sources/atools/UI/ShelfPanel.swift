@@ -950,11 +950,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     public func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int) {
         guard let cat = selectedCategory else { return }
-        if ConfigManager.shared.moveItem(id: id, toCategoryId: cat.id) {
-            if let newIdx = ConfigManager.shared.config.categories.first(where: { $0.id == cat.id })?.items.firstIndex(where: { $0.id == id }),
-               newIdx != toIndex {
-                ConfigManager.shared.moveItem(from: newIdx, to: toIndex, in: cat.id)
-            }
+        if ConfigManager.shared.moveItem(id: id, toCategoryId: cat.id, at: toIndex) {
             loadData()
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
         }

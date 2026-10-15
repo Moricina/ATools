@@ -2314,3 +2314,13 @@
      - 在 `ShelfGridView.scrollWheel(with:)` 中识别触控板双指横向滑动手势，联动 `CategoryBarView.moveSelection(by:)` 与 `playCategoryPageTransition(direction:)` 实现左右滑动切换分类；
      - 在 `CategoryBarView` 中新增拖拽悬停分类胶囊 `420ms` 自动切页（Spring-loaded Category Pill）。
 
+### 33. 修复跨分类拖拽后图标文字重叠缺陷并新增跨分类拖入实时平滑让位动画 (2026-10-15)
+
+- **问题根因**：
+  1. **跨分类拖拽后文字与图标重叠**：从分类 A 起拖并悬停切换到分类 B 时，`ShelfGridView.reloadData(items:)` 未清理分类 A 的 `dragOriginalItems` 与 `dragOriginalButtons` 快照；拖拽结束时旧分类 A 的按钮数组被回写，导致分类 A 与分类 B 的两套 `ShelfItemButton` 同时留在 `contentView.subviews` 的同一网格坐标上重叠显示。
+  2. **跨分类拖入无让位动画**：此前 `updateLiveDragReorder` 仅处理当前分类已存在的图标重排，当把图标拖入其他分类网格时，未创建占位槽位，因此周围图标不会滑开让位。
+- **修复内容**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)、[`ConfigManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/ConfigManager.swift)、[`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)）：
+  - 在 `reloadData(items:)` 入口调用 `resetDragPreviewSnapshotBeforeReload()` 清空旧分类拖拽快照，并在构建 `newButtons` 后严格遍历 `contentView.subviews` 移除所有不在 `newButtons` 中的 `ShelfItemButton`，彻底根除双层按钮/文字重叠；
+  - 新增 `beginCrossCategoryDragPreview(for:)` 与 `applyCrossCategoryLivePreview(targetIndex:ghostButton:)`：当把应用拖入其他分类网格时，自动生成半透明虚影占位槽（`crossCategoryGhostButton`），指针移动时目标分类周围图标实时丝滑让位滑入新位置；
+  - 扩展 `ConfigManager.moveItem(id:toCategoryId:at:)` 支持跨分类移动并一步插入目标槽位索引。
+

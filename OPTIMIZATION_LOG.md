@@ -126,3 +126,20 @@
   5. **双指横向滑动翻页与拖拽悬停分类胶囊自动切页（`ShelfGridView` & `CategoryBarView`）**：
      - 在 `ShelfGridView.scrollWheel(with:)` 中识别触控板双指左右滑动手势，联动 `CategoryBarView.moveSelection(by:)` 与 `playCategoryPageTransition(direction:)` 实现丝滑翻页；
      - 在 `CategoryBarView` 中新增拖拽悬停 `420ms` 自动切换分类（Spring-loaded Category Pill），支持跨分类拖入后继续享受实时平滑让位。
+
+---
+
+### 七、专项修复：跨分类拖拽后图标文字重叠与跨分类实时平滑让位补全 (2026-10-15)
+
+- **问题根因**：
+  1. **跨分类拖拽后文字与图标重叠**：当从分类 A 起拖图标并悬停切换到分类 B 时，`ShelfGridView.reloadData(items:)` 创建了分类 B 的按钮，但未清空分类 A 起拖时保存的 `dragOriginalItems` 与 `dragOriginalButtons` 快照。当拖拽结束触发 `endInternalDragPreview` 或 `restoreDragPreviewToOriginal` 时，旧分类 A 的按钮数组被回写至 `itemButtons`，导致分类 A 与分类 B 的两套 `ShelfItemButton` 同时残留在 `contentView.subviews` 的相同网格坐标上发生文字重叠。
+  2. **拖入其他分类后无让位动画**：此前 `updateLiveDragReorder` 仅在被拖拽项属于当前分类（`itemButtons.first(where: { $0.item.id == sourceId }) != nil`）时才计算实时让位；当把应用拖入另一分类时，因该应用尚不在目标分类列表中而直接跳过，周围图标不会滑开让位。
+- **修复详情**（`ShelfGridView.swift`、`ConfigManager.swift`、`ShelfPanel.swift`）：
+  1. **彻底根除跨分类子视图残留重叠（`ShelfGridView.reloadData` & `resetDragPreviewSnapshotBeforeReload`）**：
+     - 在 `reloadData(items:)` 入口立即调用 `resetDragPreviewSnapshotBeforeReload()` 清空上一分类的拖拽快照与跨分类临时占位图标；
+     - 同时从 `contentView.subviews` 与 `itemButtons` 收集可复用按钮，并在构建 `newButtons` 后严格遍历 `contentView.subviews` 移除所有不在 `newButtons` 中的 `ShelfItemButton`，从根源上杜绝任何双层按钮或文字重叠。
+  2. **新增跨分类拖入实时平滑让位动画（`beginCrossCategoryDragPreview` & `applyCrossCategoryLivePreview`）**：
+     - 当把应用从分类 A 拖入分类 B 的网格时，自动为被拖入的应用创建 `0.22` 透明度虚影占位按钮 `crossCategoryGhostButton`；
+     - 指针在分类 B 网格内移动时，实时计算插入槽位（`0 ... origItems.count`），驱动分类 B 内的周围图标丝滑滑入新位置让出空位；若移出网格或按 `Esc` 则自动移除占位并平滑回弹。
+  3. **跨分类指定槽位原子落盘（`ConfigManager.moveItem(id:toCategoryId:at:)`）**：
+     - 扩展 `ConfigManager.moveItem` 支持一次性从源分类移除并直接插入目标分类的指定索引 `destinationIndex`，避免二次重排导致的跳变。

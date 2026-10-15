@@ -622,6 +622,7 @@ public final class ShelfGridView: NSView {
     private var dragCurrentTargetIndex: Int?
     private var dragOriginalItems: [LauncherItem]?
     private var dragOriginalButtons: [ShelfItemButton]?
+    private var crossCategoryGhostButton: ShelfItemButton?
     private var isOptionSwapActive: Bool = false
     private var isDragCancelledByEscape: Bool = false
     private var didCommitCurrentDrag: Bool = false
@@ -718,13 +719,20 @@ public final class ShelfGridView: NSView {
     }
 
     public func reloadData(items: [LauncherItem]) {
+        // 切换分类或重载数据时，立即清理上一分类残留的拖拽快照，防止跨分类切页后旧分类按钮回写重叠
+        resetDragPreviewSnapshotBeforeReload()
+
         let hadItems = !self.items.isEmpty
         self.items = items
         emptyLabel.isHidden = !items.isEmpty
 
-        // Reuse existing buttons ONLY when the full LauncherItem (including customIconPath,
-        // executionContext, tags, name, target) matches.
+        // 同时从 itemButtons 与 contentView.subviews 收集可复用按钮，确保没有任何孤立子视图残留
         var reusable: [UUID: ShelfItemButton] = [:]
+        for sub in contentView.subviews {
+            if let btn = sub as? ShelfItemButton {
+                reusable[btn.item.id] = btn
+            }
+        }
         for btn in itemButtons {
             reusable[btn.item.id] = btn
         }
@@ -735,6 +743,12 @@ public final class ShelfGridView: NSView {
         for item in items {
             if let existing = reusable[item.id], existing.item == item {
                 reusable.removeValue(forKey: item.id)
+                if existing.superview !== contentView {
+                    contentView.addSubview(existing)
+                }
+                existing.isDraggingSource = false
+                existing.isSwapTarget = false
+                existing.alphaValue = 1.0
                 if existing.scale != scale {
                     existing.scale = scale
                 }
@@ -748,7 +762,18 @@ public final class ShelfGridView: NSView {
                 newButtons.append(btn)
             }
         }
-        reusable.values.forEach { $0.removeFromSuperview() }
+
+        let keptIdentifiers = Set(newButtons.map { ObjectIdentifier($0) })
+        for sub in contentView.subviews {
+            if let btn = sub as? ShelfItemButton, !keptIdentifiers.contains(ObjectIdentifier(btn)) {
+                btn.removeFromSuperview()
+            }
+        }
+        reusable.values.forEach {
+            if !keptIdentifiers.contains(ObjectIdentifier($0)) {
+                $0.removeFromSuperview()
+            }
+        }
         itemButtons = newButtons
         if let selectedID = keyboardSelectedID, !items.contains(where: { $0.id == selectedID }) {
             keyboardSelectedID = nil
@@ -1148,10 +1173,26 @@ public final class ShelfGridView: NSView {
 
     // MARK: - 实时平滑让位、Alt 快速交换与 Esc 撤销保护引擎
 
+    private func resetDragPreviewSnapshotBeforeReload() {
+        if let ghost = crossCategoryGhostButton {
+            ghost.removeFromSuperview()
+            crossCategoryGhostButton = nil
+        }
+        dragSourceIndex = nil
+        dragCurrentTargetIndex = nil
+        dragOriginalItems = nil
+        dragOriginalButtons = nil
+        lastKnownDragPointInContent = nil
+    }
+
     private func beginInternalDragPreview(for button: ShelfItemButton) {
         guard activeFilter.isEmpty else { return }
         guard let srcIdx = items.firstIndex(where: { $0.id == button.item.id }) else { return }
 
+        if let ghost = crossCategoryGhostButton {
+            ghost.removeFromSuperview()
+            crossCategoryGhostButton = nil
+        }
         dragSourceID = button.item.id
         dragSourceIndex = srcIdx
         dragCurrentTargetIndex = srcIdx
@@ -1166,27 +1207,62 @@ public final class ShelfGridView: NSView {
         installDragKeyMonitor()
     }
 
+    /// 跨分类拖入当前网格时，初始化目标分类快照并创建半透明占位图标，让目标分类周围图标同样实时丝滑让位
+    private func beginCrossCategoryDragPreview(for externalItem: LauncherItem) {
+        guard activeFilter.isEmpty else { return }
+        if let oldGhost = crossCategoryGhostButton {
+            oldGhost.removeFromSuperview()
+        }
+        dragSourceID = externalItem.id
+        dragSourceIndex = nil
+        dragCurrentTargetIndex = nil
+        dragOriginalItems = items
+        dragOriginalButtons = itemButtons
+        isOptionSwapActive = false
+
+        let ghostBtn = makeButton(for: externalItem, scale: ConfigManager.shared.config.shelfIconScale)
+        ghostBtn.isDraggingSource = true
+        ghostBtn.alphaValue = 0.22
+        contentView.addSubview(ghostBtn)
+        crossCategoryGhostButton = ghostBtn
+        emptyLabel.isHidden = true
+        installDragKeyMonitor()
+    }
+
     private func endInternalDragPreview(operation: NSDragOperation) {
         removeDragKeyMonitor()
 
         for btn in itemButtons {
             btn.isDraggingSource = false
             btn.isSwapTarget = false
+            btn.alphaValue = 1.0
         }
         if let origButtons = dragOriginalButtons {
             for btn in origButtons {
                 btn.isDraggingSource = false
                 btn.isSwapTarget = false
+                btn.alphaValue = 1.0
             }
         }
 
-        // 若未在网格内落盘提交（例如按 Esc 取消、或拖到面板空白外部松手），平滑回弹还原至起拖前顺序
-        if !didCommitCurrentDrag, let origItems = dragOriginalItems, let origButtons = dragOriginalButtons {
-            if items != origItems {
-                items = origItems
-                itemButtons = origButtons
-                relayoutButtons(animated: true, duration: 0.24)
+        // 若未在当前网格内落盘提交（例如按 Esc 取消、或拖到面板空白外部松手），平滑回弹还原当前分类至起拖前顺序
+        if !didCommitCurrentDrag {
+            if let ghost = crossCategoryGhostButton {
+                ghost.removeFromSuperview()
+                crossCategoryGhostButton = nil
             }
+            if let origItems = dragOriginalItems, let origButtons = dragOriginalButtons {
+                let currentOrigIDs = Set(origItems.map(\.id))
+                let currentGridIDs = Set(items.filter { $0.id != dragSourceID }.map(\.id))
+                if currentOrigIDs == currentGridIDs && items != origItems {
+                    items = origItems
+                    itemButtons = origButtons
+                    emptyLabel.isHidden = !origItems.isEmpty
+                    relayoutButtons(animated: true, duration: 0.24)
+                }
+            }
+        } else {
+            crossCategoryGhostButton = nil
         }
 
         dragSourceID = nil
@@ -1214,11 +1290,10 @@ public final class ShelfGridView: NSView {
                 let optionNow = event.modifierFlags.contains(.option)
                 if optionNow != self.isOptionSwapActive,
                    !self.isDragCancelledByEscape,
-                   let pt = self.lastKnownDragPointInContent,
+                   self.dragSourceIndex != nil,
                    let targetIdx = self.dragCurrentTargetIndex {
                     self.isOptionSwapActive = optionNow
                     self.applyLiveDragPreview(targetIndex: targetIdx, optionSwap: optionNow)
-                    _ = pt
                 }
             }
             return event
@@ -1234,16 +1309,47 @@ public final class ShelfGridView: NSView {
 
     private func restoreDragPreviewToOriginal(animated: Bool) {
         guard let origItems = dragOriginalItems, let origButtons = dragOriginalButtons else { return }
+        if let ghost = crossCategoryGhostButton {
+            ghost.removeFromSuperview()
+            crossCategoryGhostButton = nil
+        }
         for btn in origButtons {
             btn.isSwapTarget = false
+            if btn.superview !== contentView {
+                contentView.addSubview(btn)
+            }
         }
         items = origItems
         itemButtons = origButtons
+        emptyLabel.isHidden = !origItems.isEmpty
         dragCurrentTargetIndex = dragSourceIndex
         relayoutButtons(animated: animated, duration: 0.22)
+        if dragSourceIndex == nil {
+            // 跨分类预览移出网格后重置快照，以便再次移入时重新生成占位动画
+            dragOriginalItems = nil
+            dragOriginalButtons = nil
+        }
     }
 
-    /// 根据 contentView 内的坐标计算目标网格槽位索引（含 16% 边界磁滞防抖区，彻底消除边界闪烁）
+    /// 计算指定网格槽位的矩形坐标
+    private func slotFrame(for index: Int) -> NSRect {
+        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let itemWidth = metrics.itemWidth
+        let itemHeight = metrics.itemWidth
+        let sideMargin = metrics.sideMargin
+        let topMargin: CGFloat = 12
+        let spacingX = ShelfGridMetrics.spacing
+        let spacingY = ShelfGridMetrics.spacing
+        let availableWidth = max(bounds.width, 100)
+        let cols = max(1, Int((availableWidth - sideMargin * 2 + spacingX) / (itemWidth + spacingX)))
+        let col = max(0, index % cols)
+        let row = max(0, index / cols)
+        let x = sideMargin + CGFloat(col) * (itemWidth + spacingX)
+        let y = topMargin + CGFloat(row) * (itemHeight + spacingY)
+        return NSRect(x: x, y: y, width: itemWidth, height: itemHeight)
+    }
+
+    /// 根据 contentView 内的坐标计算目标网格槽位索引（含 14% 边界磁滞防抖区，彻底消除边界闪烁）
     private func targetSlotIndex(at contentPoint: NSPoint, itemCount: Int, currentSlot: Int?) -> Int {
         guard itemCount > 0 else { return 0 }
         let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
@@ -1269,7 +1375,7 @@ public final class ShelfGridView: NSView {
             return candidateSlot
         }
 
-        // 计算候选槽位中心，要求指针进入槽位核心区（排除最外圈 16% 过渡带）才触发让位切换
+        // 计算候选槽位中心，要求指针进入槽位核心区（排除最外圈 14% 过渡带）才触发让位切换
         let targetCol = candidateSlot % cols
         let targetRow = candidateSlot / cols
         let slotOriginX = sideMargin + CGFloat(targetCol) * cellStrideX
@@ -1301,24 +1407,40 @@ public final class ShelfGridView: NSView {
                        pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType))
         guard let idString = idString, let sourceId = UUID(uuidString: idString) else { return }
 
-        // 若起拖回调尚未初始化（如从分类栏拖回当前分类网格），补全快照初始化
-        if dragOriginalItems == nil, let btn = itemButtons.first(where: { $0.item.id == sourceId }) {
-            beginInternalDragPreview(for: btn)
+        // 若起拖回调尚未初始化，区分「本分类内重排」与「跨分类拖入」两种情况建立快照
+        if dragOriginalItems == nil {
+            if let btn = itemButtons.first(where: { $0.item.id == sourceId }) {
+                beginInternalDragPreview(for: btn)
+            } else if let externalItem = ConfigManager.shared.config.categories.lazy.flatMap(\.items).first(where: { $0.id == sourceId }) {
+                beginCrossCategoryDragPreview(for: externalItem)
+            }
         }
 
-        guard let origItems = dragOriginalItems,
-              let sourceIdx = dragSourceIndex,
-              origItems.indices.contains(sourceIdx) else { return }
+        guard let origItems = dragOriginalItems else { return }
 
         let loc = contentView.convert(sender.draggingLocation, from: nil)
         lastKnownDragPointInContent = loc
-        let optionNow = NSEvent.modifierFlags.contains(.option)
-        let nextSlot = targetSlotIndex(at: loc, itemCount: origItems.count, currentSlot: dragCurrentTargetIndex)
 
-        if nextSlot != dragCurrentTargetIndex || optionNow != isOptionSwapActive {
-            dragCurrentTargetIndex = nextSlot
-            isOptionSwapActive = optionNow
-            applyLiveDragPreview(targetIndex: nextSlot, optionSwap: optionNow)
+        // 情况 A：同分类内部实时让位 / Alt 快速交换
+        if let sourceIdx = dragSourceIndex, origItems.indices.contains(sourceIdx) {
+            let optionNow = NSEvent.modifierFlags.contains(.option)
+            let nextSlot = targetSlotIndex(at: loc, itemCount: origItems.count, currentSlot: dragCurrentTargetIndex)
+
+            if nextSlot != dragCurrentTargetIndex || optionNow != isOptionSwapActive {
+                dragCurrentTargetIndex = nextSlot
+                isOptionSwapActive = optionNow
+                applyLiveDragPreview(targetIndex: nextSlot, optionSwap: optionNow)
+            }
+            return
+        }
+
+        // 情况 B：跨分类拖入目标分类网格时的实时插入让位动画
+        if let ghostBtn = crossCategoryGhostButton {
+            let nextSlot = targetSlotIndex(at: loc, itemCount: origItems.count + 1, currentSlot: dragCurrentTargetIndex)
+            if nextSlot != dragCurrentTargetIndex {
+                dragCurrentTargetIndex = nextSlot
+                applyCrossCategoryLivePreview(targetIndex: nextSlot, ghostButton: ghostBtn)
+            }
         }
     }
 
@@ -1353,6 +1475,32 @@ public final class ShelfGridView: NSView {
 
         items = newItems
         itemButtons = newButtons
+        relayoutButtons(animated: true, duration: 0.24)
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    }
+
+    private func applyCrossCategoryLivePreview(targetIndex: Int, ghostButton: ShelfItemButton) {
+        guard let origItems = dragOriginalItems,
+              let origButtons = dragOriginalButtons else { return }
+
+        let clampedTarget = max(0, min(origItems.count, targetIndex))
+        var newItems = origItems
+        var newButtons = origButtons
+
+        if ghostButton.superview !== contentView {
+            contentView.addSubview(ghostButton)
+        }
+        // 首次进入目标分类网格时，直接将占位图标定位在目标槽位，避免从 (0,0) 飞入，同时让周围现有图标平滑滑开
+        if ghostButton.frame == .zero {
+            ghostButton.frame = slotFrame(for: clampedTarget)
+        }
+
+        newItems.insert(ghostButton.item, at: clampedTarget)
+        newButtons.insert(ghostButton, at: clampedTarget)
+
+        items = newItems
+        itemButtons = newButtons
+        emptyLabel.isHidden = !newItems.isEmpty
         relayoutButtons(animated: true, duration: 0.24)
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
     }
@@ -1425,6 +1573,7 @@ public final class ShelfGridView: NSView {
         if let idString = idString, let sourceId = UUID(uuidString: idString) {
             let loc = contentView.convert(sender.draggingLocation, from: nil)
 
+            // 情况 A：同分类内部拖拽落盘
             if let origItems = dragOriginalItems,
                let sourceIndex = dragSourceIndex,
                origItems.indices.contains(sourceIndex),
@@ -1436,6 +1585,7 @@ public final class ShelfGridView: NSView {
                 for btn in itemButtons {
                     btn.isDraggingSource = false
                     btn.isSwapTarget = false
+                    btn.alphaValue = 1.0
                 }
 
                 if sourceIndex != finalTargetIndex {
@@ -1448,15 +1598,21 @@ public final class ShelfGridView: NSView {
                 return true
             }
 
-            // Cross-category drop into a specific slot in this grid
-            let targetIndex = targetSlotIndex(at: loc, itemCount: max(1, items.count + 1), currentSlot: nil)
-            if let sourceIndex = items.firstIndex(where: { $0.id == sourceId }) {
-                didCommitCurrentDrag = true
-                delegate?.shelfGrid(self, didMoveItemFrom: sourceIndex, to: min(targetIndex, max(0, items.count - 1)))
-            } else {
-                didCommitCurrentDrag = true
-                delegate?.shelfGrid(self, didMoveExternalItemWithID: sourceId, toIndex: min(targetIndex, items.count))
+            // 情况 B：跨分类拖入当前网格指定槽位落盘
+            let baseCount = dragOriginalItems?.count ?? items.count
+            let targetIndex = dragCurrentTargetIndex ?? targetSlotIndex(at: loc, itemCount: max(1, baseCount + 1), currentSlot: nil)
+            didCommitCurrentDrag = true
+            if let ghost = crossCategoryGhostButton {
+                ghost.isDraggingSource = false
+                ghost.alphaValue = 1.0
+                crossCategoryGhostButton = nil
             }
+            for btn in itemButtons {
+                btn.isDraggingSource = false
+                btn.isSwapTarget = false
+                btn.alphaValue = 1.0
+            }
+            delegate?.shelfGrid(self, didMoveExternalItemWithID: sourceId, toIndex: min(targetIndex, baseCount))
             return true
         }
 

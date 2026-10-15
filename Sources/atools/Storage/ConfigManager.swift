@@ -640,9 +640,9 @@ public final class ConfigManager {
     }
 
     /// Moves a launcher item between categories by its stable id, atomically removing it
-    /// from the source category and appending it to the destination category.
+    /// from the source category and inserting it into the destination category at the specified index (or appending if nil).
     @discardableResult
-    public func moveItem(id: UUID, toCategoryId destinationId: UUID) -> Bool {
+    public func moveItem(id: UUID, toCategoryId destinationId: UUID, at destinationIndex: Int? = nil) -> Bool {
         guard let sourceIdx = self.config.categories.firstIndex(where: { category in
             category.items.contains(where: { $0.id == id })
         }) else { return false }
@@ -659,7 +659,12 @@ public final class ConfigManager {
         }
 
         let item = self.config.categories[sourceIdx].items.remove(at: itemIndex)
-        self.config.categories[destinationIdx].items.append(item)
+        if let targetIdx = destinationIndex {
+            let clamped = max(0, min(targetIdx, self.config.categories[destinationIdx].items.count))
+            self.config.categories[destinationIdx].items.insert(item, at: clamped)
+        } else {
+            self.config.categories[destinationIdx].items.append(item)
+        }
         save()
         return true
     }
