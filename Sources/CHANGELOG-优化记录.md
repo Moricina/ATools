@@ -2276,10 +2276,13 @@
        - 自动安全快照与跨机路径自愈（`restoreBackup(from:)`）：恢复前自动将当前配置与图标快照至 `backups/pre-restore-时间戳/`（支持一键回滚），并自动将归档中的自定义图标路径与家目录路径修复映射为当前机器的用户目录；
      - [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/Settings/SettingsTabViews.swift)：在「常规」设置页新增「备份与恢复数据」卡片（支持导出备份、干跑校验导入恢复、一键回滚恢复前快照及一键清理失效启动项）。
 
+### 30. 修复 AutoQuitManager 关窗动画期间多通知并发消耗 recheckCounts 防重入缺陷与 TextEdit 零窗识别 (2026-10-15)
 
-
-
-
-
-
+- **问题根因**：
+  1. `AutoQuitManager` 对每个受监控应用同时注册了应用级 `kAXWindowClosedNotification`、应用级 `kAXUIElementDestroyedNotification` 及窗口级 `kAXUIElementDestroyedNotification`。点击红叉关闭窗口时，2～3 个通知在同一毫秒内并发触发 `evaluateAppWindowsLocked(pid:)`，而此时 macOS 窗口关闭淡出动画（约 250ms～350ms）尚未结束（`axCount == 0` 但 `WindowServer` 的 `wsCount` 仍为 `1`），导致同一帧内瞬间耗尽 `recheckCounts` 配额并调用 `cancelPendingQuitLocked(pid)`。
+  2. 部分原生 Cocoa 应用（如 `TextEdit`）在关闭最后一个窗口或打开面板后，`kAXWindowsAttribute` 可能返回 `.noValue`（`-25212`），此前被当作 AX 查询失败（`nil`）处理。
+- **修复细节**（[`AutoQuitManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/System/AutoQuitManager.swift)）：
+  - 新增 `pendingRechecks: [pid_t: DispatchWorkItem]` 防重入锁与 `cancelPendingRecheckLocked(_:)`：当 `axCount == 0 && wsCount > 0` 且已有排队中的延迟复查任务时直接合并忽略，不再重复扣减 `recheckCounts`，并将复查窗口调整为最多 `5` 次 × `0.12s`（覆盖 `600ms` 关窗动画期）；
+  - 在 `kAXWindowCreatedNotification` 收到标准业务窗口元素或收到明确 `kAXWindowClosedNotification` / 已注册窗口销毁通知时，自动补全 `entry.hadWindows = true`；
+  - 在 `axWindows(of:)` 中当 `kAXWindowsAttribute` 返回 `.noValue` 且应用级 `kAXRoleAttribute` 正常响应时，返回空窗口列表 `[]`（确认 0 窗）。
 

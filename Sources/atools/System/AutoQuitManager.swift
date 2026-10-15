@@ -50,6 +50,7 @@ public final class AutoQuitManager {
 
     private var watched: [pid_t: WatchedApp] = [:]
     private var pendingQuits: [pid_t: DispatchWorkItem] = [:]
+    private var pendingRechecks: [pid_t: DispatchWorkItem] = [:]
     private var terminatingPids: Set<pid_t> = []
     private var recheckCounts: [pid_t: Int] = [:]
     private var fallbackTimer: Timer?
@@ -333,6 +334,10 @@ public final class AutoQuitManager {
             work.cancel()
         }
         pendingQuits.removeAll()
+        for work in pendingRechecks.values {
+            work.cancel()
+        }
+        pendingRechecks.removeAll()
         terminatingPids.removeAll()
         recheckCounts.removeAll()
         for entry in watched.values {
@@ -446,6 +451,7 @@ public final class AutoQuitManager {
         if notificationName == kAXWindowCreatedNotification as String {
             terminatingPids.remove(pid)
             recheckCounts.removeValue(forKey: pid)
+            cancelPendingRecheckLocked(pid)
             // 新窗口：注册其销毁通知；若窗口重新出现，取消挂起的退出
             if !entry.registeredWindowRefs.contains(where: { CFEqual($0, element) }) {
                 if AXObserverAddNotification(entry.observer, element, kAXUIElementDestroyedNotification as CFString, nil) == .success {
@@ -453,20 +459,21 @@ public final class AutoQuitManager {
                 }
             }
             let axCount = axWindows(of: entry.axApp)?.count
-            if (axCount ?? 0) > 0 {
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+            if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 || isStandardBusinessWindow(element) {
                 entry.hadWindows = true
                 watched[pid] = entry
                 cancelPendingQuitLocked(pid)
-            } else {
-                let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
-                if (wsCount ?? 0) > 0 {
-                    entry.hadWindows = true
-                    watched[pid] = entry
-                    cancelPendingQuitLocked(pid)
-                }
             }
         } else if notificationName == (kAXWindowClosedNotification as String)
                     || notificationName == (kAXUIElementDestroyedNotification as String) {
+            if !entry.hadWindows {
+                let isKnownWindow = entry.registeredWindowRefs.contains(where: { CFEqual($0, element) })
+                if notificationName == (kAXWindowClosedNotification as String) || isKnownWindow {
+                    entry.hadWindows = true
+                    watched[pid] = entry
+                }
+            }
             guard entry.hadWindows else { return }
             evaluateAppWindowsLocked(pid: pid)
         }
@@ -519,19 +526,31 @@ public final class AutoQuitManager {
 
         if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) {
             recheckCounts.removeValue(forKey: pid)
+            cancelPendingRecheckLocked(pid)
             scheduleQuitLocked(pid, app: entry.app)
         } else if axCount == 0 && (wsCount ?? 0) > 0 {
-            // AX 报告无窗但 WindowServer 仍有在屏标准窗口（处于淡出动画或临时图层中），至多重试 2 次微复查，防范无休止轮询
+            // 防重入保护：点击红叉时 AXWindowClosed 与 AXUIElementDestroyed 往往在同一毫秒并发到达；
+            // 若当前已有排队中的延迟复查任务，直接合并忽略，防止同一帧内把 recheckCounts 配额瞬间耗尽。
+            guard pendingRechecks[pid] == nil else { return }
+
+            // AX 报告无窗但 WindowServer 仍有在屏标准窗口（处于 250ms~350ms 淡出关闭动画或临时图层中），
+            // 至多重试 5 次（每次间隔 0.12s，共覆盖 600ms 关闭动画窗口期），防范无休止轮询同时确保关闭动画结束后准确触发退出。
             let attempts = recheckCounts[pid, default: 0]
-            if attempts < 2 {
+            if attempts < 5 {
                 recheckCounts[pid] = attempts + 1
                 if pendingQuits[pid] == nil && !terminatingPids.contains(pid) {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                        self?.evaluateAppWindows(pid: pid)
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self = self else { return }
+                        os_unfair_lock_lock(&self.lock)
+                        self.pendingRechecks.removeValue(forKey: pid)
+                        os_unfair_lock_unlock(&self.lock)
+                        self.evaluateAppWindows(pid: pid)
                     }
+                    pendingRechecks[pid] = work
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
                 }
             } else {
-                // 超过重试上限后，WindowServer 依然确证存在在屏标准窗口！这证明该窗口真实存在且未被用户关闭！
+                // 超过重试上限（600ms）后，WindowServer 依然确证存在在屏标准窗口！这证明该窗口真实存在且未被用户关闭！
                 // 绝对不能退出！清除重试计数并撤销退出调度，安全保护后台运行或失焦的应用。
                 recheckCounts.removeValue(forKey: pid)
                 cancelPendingQuitLocked(pid)
@@ -550,7 +569,10 @@ public final class AutoQuitManager {
         
         let pids = Array(watched.keys)
         for pid in pids {
-            guard var entry = watched[pid], pendingQuits[pid] == nil && !terminatingPids.contains(pid) else { continue }
+            guard var entry = watched[pid],
+                  pendingQuits[pid] == nil,
+                  pendingRechecks[pid] == nil,
+                  !terminatingPids.contains(pid) else { continue }
             if !entry.hadWindows {
                 let axCount = axWindows(of: entry.axApp)?.count
                 let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
@@ -645,12 +667,20 @@ public final class AutoQuitManager {
 
         terminatingPids.insert(pid)
         recheckCounts.removeValue(forKey: pid)
+        cancelPendingRecheckLocked(pid)
         runtimeLog("[AutoQuit] Terminating \(app.localizedName ?? "pid \(pid)") after last window closed.")
         app.terminate()
     }
 
+    private func cancelPendingRecheckLocked(_ pid: pid_t) {
+        if let work = pendingRechecks.removeValue(forKey: pid) {
+            work.cancel()
+        }
+    }
+
     private func cancelPendingQuitLocked(_ pid: pid_t) {
         recheckCounts.removeValue(forKey: pid)
+        cancelPendingRecheckLocked(pid)
         if let work = pendingQuits.removeValue(forKey: pid) {
             work.cancel()
         }
@@ -683,6 +713,15 @@ public final class AutoQuitManager {
                         }
                     }
                 }
+            }
+        }
+
+        // 部分原生 Cocoa 应用（如 TextEdit）在最后一个窗口或打开面板关闭后，kAXWindowsAttribute 可能返回 .noValue；
+        // 若其应用级 AXRole 仍正常响应，说明 AX 服务在线且当前确无窗口，应视为空窗口列表 [] 而非查询失败 nil。
+        if err == .noValue && result.isEmpty {
+            var appRole: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &appRole) == .success {
+                return []
             }
         }
 

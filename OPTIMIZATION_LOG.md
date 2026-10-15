@@ -73,3 +73,15 @@
   - `[3/7]` 主题切换与默认透明度（40% / 90%）联动测试通过；
   - `[8/8]` 偏好设置窗口全标签页 **780.0pt 几何宽度不变性** 严格通过；
   - `[13]` P0 新增专项诊断测试（参数/标签分词解析、自定义图标归一化托管与加载、失效项扫描/重定位保序/一键清理、备份导出/干跑防损坏拦截/跨机路径自愈/pre-restore 快照回滚）**100% 全部通过**。
+
+---
+
+### 四、专项修复：AutoQuit 关窗动画期间多通知并发防重入与 TextEdit 零窗识别优化 (2026-10-15)
+
+- **修复文件**：`Sources/atools/System/AutoQuitManager.swift`
+- **修复内容**：
+  1. **新增 `pendingRechecks` 延迟复查防重入锁**：点击红叉关闭窗口时，`kAXWindowClosedNotification` 与应用级/窗口级 `kAXUIElementDestroyedNotification` 往往在同一毫秒内并发到达。新增 `pendingRechecks: [pid_t: DispatchWorkItem]` 队列去重保护：若当前 `pid` 已有排队中的关闭动画复查任务，后续并发通知直接合并忽略，不再重复递增 `recheckCounts[pid]`。
+  2. **扩展关闭淡出动画复查窗口期**：将 `axCount == 0 && wsCount > 0`（AX 已确认无窗但 WindowServer 仍处于 macOS 250ms～350ms 关窗淡出动画中）的重试配额调整为最多 `5` 次 × `0.12s`（覆盖 `600ms` 动画期），并在确认零窗、新建窗口或取消退出时联动清理 `pendingRechecks`。
+  3. **补全 `hadWindows` 状态与 `.noValue` 零窗判定**：
+     - 在 `kAXWindowCreatedNotification` 收到标准业务窗口元素，或收到明确 `kAXWindowClosedNotification` / 已注册窗口销毁通知时，确保 `entry.hadWindows = true` 被可靠标记；
+     - 在 `axWindows(of:)` 中兼容原生 Cocoa 应用（如 `TextEdit`）在关闭最后一个窗口或打开面板后 `kAXWindowsAttribute` 返回 `AXError.noValue` 的情况：只要应用级 `kAXRoleAttribute` 正常响应，即确认为空窗口列表 `[]`（0 窗），避免误判为 AX 故障（`nil`）而漏退。
