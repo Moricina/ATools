@@ -1955,6 +1955,31 @@ if CommandLine.arguments.contains("--login-item") {
     exit(0)
 }
 
+// 启动前自愈清理：自动终止任何残留的旧版或半启动僵尸 ATools 进程（如 isFinishedLaunching == false 的卡死实例），
+// 防止 LaunchServices 因旧进程可执行文件 vnode 失效而报错“应用程序 ATools.app 已不能再打开”。
+do {
+    let myPid = getpid()
+    for running in NSWorkspace.shared.runningApplications {
+        let pid = running.processIdentifier
+        guard pid != myPid, pid > 0 else { continue }
+        let bid = running.bundleIdentifier ?? ""
+        let name = running.localizedName ?? ""
+        let execName = running.executableURL?.lastPathComponent ?? ""
+        if bid.hasPrefix("cc.atools.app") || name == "ATools" || execName == "ATools" {
+            if !running.isFinishedLaunching {
+                _ = kill(pid, SIGKILL)
+            } else {
+                _ = running.terminate()
+                _ = kill(pid, SIGTERM)
+                usleep(120_000)
+                if !running.isTerminated {
+                    _ = kill(pid, SIGKILL)
+                }
+            }
+        }
+    }
+}
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

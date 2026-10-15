@@ -104,6 +104,8 @@ cat << EOF > "$CONTENTS/Info.plist"
     <string>12.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>LSMultipleInstancesProhibited</key>
+    <false/>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>

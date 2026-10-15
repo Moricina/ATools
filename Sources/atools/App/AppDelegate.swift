@@ -305,6 +305,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.terminate(nil)
     }
 
+    public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if ConfigManager.shared.config.enableShelfPanel {
+            PanelCoordinator.shared.showShelfPanel()
+        } else {
+            SettingsWindowController.shared.showSettingsWindow()
+        }
+        return true
+    }
+
     public func applicationWillTerminate(_ notification: Notification) {
         AutoQuitManager.shared.stop()
         ConfigManager.shared.flushPendingSave()
