@@ -2276,7 +2276,7 @@
        - 自动安全快照与跨机路径自愈（`restoreBackup(from:)`）：恢复前自动将当前配置与图标快照至 `backups/pre-restore-时间戳/`（支持一键回滚），并自动将归档中的自定义图标路径与家目录路径修复映射为当前机器的用户目录；
      - [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/Settings/SettingsTabViews.swift)：在「常规」设置页新增「备份与恢复数据」卡片（支持导出备份、干跑校验导入恢复、一键回滚恢复前快照及一键清理失效启动项）。
 
-### 30. 修复 AutoQuitManager 关窗动画期间多通知并发消耗 recheckCounts 防重入缺陷与 TextEdit 零窗识别 (2026-10-15)
+### 65. 修复 AutoQuitManager 关窗动画期间多通知并发消耗 recheckCounts 防重入缺陷与 TextEdit 零窗识别 (2026-10-15)
 
 - **问题根因**：
   1. `AutoQuitManager` 对每个受监控应用同时注册了应用级 `kAXWindowClosedNotification`、应用级 `kAXUIElementDestroyedNotification` 及窗口级 `kAXUIElementDestroyedNotification`。点击红叉关闭窗口时，2～3 个通知在同一毫秒内并发触发 `evaluateAppWindowsLocked(pid:)`，而此时 macOS 窗口关闭淡出动画（约 250ms～350ms）尚未结束（`axCount == 0` 但 `WindowServer` 的 `wsCount` 仍为 `1`），导致同一帧内瞬间耗尽 `recheckCounts` 配额并调用 `cancelPendingQuitLocked(pid)`。
@@ -2286,7 +2286,7 @@
   - 在 `kAXWindowCreatedNotification` 收到标准业务窗口元素或收到明确 `kAXWindowClosedNotification` / 已注册窗口销毁通知时，自动补全 `entry.hadWindows = true`；
   - 在 `axWindows(of:)` 中当 `kAXWindowsAttribute` 返回 `.noValue` 且应用级 `kAXRoleAttribute` 正常响应时，返回空窗口列表 `[]`（确认 0 窗）。
 
-### 31. 应用抽屉空白区域右键菜单新增「新建项目...」与「一键清理失效项」 (2026-10-15)
+### 66. 应用抽屉空白区域右键菜单新增「新建项目...」与「一键清理失效项」 (2026-10-15)
 
 - **优化内容**：
   1. **抽屉空白面板右键菜单扩展**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)）：
@@ -2297,7 +2297,7 @@
   3. **抽屉内一键清理全部失效项目并回收孤立托管图标**（[`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)）：
      - 点击「一键清理失效项」执行与设置页完全一致的 `ConfigManager.shared.scanMissingItems()` 预览确认弹窗及 `ConfigManager.shared.removeAllMissingItems()`，一键清理全部失效启动项并自动回收孤立的托管自定义图标，随后即时刷新抽屉视图。
 
-### 32. 借鉴 GlassDesk 实现应用抽屉实时平滑让位、长按 350ms 起拖、Alt 快速交换、Esc 撤销还原与双指横向翻页 (2026-10-15)
+### 67. 借鉴 GlassDesk 实现应用抽屉实时平滑让位、长按 350ms 起拖、Alt 快速交换、Esc 撤销还原与双指横向翻页 (2026-10-15)
 
 - **优化内容**：
   1. **长按 350ms 浮起反馈 + 快速拖拽双模响应**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)）：
@@ -2314,7 +2314,7 @@
      - 在 `ShelfGridView.scrollWheel(with:)` 中识别触控板双指横向滑动手势，联动 `CategoryBarView.moveSelection(by:)` 与 `playCategoryPageTransition(direction:)` 实现左右滑动切换分类；
      - 在 `CategoryBarView` 中新增拖拽悬停分类胶囊 `420ms` 自动切页（Spring-loaded Category Pill）。
 
-### 33. 修复跨分类拖拽后图标文字重叠缺陷并新增跨分类拖入实时平滑让位动画 (2026-10-15)
+### 68. 修复跨分类拖拽后图标文字重叠缺陷并新增跨分类拖入实时平滑让位动画 (2026-10-15)
 
 - **问题根因**：
   1. **跨分类拖拽后文字与图标重叠**：从分类 A 起拖并悬停切换到分类 B 时，`ShelfGridView.reloadData(items:)` 未清理分类 A 的 `dragOriginalItems` 与 `dragOriginalButtons` 快照；拖拽结束时旧分类 A 的按钮数组被回写，导致分类 A 与分类 B 的两套 `ShelfItemButton` 同时留在 `contentView.subviews` 的同一网格坐标上重叠显示。
@@ -2323,4 +2323,28 @@
   - 在 `reloadData(items:)` 入口调用 `resetDragPreviewSnapshotBeforeReload()` 清空旧分类拖拽快照，并在构建 `newButtons` 后严格遍历 `contentView.subviews` 移除所有不在 `newButtons` 中的 `ShelfItemButton`，彻底根除双层按钮/文字重叠；
   - 新增 `beginCrossCategoryDragPreview(for:)` 与 `applyCrossCategoryLivePreview(targetIndex:ghostButton:)`：当把应用拖入其他分类网格时，自动生成半透明虚影占位槽（`crossCategoryGhostButton`），指针移动时目标分类周围图标实时丝滑让位滑入新位置；
   - 扩展 `ConfigManager.moveItem(id:toCategoryId:at:)` 支持跨分类移动并一步插入目标槽位索引。
+
+### 69. 正式发布 ATools v1.3.16 (build 41)：启动项深度属性编辑器、失效项目自愈维护、配置备份回滚与抽屉丝滑让位手势交互 (2026-10-15, build 41)
+
+- **版本发布概述**：
+  - 正式将应用版本由 `1.3.15 (build 40)` 提升至 **`1.3.16 (build 41)`**；
+  - 完整打包并发布第 63~68 次迭代的重大架构升级、资产管理自愈体系与前沿交互创新：
+    1. **启动项深度属性编辑器（P0-1）**：支持可视化编辑应用显示名称、自定义启动参数/环境变量、工作目录、拼音/多音字搜索标签（Tags），并支持一键导入并托管自定义图标（`.png`/`.icns`/`.jpg`/`.app` 提取）；
+    2. **失效启动项感知与自愈维护（P0-2）**：抽屉加载与设置面板全链路实时检测目标文件存活状态；失效项目智能灰阶化并呈现警示角标，提供「重新定位目标...」与「一键清理失效项」引导；
+    3. **自描述配置备份、干跑预校验与快照回滚（P0-3）**：支持完整导出包含 `config.json` 与托管自定义图标的 `.atoolsbackup` 归档包；导入恢复前执行内存深度校验防损坏，恢复前自动创建本地快照支持一键回滚，并自愈跨机器家目录迁移路径；
+    4. **抽屉极速响应与右键菜单扩展**：空白面板右键直达「新建项目...」与「一键清理失效项」，创建即可直接配置属性；
+    5. **丝滑让位排版与专业手势操控**：引入 350ms 长按浮起微反馈、纯几何反算 + 14% 磁滞防抖实时插队占位、跨分类拖入实时虚影让位、Alt 快速对调、Esc/拖出取消回滚，以及双指横向滑动翻页与胶囊悬停 420ms 自动切页；
+    6. **单实例生命周期与关窗退出加固**：启动时自动清理历史僵尸进程防 `-10827` 启动失败，强化 `AutoQuitManager` AX 并发防抖与 `TextEdit` 零窗状态感知；
+    7. **全盘搜索光学居中**：垂直下沉 1.0pt 消除汉字视觉重心上浮，与放大镜图标严密光学居中对齐。
+- **涉及文件**：
+  - `Scripts/package_app.sh`：版本号提升至 `1.3.16`，构建编号升级至 `41`；
+  - `RELEASING.md`：同步更新发布版本号为 `1.3.16 (build 41)`；
+  - `Sources/atools/Storage/BackupService.swift`：版本号默认回退值对齐升级至 `1.3.16`；
+  - `Sources/CHANGELOG-优化记录.md`：建立版本正式发布历史存档。
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：
+    * 13 大项自动化测试**100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 打包并签名，生成 `ATools.app`、`ATools.zip`、`ATools.dmg` 及其 `.sig` 签名文件；
+  - 通过 GitHub CLI 发布 Release 并上传全部资产。
+
 

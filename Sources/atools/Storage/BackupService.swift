@@ -17,7 +17,7 @@ public struct BackupManifest: Codable, Equatable {
         formatVersion: Int = 1,
         minCompatibleConfigVersion: Int = 1,
         maxCompatibleConfigVersion: Int = 10,
-        appVersion: String = "1.3.15",
+        appVersion: String = "1.3.16",
         createdAt: String,
         sourceUserHomePath: String,
         configSHA256: String,
@@ -193,7 +193,7 @@ public final class BackupService {
 
             let configSHA = Self.sha256Hex(of: configData)
             let totalItems = exportedConfig.categories.reduce(0) { $0 + $1.items.count }
-            let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.15"
+            let appVer = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.3.16"
             let homePath = sourceHomeOverride ?? NSHomeDirectory()
 
             // 3. 生成并写入 manifest.json
