@@ -85,3 +85,20 @@
   3. **补全 `hadWindows` 状态与 `.noValue` 零窗判定**：
      - 在 `kAXWindowCreatedNotification` 收到标准业务窗口元素，或收到明确 `kAXWindowClosedNotification` / 已注册窗口销毁通知时，确保 `entry.hadWindows = true` 被可靠标记；
      - 在 `axWindows(of:)` 中兼容原生 Cocoa 应用（如 `TextEdit`）在关闭最后一个窗口或打开面板后 `kAXWindowsAttribute` 返回 `AXError.noValue` 的情况：只要应用级 `kAXRoleAttribute` 正常响应，即确认为空窗口列表 `[]`（0 窗），避免误判为 AX 故障（`nil`）而漏退。
+
+---
+
+### 五、专项优化：应用抽屉空白区域右键菜单新增「新建项目...」与「一键清理失效项」 (2026-10-15)
+
+- **涉及文件**：
+  - `Sources/atools/UI/ShelfGridView.swift`
+  - `Sources/atools/UI/ShelfPanel.swift`
+  - `Sources/atools/UI/LauncherItemEditorDialog.swift`
+- **优化详情**：
+  1. **抽屉空白区域右键菜单扩展（`ShelfGridView.swift`）**：
+     - 在右键抽屉空白面板弹出的 `ShelfGridMenu` 顶部新增 **「新建项目...」**（图标 `plus.app`）与 **「一键清理失效项」**（图标 `trash`，当存在失效项目时动态显示数量 `一键清理失效项 (N)`）。
+  2. **复用深度属性编辑器创建新启动项（`LauncherItemEditorDialog.swift` & `ShelfPanel.swift`）**：
+     - 新增 `LauncherItemEditorDialog.presentCreateNew(in:onCreated:)`，点击「新建项目...」直接弹出「编辑启动项属性」窗口；
+     - 支持点击右侧「选择目标...」选取 `.app` / 文件 / 文件夹或手动输入路径，若「显示名称」为空则自动提取本地化显示名称并实时刷新图标预览，保存时直接追加至当前激活分类。
+  3. **抽屉内一键清理全部失效项目并回收孤立托管图标（`ShelfPanel.swift`）**：
+     - 点击「一键清理失效项」时调用与设置页完全一致的 `ConfigManager.shared.scanMissingItems()` 预览确认弹窗及 `ConfigManager.shared.removeAllMissingItems()`，一键移除所有分类中的失效启动项、自动回收孤立的托管自定义图标并即时刷新抽屉面板。

@@ -6,6 +6,8 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem)
+    func shelfGridDidRequestCreateItem(_ grid: ShelfGridView)
+    func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView)
     func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String])
     func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int)
     func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int)
@@ -14,6 +16,8 @@ public protocol ShelfGridDelegate: AnyObject {
 public extension ShelfGridDelegate {
     func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem) {}
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem) {}
+    func shelfGridDidRequestCreateItem(_ grid: ShelfGridView) {}
+    func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {}
 }
 
 /// P0-2：失效启动项右上角黄色感叹号微标视图
@@ -882,6 +886,20 @@ public final class ShelfGridView: NSView {
     override public func rightMouseDown(with event: NSEvent) {
         let menu = NSMenu(title: "ShelfGridMenu")
 
+        let createItem = NSMenuItem(title: "新建项目...", action: #selector(contextCreateItem), keyEquivalent: "")
+        createItem.image = ThumbnailPipeline.shared.symbolIcon(name: "plus.app", pointSize: 13)
+        createItem.target = self
+        menu.addItem(createItem)
+
+        let missingCount = ConfigManager.shared.scanMissingItems().count
+        let cleanTitle = missingCount > 0 ? "一键清理失效项 (\(missingCount))" : "一键清理失效项"
+        let cleanItem = NSMenuItem(title: cleanTitle, action: #selector(contextCleanMissingItems), keyEquivalent: "")
+        cleanItem.image = ThumbnailPipeline.shared.symbolIcon(name: "trash", pointSize: 13)
+        cleanItem.target = self
+        menu.addItem(cleanItem)
+
+        menu.addItem(NSMenuItem.separator())
+
         let isPinned = PanelCoordinator.shared.isShelfPinned
         let pinItem = NSMenuItem(
             title: isPinned ? "✓ 固定在桌面" : "固定在桌面",
@@ -903,6 +921,14 @@ public final class ShelfGridView: NSView {
         menu.addItem(closeItem)
 
         NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc private func contextCreateItem() {
+        delegate?.shelfGridDidRequestCreateItem(self)
+    }
+
+    @objc private func contextCleanMissingItems() {
+        delegate?.shelfGridDidRequestCleanMissingItems(self)
     }
 
     @objc private func contextTogglePin() {

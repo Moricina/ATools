@@ -2286,3 +2286,14 @@
   - 在 `kAXWindowCreatedNotification` 收到标准业务窗口元素或收到明确 `kAXWindowClosedNotification` / 已注册窗口销毁通知时，自动补全 `entry.hadWindows = true`；
   - 在 `axWindows(of:)` 中当 `kAXWindowsAttribute` 返回 `.noValue` 且应用级 `kAXRoleAttribute` 正常响应时，返回空窗口列表 `[]`（确认 0 窗）。
 
+### 31. 应用抽屉空白区域右键菜单新增「新建项目...」与「一键清理失效项」 (2026-10-15)
+
+- **优化内容**：
+  1. **抽屉空白面板右键菜单扩展**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 在右键抽屉空白区域弹出的菜单顶部新增 **「新建项目...」**（图标 `plus.app`）与 **「一键清理失效项」**（图标 `trash`，当检测到失效项目时动态显示数量 `一键清理失效项 (N)`）。
+  2. **通过启动项属性编辑器直接新建项目**（[`LauncherItemEditorDialog.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/LauncherItemEditorDialog.swift) & [`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)）：
+     - 新增 `LauncherItemEditorDialog.presentCreateNew(in:onCreated:)`，点击「新建项目...」直接弹出「编辑启动项属性」窗口；
+     - 支持点击「选择目标...」选取 `.app`、文件或脚本（或直接输入路径），自动回填本地化显示名称与默认图标预览，并可一并配置自定义图标、启动参数、工作目录与搜索别名，保存后自动加入当前所在分类。
+  3. **抽屉内一键清理全部失效项目并回收孤立托管图标**（[`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)）：
+     - 点击「一键清理失效项」执行与设置页完全一致的 `ConfigManager.shared.scanMissingItems()` 预览确认弹窗及 `ConfigManager.shared.removeAllMissingItems()`，一键清理全部失效启动项并自动回收孤立的托管自定义图标，随后即时刷新抽屉视图。
+

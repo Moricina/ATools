@@ -3,10 +3,11 @@ import AppKit
 import UniformTypeIdentifiers
 
 /// P0-1：启动项深度属性编辑器弹窗（对标 GlassDesk AppEntryEditor.cs）
-/// 支持可视化修改显示名称、目标路径重定位、启动参数、工作目录、多音字/生僻字搜索别名标签（tags）及替换/恢复自定义图标。
-public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegate {
+/// 支持新建启动项或可视化修改现有启动项的显示名称、目标路径重定位、启动参数、工作目录、多音字/生僻字搜索别名标签（tags）及替换/恢复自定义图标。
+public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private var item: LauncherItem
     private let categoryId: UUID?
+    private let isCreatingNew: Bool
     private var onSaved: ((LauncherItem) -> Void)?
 
     // 暂存的图标变更状态（点击“保存修改”时才真正写入磁盘，点击“取消”零副作用）
@@ -35,7 +36,29 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         in categoryId: UUID? = nil,
         onSaved: ((LauncherItem) -> Void)? = nil
     ) {
-        let dialog = LauncherItemEditorDialog(item: item, categoryId: categoryId, onSaved: onSaved)
+        presentInternal(item: item, categoryId: categoryId, isCreatingNew: false, onSaved: onSaved)
+    }
+
+    public static func presentCreateNew(
+        in categoryId: UUID?,
+        onCreated: ((LauncherItem) -> Void)? = nil
+    ) {
+        let blankItem = LauncherItem(name: "", itemType: .application, target: "")
+        presentInternal(item: blankItem, categoryId: categoryId, isCreatingNew: true, onSaved: onCreated)
+    }
+
+    private static func presentInternal(
+        item: LauncherItem,
+        categoryId: UUID?,
+        isCreatingNew: Bool,
+        onSaved: ((LauncherItem) -> Void)?
+    ) {
+        let dialog = LauncherItemEditorDialog(
+            item: item,
+            categoryId: categoryId,
+            isCreatingNew: isCreatingNew,
+            onSaved: onSaved
+        )
         activeDialog = dialog
 
         guard let win = dialog.window else { return }
@@ -52,9 +75,15 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         NSApp.runModal(for: win)
     }
 
-    private init(item: LauncherItem, categoryId: UUID?, onSaved: ((LauncherItem) -> Void)?) {
+    private init(
+        item: LauncherItem,
+        categoryId: UUID?,
+        isCreatingNew: Bool,
+        onSaved: ((LauncherItem) -> Void)?
+    ) {
         self.item = item
         self.categoryId = categoryId
+        self.isCreatingNew = isCreatingNew
         self.onSaved = onSaved
 
         let contentRect = NSRect(x: 0, y: 0, width: 500, height: 440)
@@ -64,7 +93,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
             backing: .buffered,
             defer: false
         )
-        win.title = "编辑项目属性"
+        win.title = "编辑启动项属性"
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
@@ -147,7 +176,9 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
 
         let targetLabel = makeFieldLabel("目标路径：")
         configureTextField(targetField, placeholder: "/Applications/Example.app")
-        relocateButton = SettingsPillButton(title: "重新定位...", target: self, action: #selector(relocateTargetClicked))
+        targetField.delegate = self
+        let initialTargetBtnTitle = (isCreatingNew && item.target.isEmpty) ? "选择目标..." : "重新定位..."
+        relocateButton = SettingsPillButton(title: initialTargetBtnTitle, target: self, action: #selector(relocateTargetClicked))
         relocateButton.translatesAutoresizingMaskIntoConstraints = false
 
         targetMissingBadge.translatesAutoresizingMaskIntoConstraints = false
@@ -308,7 +339,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
             cancelBtn.centerYAnchor.constraint(equalTo: saveBtn.centerYAnchor)
         ])
 
-        window?.initialFirstResponder = nameField
+        window?.initialFirstResponder = isCreatingNew ? targetField : nameField
     }
 
     private func makeFieldLabel(_ text: String) -> NSTextField {
@@ -343,6 +374,28 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         refreshTargetValidationState()
     }
 
+    public func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === targetField else { return }
+        let trimmedTarget = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTarget.isEmpty {
+            let expanded = (trimmedTarget as NSString).expandingTildeInPath
+            if nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               FileManager.default.fileExists(atPath: expanded) {
+                nameField.stringValue = Self.defaultDisplayName(forPath: expanded)
+            }
+        }
+        refreshTargetValidationState()
+        refreshIconPreview()
+    }
+
+    private static func defaultDisplayName(forPath path: String) -> String {
+        var displayName = FileManager.default.displayName(atPath: path)
+        if displayName.lowercased().hasSuffix(".app") {
+            displayName = (displayName as NSString).deletingPathExtension
+        }
+        return displayName
+    }
+
     private func refreshIconPreview() {
         let effectiveCustomPath: String?
         if let stagedURL = pendingCustomIconSourceURL {
@@ -355,7 +408,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
 
         let currentTarget = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? item.target
-            : targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            : (targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) as NSString).expandingTildeInPath
 
         if let custom = effectiveCustomPath, !custom.isEmpty, FileManager.default.fileExists(atPath: custom) {
             resetIconButton.isEnabled = true
@@ -365,6 +418,11 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
             iconStatusLabel.stringValue = "当前使用系统默认图标（支持选择 .png / .icns / .app 替换）"
         }
 
+        if currentTarget.isEmpty && effectiveCustomPath == nil {
+            iconImageView.image = ThumbnailPipeline.shared.symbolIcon(name: "app.dashed", pointSize: 36)
+            return
+        }
+
         ThumbnailPipeline.shared.icon(forPath: currentTarget, customIconPath: effectiveCustomPath) { [weak self] img in
             self?.iconImageView.image = img
         }
@@ -372,10 +430,15 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
 
     private func refreshTargetValidationState() {
         let path = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isCreatingNew && path.isEmpty {
+            targetMissingBadge.isHidden = true
+            return
+        }
         var tempItem = item
-        tempItem.target = path
+        tempItem.target = (path as NSString).expandingTildeInPath
         if tempItem.checkTargetMissing() {
-            targetMissingBadge.stringValue = "⚠️ 当前目标路径不存在，请点击右侧「重新定位...」修复路径"
+            let btnTitle = (isCreatingNew && item.target.isEmpty) ? "选择目标..." : "重新定位..."
+            targetMissingBadge.stringValue = "⚠️ 当前目标路径不存在，请点击右侧「\(btnTitle)」修复路径"
             targetMissingBadge.isHidden = false
         } else {
             targetMissingBadge.isHidden = true
@@ -407,22 +470,30 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
 
     @objc private func relocateTargetClicked() {
         let panel = NSOpenPanel()
-        panel.title = "重新定位启动项「\(item.name)」的目标文件或应用"
+        if isCreatingNew || item.name.isEmpty {
+            panel.title = "选择启动项的目标应用、文件或脚本"
+        } else {
+            panel.title = "重新定位启动项「\(item.name)」的目标文件或应用"
+        }
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.treatsFilePackagesAsDirectories = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)
 
-        let existingParent = (targetField.stringValue as NSString).deletingLastPathComponent
-        if FileManager.default.fileExists(atPath: existingParent) {
-            panel.directoryURL = URL(fileURLWithPath: existingParent)
+        let existingParent = (targetField.stringValue as NSString).expandingTildeInPath
+        let parentDir = (existingParent as NSString).deletingLastPathComponent
+        if !existingParent.isEmpty, FileManager.default.fileExists(atPath: parentDir) {
+            panel.directoryURL = URL(fileURLWithPath: parentDir)
         } else {
             panel.directoryURL = URL(fileURLWithPath: "/Applications")
         }
 
         if panel.runModal() == .OK, let url = panel.url {
             targetField.stringValue = url.path
+            if nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                nameField.stringValue = Self.defaultDisplayName(forPath: url.path)
+            }
             refreshTargetValidationState()
             refreshIconPreview()
         }
@@ -446,16 +517,29 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
     }
 
     @objc private func saveClicked() {
-        let trimmedName = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTarget = targetField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedName.isEmpty, !trimmedTarget.isEmpty else {
+        guard !trimmedTarget.isEmpty else {
             NSSound.beep()
+            window?.makeFirstResponder(targetField)
+            return
+        }
+        let standardizedTarget = (trimmedTarget as NSString).expandingTildeInPath
+        var trimmedName = nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedName.isEmpty {
+            trimmedName = Self.defaultDisplayName(forPath: standardizedTarget)
+            if trimmedName.isEmpty {
+                trimmedName = (standardizedTarget as NSString).lastPathComponent
+            }
+        }
+        guard !trimmedName.isEmpty else {
+            NSSound.beep()
+            window?.makeFirstResponder(nameField)
             return
         }
 
         var updated = item
         updated.name = trimmedName
-        updated.target = (trimmedTarget as NSString).standardizingPath
+        updated.target = standardizedTarget
         if updated.itemType == .application || updated.itemType == .fileOrFolder {
             updated.itemType = updated.target.lowercased().hasSuffix(".app") ? .application : .fileOrFolder
         }
@@ -472,7 +556,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         // 处理启动参数与工作目录
         let parsedArgs = ExecutionContext.parseArguments(argumentsField.stringValue)
         let rawWD = workingDirField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedWD = rawWD.isEmpty ? nil : (rawWD as NSString).standardizingPath
+        let normalizedWD = rawWD.isEmpty ? nil : (rawWD as NSString).expandingTildeInPath
 
         var ctx = updated.executionContext ?? ExecutionContext()
         ctx.arguments = parsedArgs
@@ -482,7 +566,14 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         // 处理搜索别名标签 (tags)
         updated.tags = LauncherItem.parseTags(tagsField.stringValue)
 
-        ConfigManager.shared.updateItem(updated, in: categoryId)
+        if isCreatingNew {
+            let targetCatId = categoryId ?? ConfigManager.shared.config.categories.first?.id
+            if let catId = targetCatId {
+                ConfigManager.shared.addItems([updated], to: catId)
+            }
+        } else {
+            ConfigManager.shared.updateItem(updated, in: categoryId)
+        }
         let callback = onSaved
         closeDialog()
         callback?(updated)

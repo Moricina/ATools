@@ -840,6 +840,47 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         promptRelocateItem(item)
     }
 
+    public func shelfGridDidRequestCreateItem(_ grid: ShelfGridView) {
+        let targetCatId = selectedCategory?.id ?? ConfigManager.shared.config.categories.first?.id
+        LauncherItemEditorDialog.presentCreateNew(in: targetCatId) { [weak self] _ in
+            self?.loadData()
+        }
+    }
+
+    public func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {
+        PanelCoordinator.shared.isModalDialogOpen = true
+        defer { PanelCoordinator.shared.isModalDialogOpen = false }
+
+        let missing = ConfigManager.shared.scanMissingItems()
+        guard !missing.isEmpty else {
+            let alert = NSAlert()
+            alert.messageText = "无需清理"
+            alert.informativeText = "当前所有分类中的启动项路径均有效，未发现失效项目。"
+            alert.runModalAboveFloatingWindows()
+            return
+        }
+
+        let previewLines = missing.prefix(8).map { "• [\($0.category.name)] \($0.item.name) (\($0.item.target))" }.joined(separator: "\n")
+        let moreHint = missing.count > 8 ? "\n…等共 \(missing.count) 个失效项目" : ""
+
+        let alert = NSAlert()
+        alert.messageText = "确认一键清理 \(missing.count) 个失效启动项？"
+        alert.informativeText = "以下项目因软件卸载或文件移动已失效，清理后将从对应分类中移除并自动回收孤立托管图标：\n\n\(previewLines)\(moreHint)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "立即清理")
+        alert.addButton(withTitle: "取消")
+
+        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+            let removedCount = ConfigManager.shared.removeAllMissingItems()
+            loadData()
+            let done = NSAlert()
+            done.messageText = "清理完成"
+            done.informativeText = "已成功清理 \(removedCount) 个失效启动项，并已自动回收孤立托管图标。"
+            done.alertStyle = .informational
+            done.runModalAboveFloatingWindows()
+        }
+    }
+
     private func promptMissingItemAction(for item: LauncherItem) {
         PanelCoordinator.shared.isModalDialogOpen = true
         defer { PanelCoordinator.shared.isModalDialogOpen = false }
