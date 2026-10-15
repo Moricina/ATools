@@ -143,3 +143,23 @@
      - 指针在分类 B 网格内移动时，实时计算插入槽位（`0 ... origItems.count`），驱动分类 B 内的周围图标丝滑滑入新位置让出空位；若移出网格或按 `Esc` 则自动移除占位并平滑回弹。
   3. **跨分类指定槽位原子落盘（`ConfigManager.moveItem(id:toCategoryId:at:)`）**：
      - 扩展 `ConfigManager.moveItem` 支持一次性从源分类移除并直接插入目标分类的指定索引 `destinationIndex`，避免二次重排导致的跳变。
+
+---
+
+### 八、专项修复：应用抽屉「鼠标移出面板后自动关闭」失效修复与全链路交互排查加固 (2026-10-15)
+
+- **问题根因**：
+  1. **「固定在桌面」(`isShelfPinned`) 静默阻断「鼠标移出面板后自动关闭」与「点击启动应用后自动关闭」**：
+     - 在 `ShelfPanel.swift` 中，`mouseExited` 与 `didLaunchItem` 原先写有 `guard !PanelCoordinator.shared.isShelfPinned else { return }`，且调用 `hideShelfPanel()` 时未传 `forceHidePinned: true`。
+     - 当用户在右键菜单或设置页勾选过「固定在桌面」（其设计初衷是“不受失焦关闭影响”），随后又开启「鼠标移出面板后自动关闭」时，因 `isShelfPinned == true` 被直接静默拦截，导致鼠标移出面板完全不收起。
+  2. **`NSTrackingArea` 缺少 `.assumeInside` 导致在鼠标下方唤出或重排后不触发 `mouseExited`**：
+     - 抽屉唤出时通过 `positionPanelFollowMouse` 直接定位在鼠标正下方，且切换分类或网格重排触发 `viewDidLayout()` 时会重建 `NSTrackingArea`。由于未包含 `.assumeInside`，AppKit 默认视鼠标在外部，移出面板时不会触发 `mouseExited`。
+  3. **右键菜单关闭后或快速滑过滚动视图边缘漏发 `mouseExited`**：
+     - 打开右键菜单后将鼠标移出面板外再关闭菜单，AppKit 菜单事件循环消费了移动事件，菜单关闭后不会补发 `mouseExited`。
+  4. **其他潜在使用 Bug 排查修复**：
+     - **跨分类拖拽回源分类胶囊松手未切回源分类**：当从分类 A 拖出图标、悬停切到分类 B，随后又拖回分类 A 的胶囊上松手时，因 `moveItem` 对同分类返回 `false`，界面原本会停留在分类 B；现补全 `else if self.selectedCategory?.id != category.id` 自动切回源分类。
+     - **右键菜单切换「固定在桌面」时偏好设置开关实时同步**：在 `PanelCoordinator.isShelfPinned` 变更时广播 `.atoolsShelfDataDidChange`，确保打开中的偏好设置窗口实时刷新开关状态。
+- **修复文件**：
+  - `Sources/atools/UI/ShelfPanel.swift`
+  - `Sources/atools/UI/PanelCoordinator.swift`
+  - `Sources/atools/Storage/ConfigManager.swift`

@@ -530,6 +530,13 @@ public final class ConfigManager {
     public func updateAutoCloseOnMouseExit(_ enabled: Bool) {
         self.config.autoCloseOnMouseExit = enabled
         save()
+        if enabled {
+            if PanelCoordinator.shared.shelfPanel.isVisible {
+                PanelCoordinator.shared.shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
+            }
+        } else {
+            PanelCoordinator.shared.shelfPanel.shelfViewController.stopMouseExitMonitoring()
+        }
     }
 
     public func updateAutoCloseOnDeactivate(_ enabled: Bool) {

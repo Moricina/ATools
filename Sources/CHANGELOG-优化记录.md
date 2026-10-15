@@ -2498,10 +2498,18 @@
   - 执行 `./Scripts/package_app.sh` 打包并签名，生成 `ATools.app`、`ATools.zip`、`ATools.dmg` 及其 Ed25519 `.sig` 签名文件；
   - 通过 GitHub CLI 发布 Release 并上传全部发布资产。
 
+### 36. 修复应用抽屉「鼠标移出面板后自动关闭」失效并加固边缘交互边界 (2026-10-15)
 
-
-
-
-
-
+- **问题根因与排查结论**：
+  1. **「固定在桌面」(`isShelfPinned`) 静默拦截了「鼠标移出面板后自动关闭」与「点击启动应用后自动关闭」**：`ShelfPanel.swift` 的 `mouseExited` 与 `didLaunchItem` 原先包含 `guard !PanelCoordinator.shared.isShelfPinned else { return }`，且调用 `hideShelfPanel()` 未带 `forceHidePinned: true`。一旦用户勾选过「固定在桌面」（设计定位为“不受失焦关闭影响”），开启「鼠标移出面板后自动关闭」就会完全失效。
+  2. **`NSTrackingArea` 缺少 `.assumeInside`**：抽屉唤出时定位在鼠标正下方（`positionPanelFollowMouse`），且切换分类或重排触发 `viewDidLayout()` 时会重建 `NSTrackingArea`；因缺少 `.assumeInside`，AppKit 在鼠标已处于视图内时不会触发首次 `mouseExited`。
+  3. **右键菜单关闭后或快速划过滚动视图边缘漏发 `mouseExited`**：在面板内呼出右键菜单并将鼠标移到面板外关闭菜单后，AppKit 不会补发 `mouseExited`。
+  4. **其他潜在交互缺陷一并修复**：
+     - 跨分类拖拽图标经悬停切到分类 B 后，若又拖回源分类 A 的胶囊上松手，补全自动切回源分类 A 的状态同步；
+     - 在抽屉右键菜单切换「固定在桌面」时广播 `.atoolsShelfDataDidChange`，使打开中的偏好设置窗口实时同步开关状态；
+     - 在偏好设置中开启「鼠标移出面板后自动关闭」时，若抽屉当前已处于打开状态，立即热启动移出监测。
+- **修改文件**：
+  - [`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)
+  - [`PanelCoordinator.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/PanelCoordinator.swift)
+  - [`ConfigManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/ConfigManager.swift)
 

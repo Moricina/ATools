@@ -80,7 +80,7 @@ public final class PanelCoordinator {
 
     /// Tracks whether a right-click context menu is currently open, so that
     /// the panel is not dismissed when the user right-clicks on a grid item.
-    private var isRightClickMenuOpen: Bool = false
+    public private(set) var isRightClickMenuOpen: Bool = false
     /// Tracks whether a non-left mouse button is currently pressed (prevents
     /// dismissal on right/middle mouseDown; only dismisses on mouseUp).
     private var isNonLeftMouseDown: Bool = false
@@ -96,6 +96,7 @@ public final class PanelCoordinator {
             if shelfPanelCreated {
                 shelfPanel.shelfViewController.updatePinButtonState(isPinned: newValue)
             }
+            NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         }
     }
 
@@ -288,6 +289,7 @@ public final class PanelCoordinator {
         shelfPanel.makeKeyAndOrderFront(nil)
         shelfPanel.orderFrontRegardless()
         shelfPanel.makeKey()
+        shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
 
         activePanel = .shelf
         installGlobalOutsideClickMonitor()
@@ -299,6 +301,7 @@ public final class PanelCoordinator {
             runtimeLog("[Panel] hideShelfPanel ignored: shelf is pinned to desktop")
             return
         }
+        shelfPanel.shelfViewController.stopMouseExitMonitoring()
         panelPresentationGeneration &+= 1
         let generation = panelPresentationGeneration
         runtimeLog("[Panel] hideShelfPanel gen=\(generation) restoreFocus=\(restoreFocus) forceHidePinned=\(forceHidePinned)")

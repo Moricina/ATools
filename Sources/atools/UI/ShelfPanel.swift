@@ -419,12 +419,43 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     private var trackingArea: NSTrackingArea?
     private var mouseExitWorkItem: DispatchWorkItem?
+    private var mouseExitPollTimer: Timer?
+    private var hasMouseEnteredPanel: Bool = false
+
+    public func beginMouseExitMonitoringOnShow() {
+        mouseExitWorkItem?.cancel()
+        mouseExitWorkItem = nil
+        if let window = self.view.window {
+            hasMouseEnteredPanel = NSPointInRect(NSEvent.mouseLocation, window.frame)
+        } else {
+            hasMouseEnteredPanel = false
+        }
+        updateViewTrackingAreas()
+
+        mouseExitPollTimer?.invalidate()
+        let timer = Timer(timeInterval: 0.12, target: self, selector: #selector(pollMouseExitState), userInfo: nil, repeats: true)
+        RunLoop.main.add(timer, forMode: .common)
+        mouseExitPollTimer = timer
+    }
+
+    public func stopMouseExitMonitoring() {
+        mouseExitPollTimer?.invalidate()
+        mouseExitPollTimer = nil
+        mouseExitWorkItem?.cancel()
+        mouseExitWorkItem = nil
+        hasMouseEnteredPanel = false
+    }
 
     private func updateViewTrackingAreas() {
         if let existing = trackingArea { view.removeTrackingArea(existing) }
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        if let window = view.window, NSPointInRect(NSEvent.mouseLocation, window.frame) {
+            options.insert(.assumeInside)
+            hasMouseEnteredPanel = true
+        }
         let area = NSTrackingArea(
             rect: view.bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            options: options,
             owner: self,
             userInfo: nil
         )
@@ -433,26 +464,62 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     override public func mouseEntered(with event: NSEvent) {
+        hasMouseEnteredPanel = true
         mouseExitWorkItem?.cancel()
         mouseExitWorkItem = nil
     }
 
     override public func mouseExited(with event: NSEvent) {
+        hasMouseEnteredPanel = true
+        scheduleMouseExitAutoCloseIfNeeded()
+    }
+
+    @objc private func pollMouseExitState() {
+        guard let window = self.view.window, window.isVisible else {
+            stopMouseExitMonitoring()
+            return
+        }
+        guard ConfigManager.shared.config.autoCloseOnMouseExit else {
+            mouseExitWorkItem?.cancel()
+            mouseExitWorkItem = nil
+            return
+        }
+        if PanelCoordinator.shared.isDraggingActive
+            || NSEvent.pressedMouseButtons != 0
+            || NSApp.modalWindow != nil
+            || PanelCoordinator.shared.isModalDialogOpen
+            || PanelCoordinator.shared.isRightClickMenuOpen {
+            mouseExitWorkItem?.cancel()
+            mouseExitWorkItem = nil
+            return
+        }
+
+        let mouseLoc = NSEvent.mouseLocation
+        let isInside = NSPointInRect(mouseLoc, window.frame.insetBy(dx: -1, dy: -1))
+        if isInside {
+            hasMouseEnteredPanel = true
+            mouseExitWorkItem?.cancel()
+            mouseExitWorkItem = nil
+        } else if hasMouseEnteredPanel && mouseExitWorkItem == nil {
+            scheduleMouseExitAutoCloseIfNeeded()
+        }
+    }
+
+    private func scheduleMouseExitAutoCloseIfNeeded() {
         guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
         guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
-        guard !PanelCoordinator.shared.isShelfPinned else { return }
-        if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen { return }
+        if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isRightClickMenuOpen { return }
 
         mouseExitWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
+            self.mouseExitWorkItem = nil
             guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
             guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
-            guard !PanelCoordinator.shared.isShelfPinned else { return }
-            if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen { return }
+            if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isRightClickMenuOpen { return }
             let mouseLoc = NSEvent.mouseLocation
-            if let window = self.view.window, !NSPointInRect(mouseLoc, window.frame) {
-                PanelCoordinator.shared.hideShelfPanel()
+            if let window = self.view.window, window.isVisible, !NSPointInRect(mouseLoc, window.frame) {
+                PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
             }
         }
         mouseExitWorkItem = work
@@ -792,6 +859,10 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             self.selectedCategory = category
             loadData()
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+        } else if self.selectedCategory?.id != category.id {
+            // 若用户从源分类拖出后悬停切到了其他分类，但最终又拖回源分类胶囊松手，确保界面切回源分类
+            self.selectedCategory = category
+            loadData()
         }
     }
 
@@ -824,8 +895,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             promptMissingItemAction(for: item)
             return
         }
-        if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
-            PanelCoordinator.shared.hideShelfPanel()
+        if ConfigManager.shared.config.autoCloseOnLaunch {
+            PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
         }
         executeLauncherItem(item)
     }
