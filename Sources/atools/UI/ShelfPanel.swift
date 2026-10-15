@@ -936,6 +936,18 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         loadData()
     }
 
+    public func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int) {
+        guard let cat = selectedCategory else { return }
+        ConfigManager.shared.swapItems(at: indexA, and: indexB, in: cat.id)
+        loadData()
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {
+        if categoryBar.moveSelection(by: offset) {
+            shelfGrid.playCategoryPageTransition(direction: offset)
+        }
+    }
+
     public func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int) {
         guard let cat = selectedCategory else { return }
         if ConfigManager.shared.moveItem(id: id, toCategoryId: cat.id) {

@@ -627,6 +627,18 @@ public final class ConfigManager {
         save()
     }
 
+    /// Alt/Option 快速交换模式：直接交换同一分类下两个索引位置的启动项，其余项目位置保持不变。
+    public func swapItems(at indexA: Int, and indexB: Int, in categoryId: UUID) {
+        guard let catIdx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return }
+        var items = self.config.categories[catIdx].items
+        guard indexA != indexB,
+              items.indices.contains(indexA),
+              items.indices.contains(indexB) else { return }
+        items.swapAt(indexA, indexB)
+        self.config.categories[catIdx].items = items
+        save()
+    }
+
     /// Moves a launcher item between categories by its stable id, atomically removing it
     /// from the source category and appending it to the destination category.
     @discardableResult

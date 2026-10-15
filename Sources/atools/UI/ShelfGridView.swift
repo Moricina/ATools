@@ -10,7 +10,9 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView)
     func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String])
     func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int)
+    func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int)
     func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int)
+    func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int)
 }
 
 public extension ShelfGridDelegate {
@@ -18,6 +20,8 @@ public extension ShelfGridDelegate {
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem) {}
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView) {}
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {}
+    func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int) {}
+    func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {}
 }
 
 /// P0-2：失效启动项右上角黄色感叹号微标视图
@@ -101,6 +105,37 @@ public final class ShelfItemButton: NSControl {
 
     private var trackingArea: NSTrackingArea?
     private var mouseDownLocation: NSPoint?
+    private var longPressWorkItem: DispatchWorkItem?
+    private var isLongPressArmed: Bool = false {
+        didSet {
+            if oldValue != isLongPressArmed {
+                updateAppearanceStyles()
+            }
+        }
+    }
+    /// 标识当前图标是否正作为拖拽源在网格中充当半透明占位槽
+    public var isDraggingSource: Bool = false {
+        didSet {
+            if oldValue != isDraggingSource {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = window == nil ? 0 : 0.16
+                    ctx.allowsImplicitAnimation = true
+                    self.animator().alphaValue = isDraggingSource ? 0.22 : 1.0
+                }
+                updateAppearanceStyles()
+            }
+        }
+    }
+    /// Alt/Option 快速交换模式下高亮标记目标交换图标
+    public var isSwapTarget: Bool = false {
+        didSet {
+            if oldValue != isSwapTarget {
+                updateAppearanceStyles()
+            }
+        }
+    }
+    public var onDragSessionWillBegin: (() -> Void)?
+    public var onDragSessionDidEnd: ((NSDragOperation) -> Void)?
     /// Called when hover state changes so the parent grid can update keyboard selection.
     public var onHoverChanged: ((Bool) -> Void)?
     private var isHovered: Bool = false {
@@ -286,7 +321,18 @@ public final class ShelfItemButton: NSControl {
     internal func updateAppearanceStyles() {
         let isDark = glassIsDark
 
-        let scale: CGFloat = isPressed ? 0.98 : (isHovered ? 1.02 : 1.0)
+        let scale: CGFloat
+        if isLongPressArmed {
+            scale = 1.08
+        } else if isSwapTarget {
+            scale = 1.05
+        } else if isPressed {
+            scale = 0.98
+        } else if isHovered {
+            scale = 1.02
+        } else {
+            scale = 1.0
+        }
 
         // baseLayer is a standalone CALayer; without an explicit transaction every
         // style change picks up the default 0.25s implicit animation, so hover
@@ -295,9 +341,17 @@ public final class ShelfItemButton: NSControl {
         CATransaction.setAnimationDuration(window == nil ? 0 : 0.10)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
 
-        if isNativeLiquidTheme {
+        if isSwapTarget {
+            liquidBackdrop.isHidden = true
+            baseLayer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.26 : 0.18).cgColor
+            baseLayer.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
+            baseLayer.borderWidth = 1.5
+            baseLayer.shadowOpacity = 0.22
+            baseLayer.shadowRadius = 8
+            baseLayer.opacity = 1.0
+        } else if isNativeLiquidTheme {
             baseLayer.opacity = 0.0
-            if isSelected {
+            if isSelected || isLongPressArmed {
                 liquidBackdrop.isHidden = false
                 liquidBackdrop.isDark = isDark
                 liquidBackdrop.isSelected = true
@@ -320,7 +374,7 @@ public final class ShelfItemButton: NSControl {
             }
         } else {
             liquidBackdrop.isHidden = true
-            if isSelected {
+            if isSelected || isLongPressArmed {
                 baseLayer.backgroundColor = GlassPalette.selectedFill(isDark: isDark).cgColor
                 baseLayer.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
                 baseLayer.borderWidth = 0.75
@@ -415,6 +469,11 @@ public final class ShelfItemButton: NSControl {
     /// ordered out with the cursor still over it, so a hidden-then-shown panel
     /// could keep a stale shadow on whichever icon the mouse happened to be on.
     public func resetInteractionState() {
+        longPressWorkItem?.cancel()
+        longPressWorkItem = nil
+        isLongPressArmed = false
+        isDraggingSource = false
+        isSwapTarget = false
         isPressed = false
         isHovered = false
         mouseDownLocation = nil
@@ -426,29 +485,52 @@ public final class ShelfItemButton: NSControl {
 
     override public func mouseDown(with event: NSEvent) {
         isPressed = true
+        isLongPressArmed = false
         mouseDownLocation = event.locationInWindow
+
+        longPressWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.mouseDownLocation != nil else { return }
+            self.isLongPressArmed = true
+            NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+        }
+        longPressWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
     override public func mouseDragged(with event: NSEvent) {
         guard let startPoint = mouseDownLocation else { return }
         let currentPoint = event.locationInWindow
         let dist = hypot(currentPoint.x - startPoint.x, currentPoint.y - startPoint.y)
-        if dist > 5 {
+        let threshold: CGFloat = isLongPressArmed ? 1.0 : 4.5
+        if dist > threshold {
+            longPressWorkItem?.cancel()
+            longPressWorkItem = nil
             mouseDownLocation = nil
             isPressed = false
+            isLongPressArmed = false
             startDragSession(with: event)
         }
     }
 
     override public func mouseUp(with event: NSEvent) {
+        longPressWorkItem?.cancel()
+        longPressWorkItem = nil
         isPressed = false
+        let wasLongPressArmed = isLongPressArmed
+        isLongPressArmed = false
         if mouseDownLocation != nil {
             mouseDownLocation = nil
-            sendAction(action, to: target)
+            if !wasLongPressArmed {
+                sendAction(action, to: target)
+            }
         }
     }
 
     override public func rightMouseDown(with event: NSEvent) {
+        longPressWorkItem?.cancel()
+        longPressWorkItem = nil
+        isLongPressArmed = false
         if let menu = menu {
             NSMenu.popUpContextMenu(menu, with: event, for: self)
         } else {
@@ -463,8 +545,10 @@ public final class ShelfItemButton: NSControl {
 
         let dragItem = NSDraggingItem(pasteboardWriter: pbItem)
         let snapshot = snapshotImage()
-        dragItem.setDraggingFrame(bounds, contents: snapshot)
+        let liftedFrame = bounds.insetBy(dx: -bounds.width * 0.04, dy: -bounds.height * 0.04)
+        dragItem.setDraggingFrame(liftedFrame, contents: snapshot)
 
+        onDragSessionWillBegin?()
         beginDraggingSession(with: [dragItem], event: event, source: self)
     }
 
@@ -478,6 +562,15 @@ extension ShelfItemButton: NSDraggingSource {
     public func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
         // Internal reordering only: never claim .move outside the shelf grid to prevent macOS App Management TCC alerts
         return context == .withinApplication ? .move : []
+    }
+
+    public func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        PanelCoordinator.shared.isDraggingActive = true
+    }
+
+    public func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        PanelCoordinator.shared.isDraggingActive = false
+        onDragSessionDidEnd?(operation)
     }
 }
 
@@ -523,6 +616,21 @@ public final class ShelfGridView: NSView {
     private var activeFilter = ""
     private var targetValidationGeneration: UInt64 = 0
 
+    // MARK: - 实时平滑让位、Alt 快速交换、Esc 撤销还原与横向滑动翻页状态
+    private var dragSourceID: UUID?
+    private var dragSourceIndex: Int?
+    private var dragCurrentTargetIndex: Int?
+    private var dragOriginalItems: [LauncherItem]?
+    private var dragOriginalButtons: [ShelfItemButton]?
+    private var isOptionSwapActive: Bool = false
+    private var isDragCancelledByEscape: Bool = false
+    private var didCommitCurrentDrag: Bool = false
+    private var dragKeyMonitor: Any?
+    private var lastKnownDragPointInContent: NSPoint?
+
+    private var horizontalSwipeDelta: CGFloat = 0
+    private var hasTriggeredSwipeInGesture: Bool = false
+
     private let scrollView = NSScrollView()
     private let contentView = FlippedContentView()
     private let emptyLabel = NSTextField(labelWithString: "拖拽软件、文件或脚本至此处快速添加")
@@ -535,6 +643,10 @@ public final class ShelfGridView: NSView {
             NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType),
             NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)
         ])
+    }
+
+    deinit {
+        removeDragKeyMonitor()
     }
 
     required init?(coder: NSCoder) {
@@ -791,6 +903,14 @@ public final class ShelfGridView: NSView {
                 self.updateKeyboardSelectionVisual()
             }
         }
+        btn.onDragSessionWillBegin = { [weak self, weak btn] in
+            guard let self = self, let btn = btn else { return }
+            self.beginInternalDragPreview(for: btn)
+        }
+        btn.onDragSessionDidEnd = { [weak self] operation in
+            guard let self = self else { return }
+            self.endInternalDragPreview(operation: operation)
+        }
 
         // Standard Cocoa context menu using representedObject
         let menu = NSMenu(title: "ShelfItemMenu")
@@ -838,7 +958,7 @@ public final class ShelfGridView: NSView {
         return btn
     }
 
-    private func relayoutButtons(animated: Bool) {
+    private func relayoutButtons(animated: Bool, duration: TimeInterval = 0.24) {
         let buttons = visibleButtons
         guard !buttons.isEmpty else {
             contentView.frame = NSRect(x: 0, y: 0, width: bounds.width, height: bounds.height)
@@ -862,8 +982,9 @@ public final class ShelfGridView: NSView {
         contentView.frame = NSRect(x: 0, y: 0, width: availableWidth, height: totalContentHeight)
 
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = animated ? 0.22 : 0
-            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.0)
+            ctx.duration = animated ? duration : 0
+            // 阻尼弹簧手感贝塞尔曲线，让位滑入丝滑且无抖动过冲
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
             ctx.allowsImplicitAnimation = animated
             for (index, btn) in buttons.enumerated() {
                 let col = index % cols
@@ -881,6 +1002,52 @@ public final class ShelfGridView: NSView {
                 }
             }
         }
+    }
+
+    /// 分类切换时的柔和横向过渡微动画
+    public func playCategoryPageTransition(direction: Int) {
+        guard direction != 0, window?.isVisible == true else { return }
+        let offsetX: CGFloat = direction > 0 ? 18.0 : -18.0
+        for btn in visibleButtons {
+            let finalFrame = btn.frame
+            btn.frame = finalFrame.offsetBy(dx: offsetX, dy: 0)
+            btn.alphaValue = 0.55
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.20
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+                ctx.allowsImplicitAnimation = true
+                btn.animator().frame = finalFrame
+                btn.animator().alphaValue = 1.0
+            }
+        }
+    }
+
+    override public func scrollWheel(with event: NSEvent) {
+        // 识别触控板双指横向滑动翻页切换分类
+        if event.phase == .began {
+            horizontalSwipeDelta = 0
+            hasTriggeredSwipeInGesture = false
+        }
+
+        let absX = abs(event.scrollingDeltaX)
+        let absY = abs(event.scrollingDeltaY)
+        if (event.phase == .began || event.phase == .changed), absX > absY * 1.35 {
+            horizontalSwipeDelta += event.scrollingDeltaX
+            if !hasTriggeredSwipeInGesture && abs(horizontalSwipeDelta) >= 42.0 {
+                hasTriggeredSwipeInGesture = true
+                let offset = horizontalSwipeDelta < 0 ? 1 : -1
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                delegate?.shelfGrid(self, didSwipeCategoryBy: offset)
+            }
+            return
+        }
+
+        if event.phase == .ended || event.phase == .cancelled {
+            horizontalSwipeDelta = 0
+            hasTriggeredSwipeInGesture = false
+        }
+
+        super.scrollWheel(with: event)
     }
 
     override public func rightMouseDown(with event: NSEvent) {
@@ -979,12 +1146,224 @@ public final class ShelfGridView: NSView {
         delegate?.shelfGrid(self, didDeleteItem: item)
     }
 
+    // MARK: - 实时平滑让位、Alt 快速交换与 Esc 撤销保护引擎
+
+    private func beginInternalDragPreview(for button: ShelfItemButton) {
+        guard activeFilter.isEmpty else { return }
+        guard let srcIdx = items.firstIndex(where: { $0.id == button.item.id }) else { return }
+
+        dragSourceID = button.item.id
+        dragSourceIndex = srcIdx
+        dragCurrentTargetIndex = srcIdx
+        dragOriginalItems = items
+        dragOriginalButtons = itemButtons
+        isOptionSwapActive = NSEvent.modifierFlags.contains(.option)
+        isDragCancelledByEscape = false
+        didCommitCurrentDrag = false
+        lastKnownDragPointInContent = nil
+
+        button.isDraggingSource = true
+        installDragKeyMonitor()
+    }
+
+    private func endInternalDragPreview(operation: NSDragOperation) {
+        removeDragKeyMonitor()
+
+        for btn in itemButtons {
+            btn.isDraggingSource = false
+            btn.isSwapTarget = false
+        }
+        if let origButtons = dragOriginalButtons {
+            for btn in origButtons {
+                btn.isDraggingSource = false
+                btn.isSwapTarget = false
+            }
+        }
+
+        // 若未在网格内落盘提交（例如按 Esc 取消、或拖到面板空白外部松手），平滑回弹还原至起拖前顺序
+        if !didCommitCurrentDrag, let origItems = dragOriginalItems, let origButtons = dragOriginalButtons {
+            if items != origItems {
+                items = origItems
+                itemButtons = origButtons
+                relayoutButtons(animated: true, duration: 0.24)
+            }
+        }
+
+        dragSourceID = nil
+        dragSourceIndex = nil
+        dragCurrentTargetIndex = nil
+        dragOriginalItems = nil
+        dragOriginalButtons = nil
+        isOptionSwapActive = false
+        isDragCancelledByEscape = false
+        didCommitCurrentDrag = false
+        lastKnownDragPointInContent = nil
+    }
+
+    private func installDragKeyMonitor() {
+        removeDragKeyMonitor()
+        dragKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self = self, self.dragSourceID != nil else { return event }
+            if event.type == .keyDown && event.keyCode == 53 {
+                // Esc 键撤销当前拖拽预览：立即将所有图标丝滑回弹至起拖前原位
+                self.isDragCancelledByEscape = true
+                self.restoreDragPreviewToOriginal(animated: true)
+                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+                return nil
+            } else if event.type == .flagsChanged {
+                let optionNow = event.modifierFlags.contains(.option)
+                if optionNow != self.isOptionSwapActive,
+                   !self.isDragCancelledByEscape,
+                   let pt = self.lastKnownDragPointInContent,
+                   let targetIdx = self.dragCurrentTargetIndex {
+                    self.isOptionSwapActive = optionNow
+                    self.applyLiveDragPreview(targetIndex: targetIdx, optionSwap: optionNow)
+                    _ = pt
+                }
+            }
+            return event
+        }
+    }
+
+    private func removeDragKeyMonitor() {
+        if let monitor = dragKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            dragKeyMonitor = nil
+        }
+    }
+
+    private func restoreDragPreviewToOriginal(animated: Bool) {
+        guard let origItems = dragOriginalItems, let origButtons = dragOriginalButtons else { return }
+        for btn in origButtons {
+            btn.isSwapTarget = false
+        }
+        items = origItems
+        itemButtons = origButtons
+        dragCurrentTargetIndex = dragSourceIndex
+        relayoutButtons(animated: animated, duration: 0.22)
+    }
+
+    /// 根据 contentView 内的坐标计算目标网格槽位索引（含 16% 边界磁滞防抖区，彻底消除边界闪烁）
+    private func targetSlotIndex(at contentPoint: NSPoint, itemCount: Int, currentSlot: Int?) -> Int {
+        guard itemCount > 0 else { return 0 }
+        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let itemWidth = metrics.itemWidth
+        let itemHeight = metrics.itemWidth
+        let sideMargin = metrics.sideMargin
+        let topMargin: CGFloat = 12
+        let spacingX = ShelfGridMetrics.spacing
+        let spacingY = ShelfGridMetrics.spacing
+
+        let availableWidth = max(bounds.width, 100)
+        let cols = max(1, Int((availableWidth - sideMargin * 2 + spacingX) / (itemWidth + spacingX)))
+        let cellStrideX = itemWidth + spacingX
+        let cellStrideY = itemHeight + spacingY
+
+        let rawCol = Int(floor((contentPoint.x - sideMargin + spacingX * 0.5) / cellStrideX))
+        let rawRow = Int(floor((contentPoint.y - topMargin + spacingY * 0.5) / cellStrideY))
+        let clampedCol = max(0, min(cols - 1, rawCol))
+        let clampedRow = max(0, rawRow)
+        let candidateSlot = max(0, min(itemCount - 1, clampedRow * cols + clampedCol))
+
+        guard let existingSlot = currentSlot, existingSlot != candidateSlot else {
+            return candidateSlot
+        }
+
+        // 计算候选槽位中心，要求指针进入槽位核心区（排除最外圈 16% 过渡带）才触发让位切换
+        let targetCol = candidateSlot % cols
+        let targetRow = candidateSlot / cols
+        let slotOriginX = sideMargin + CGFloat(targetCol) * cellStrideX
+        let slotOriginY = topMargin + CGFloat(targetRow) * cellStrideY
+        let slotRect = NSRect(x: slotOriginX, y: slotOriginY, width: itemWidth, height: itemHeight)
+        let coreRect = slotRect.insetBy(dx: itemWidth * 0.14, dy: itemHeight * 0.14)
+
+        // 若指针落在末尾空白区（超出最后一个槽位），允许直接吸附到末尾槽位
+        let lastRow = (itemCount - 1) / cols
+        let lastCol = (itemCount - 1) % cols
+        let lastMaxX = sideMargin + CGFloat(lastCol) * cellStrideX + itemWidth
+        let lastMaxY = topMargin + CGFloat(lastRow) * cellStrideY + itemHeight
+        if candidateSlot == itemCount - 1 && (contentPoint.y > lastMaxY || (clampedRow == lastRow && contentPoint.x > lastMaxX)) {
+            return candidateSlot
+        }
+
+        if coreRect.contains(contentPoint) {
+            return candidateSlot
+        }
+        return existingSlot
+    }
+
+    private func updateLiveDragReorder(with sender: NSDraggingInfo) {
+        guard !isDragCancelledByEscape else { return }
+        guard activeFilter.isEmpty else { return }
+
+        let pboard = sender.draggingPasteboard
+        let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) ??
+                       pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType))
+        guard let idString = idString, let sourceId = UUID(uuidString: idString) else { return }
+
+        // 若起拖回调尚未初始化（如从分类栏拖回当前分类网格），补全快照初始化
+        if dragOriginalItems == nil, let btn = itemButtons.first(where: { $0.item.id == sourceId }) {
+            beginInternalDragPreview(for: btn)
+        }
+
+        guard let origItems = dragOriginalItems,
+              let sourceIdx = dragSourceIndex,
+              origItems.indices.contains(sourceIdx) else { return }
+
+        let loc = contentView.convert(sender.draggingLocation, from: nil)
+        lastKnownDragPointInContent = loc
+        let optionNow = NSEvent.modifierFlags.contains(.option)
+        let nextSlot = targetSlotIndex(at: loc, itemCount: origItems.count, currentSlot: dragCurrentTargetIndex)
+
+        if nextSlot != dragCurrentTargetIndex || optionNow != isOptionSwapActive {
+            dragCurrentTargetIndex = nextSlot
+            isOptionSwapActive = optionNow
+            applyLiveDragPreview(targetIndex: nextSlot, optionSwap: optionNow)
+        }
+    }
+
+    private func applyLiveDragPreview(targetIndex: Int, optionSwap: Bool) {
+        guard let origItems = dragOriginalItems,
+              let origButtons = dragOriginalButtons,
+              let sourceIdx = dragSourceIndex,
+              origItems.indices.contains(sourceIdx),
+              origItems.indices.contains(targetIndex) else { return }
+
+        var newItems = origItems
+        var newButtons = origButtons
+
+        for btn in newButtons {
+            btn.isSwapTarget = false
+        }
+
+        if sourceIdx != targetIndex {
+            if optionSwap {
+                // Alt/Option 快速交换模式：仅对调源槽位与目标槽位，其余图标静止不动
+                newItems.swapAt(sourceIdx, targetIndex)
+                newButtons.swapAt(sourceIdx, targetIndex)
+                origButtons[targetIndex].isSwapTarget = true
+            } else {
+                // 默认实时顺移让位模式：取出源图标插入目标槽位，区间内图标顺移一格
+                let movedItem = newItems.remove(at: sourceIdx)
+                newItems.insert(movedItem, at: targetIndex)
+                let movedBtn = newButtons.remove(at: sourceIdx)
+                newButtons.insert(movedBtn, at: targetIndex)
+            }
+        }
+
+        items = newItems
+        itemButtons = newButtons
+        relayoutButtons(animated: true, duration: 0.24)
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    }
+
     // MARK: - Drag and Drop Support
     override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         let pboard = sender.draggingPasteboard
         let isReorder = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true
         let isMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
         if isReorder || isMove {
+            updateLiveDragReorder(with: sender)
             return .move
         }
         if pboard.types?.contains(.fileURL) == true {
@@ -1004,6 +1383,10 @@ public final class ShelfGridView: NSView {
         let isReorder = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true
         let isMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
         if isReorder || isMove {
+            if isDragCancelledByEscape {
+                return []
+            }
+            updateLiveDragReorder(with: sender)
             return .move
         }
         if pboard.types?.contains(.fileURL) == true {
@@ -1015,6 +1398,9 @@ public final class ShelfGridView: NSView {
     override public func draggingExited(_ sender: NSDraggingInfo?) {
         layer?.borderWidth = 0.0
         layer?.backgroundColor = NSColor.clear.cgColor
+        if dragOriginalItems != nil {
+            restoreDragPreviewToOriginal(animated: true)
+        }
     }
 
     override public func draggingEnded(_ sender: NSDraggingInfo) {
@@ -1026,6 +1412,11 @@ public final class ShelfGridView: NSView {
         layer?.borderWidth = 0.0
         layer?.backgroundColor = NSColor.clear.cgColor
 
+        if isDragCancelledByEscape {
+            restoreDragPreviewToOriginal(animated: true)
+            return false
+        }
+
         let pboard = sender.draggingPasteboard
 
         // 1. Internal item reordering or cross-category move into grid
@@ -1033,25 +1424,38 @@ public final class ShelfGridView: NSView {
                        pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType))
         if let idString = idString, let sourceId = UUID(uuidString: idString) {
             let loc = contentView.convert(sender.draggingLocation, from: nil)
-            var targetIndex = items.count - 1
 
-            for (idx, btn) in itemButtons.enumerated() {
-                if loc.y < btn.frame.maxY && loc.x < btn.frame.maxX {
-                    targetIndex = idx
-                    break
+            if let origItems = dragOriginalItems,
+               let sourceIndex = dragSourceIndex,
+               origItems.indices.contains(sourceIndex),
+               origItems[sourceIndex].id == sourceId {
+                let finalTargetIndex = dragCurrentTargetIndex ?? targetSlotIndex(at: loc, itemCount: origItems.count, currentSlot: nil)
+                let useOptionSwap = NSEvent.modifierFlags.contains(.option) || isOptionSwapActive
+                didCommitCurrentDrag = true
+
+                for btn in itemButtons {
+                    btn.isDraggingSource = false
+                    btn.isSwapTarget = false
                 }
+
+                if sourceIndex != finalTargetIndex {
+                    if useOptionSwap {
+                        delegate?.shelfGrid(self, didSwapItemAt: sourceIndex, with: finalTargetIndex)
+                    } else {
+                        delegate?.shelfGrid(self, didMoveItemFrom: sourceIndex, to: finalTargetIndex)
+                    }
+                }
+                return true
             }
 
+            // Cross-category drop into a specific slot in this grid
+            let targetIndex = targetSlotIndex(at: loc, itemCount: max(1, items.count + 1), currentSlot: nil)
             if let sourceIndex = items.firstIndex(where: { $0.id == sourceId }) {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.delegate?.shelfGrid(self, didMoveItemFrom: sourceIndex, to: targetIndex)
-                }
+                didCommitCurrentDrag = true
+                delegate?.shelfGrid(self, didMoveItemFrom: sourceIndex, to: min(targetIndex, max(0, items.count - 1)))
             } else {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    self.delegate?.shelfGrid(self, didMoveExternalItemWithID: sourceId, toIndex: targetIndex)
-                }
+                didCommitCurrentDrag = true
+                delegate?.shelfGrid(self, didMoveExternalItemWithID: sourceId, toIndex: min(targetIndex, items.count))
             }
             return true
         }

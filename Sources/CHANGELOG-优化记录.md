@@ -2297,3 +2297,20 @@
   3. **抽屉内一键清理全部失效项目并回收孤立托管图标**（[`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)）：
      - 点击「一键清理失效项」执行与设置页完全一致的 `ConfigManager.shared.scanMissingItems()` 预览确认弹窗及 `ConfigManager.shared.removeAllMissingItems()`，一键清理全部失效启动项并自动回收孤立的托管自定义图标，随后即时刷新抽屉视图。
 
+### 32. 借鉴 GlassDesk 实现应用抽屉实时平滑让位、长按 350ms 起拖、Alt 快速交换、Esc 撤销还原与双指横向翻页 (2026-10-15)
+
+- **优化内容**：
+  1. **长按 350ms 浮起反馈 + 快速拖拽双模响应**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 在 `ShelfItemButton` 中新增 `350ms` 长按定时器：按住满 `350ms` 触发 `1.08x` 微浮起缩放与触觉反馈（`.generic`），进入就绪态；同时保留鼠标直接拖动 `> 4.5pt` 的即时起拖路径。
+     - 起拖时网格内的源图标平滑过渡为 `0.22` 透明度虚影占位槽（Ghost Slot），松手后无缝恢复。
+  2. **实时平滑让位算法与 14% 边界磁滞防抖**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 新增纯几何槽位反算函数 `targetSlotIndex(at:itemCount:currentSlot:)`，不依赖动画途中的按钮 `frame`，并在每个槽位边缘设立 `14%` 磁滞防抖区（Hysteresis Deadzone），彻底消除槽位交界处的往复跳动。
+     - 在 `draggingUpdated` 过程中实时驱动周围图标顺移让位，使用 `CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)` 阻尼弹簧曲线（`duration = 0.24s`）与 `.alignment` 触觉反馈实现丝滑跟手动画。
+  3. **Alt (⌥) 快速交换模式**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift) & [`ConfigManager.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/Storage/ConfigManager.swift)）：
+     - 拖拽途中按住 `Option / Alt (⌥)` 键时切换为「双图标直接交换」模式：仅对调源槽位与目标槽位的两个图标（其余图标保持原位不动），并在目标图标上渲染高亮环；松手时通过 `ConfigManager.shared.swapItems(at:and:in:)` 持久化。
+  4. **Esc 撤销还原与拖拽取消保护**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift)）：
+     - 起拖瞬间保存 `dragOriginalItems` 与 `dragOriginalButtons` 快照；拖拽途中按下 `Esc` 键、拖出网格区域（`draggingExited`）或在外部松手取消时，所有图标立即平滑回弹恢复至起拖前原位，底层配置零改动。
+  5. **双指横向滑动翻页与拖拽悬停分类胶囊自动切页**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfGridView.swift) & [`CategoryBarView.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/CategoryBarView.swift) & [`ShelfPanel.swift`](file:///Users/aurora/Downloads/ATools/Sources/atools/UI/ShelfPanel.swift)）：
+     - 在 `ShelfGridView.scrollWheel(with:)` 中识别触控板双指横向滑动手势，联动 `CategoryBarView.moveSelection(by:)` 与 `playCategoryPageTransition(direction:)` 实现左右滑动切换分类；
+     - 在 `CategoryBarView` 中新增拖拽悬停分类胶囊 `420ms` 自动切页（Spring-loaded Category Pill）。
+

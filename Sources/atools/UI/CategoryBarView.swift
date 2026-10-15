@@ -465,6 +465,9 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         return closestPill
     }
 
+    private var springLoadWorkItem: DispatchWorkItem?
+    private var springLoadPillId: UUID?
+
     private func updateDropTargetHighlight(at windowLocation: NSPoint) {
         let targetPill = pill(at: windowLocation)
         for subview in stackView.arrangedSubviews {
@@ -472,9 +475,31 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
                 pill.isDropTarget = (pill === targetPill)
             }
         }
+
+        if let targetPill = targetPill, targetPill.category.id != selectedCategoryId {
+            if springLoadPillId != targetPill.category.id {
+                springLoadWorkItem?.cancel()
+                springLoadPillId = targetPill.category.id
+                let work = DispatchWorkItem { [weak self, weak targetPill] in
+                    guard let self = self, let pill = targetPill else { return }
+                    self.springLoadPillId = nil
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                    self.categoryPillDidClick(pill)
+                }
+                springLoadWorkItem = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.42, execute: work)
+            }
+        } else {
+            springLoadWorkItem?.cancel()
+            springLoadWorkItem = nil
+            springLoadPillId = nil
+        }
     }
 
     private func clearDropTargetHighlight() {
+        springLoadWorkItem?.cancel()
+        springLoadWorkItem = nil
+        springLoadPillId = nil
         for subview in stackView.arrangedSubviews {
             if let pill = subview as? CategoryPillView {
                 pill.isDropTarget = false

@@ -102,3 +102,27 @@
      - 支持点击右侧「选择目标...」选取 `.app` / 文件 / 文件夹或手动输入路径，若「显示名称」为空则自动提取本地化显示名称并实时刷新图标预览，保存时直接追加至当前激活分类。
   3. **抽屉内一键清理全部失效项目并回收孤立托管图标（`ShelfPanel.swift`）**：
      - 点击「一键清理失效项」时调用与设置页完全一致的 `ConfigManager.shared.scanMissingItems()` 预览确认弹窗及 `ConfigManager.shared.removeAllMissingItems()`，一键移除所有分类中的失效启动项、自动回收孤立的托管自定义图标并即时刷新抽屉面板。
+
+---
+
+### 六、专项优化：借鉴 GlassDesk 实现应用抽屉实时平滑让位、长按 350ms 起拖、Alt 快速交换、Esc 撤销还原与双指横向翻页 (2026-10-15)
+
+- **涉及文件**：
+  - `Sources/atools/UI/ShelfGridView.swift`
+  - `Sources/atools/UI/ShelfPanel.swift`
+  - `Sources/atools/UI/CategoryBarView.swift`
+  - `Sources/atools/Storage/ConfigManager.swift`
+- **优化详情**：
+  1. **长按 350ms 触发浮起 + 快速拖拽双模响应（`ShelfItemButton`）**：
+     - 按下图标满 `350ms` 时触发微浮起放大（`1.08x`）与触觉反馈（`.generic`），进入就绪态后移动 `1pt` 即可丝滑起拖；同时保留直接拖动 `> 4.5pt` 的桌面快速起拖路径。
+     - 起拖时源图标在网格内平滑过渡为 `0.22` 透明度占位槽（Ghost Slot），拖拽浮层采用 `1.04x` 放大快照。
+  2. **实时平滑让位算法与 14% 边界磁滞防抖（`ShelfGridView`）**：
+     - 新增 `targetSlotIndex(at:itemCount:currentSlot:)`：纯几何反算网格行列槽位（不依赖正在动画中的按钮 `frame`），并在每个槽位外围设置 `14%` 磁滞防抖带（Hysteresis Core），彻底杜绝指针在相邻槽位边界处引发的反复横跳。
+     - 在 `draggingUpdated` 中实时计算重排预览并驱动 `relayoutButtons(animated: true, duration: 0.24)`，采用 `CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)` 阻尼弹簧曲线与 `.alignment` 触觉反馈，让周围图标实时丝滑让位。
+  3. **Alt (⌥) 快速交换模式（`ShelfGridView` & `ConfigManager`）**：
+     - 拖拽过程中按住 `Option / Alt (⌥)` 键时，自动切换为「双图标直接对调（Quick Swap）」模式：仅将源槽位与目标槽位两个图标直接互换（其余图标保持原位不动），并在目标图标上绘制高亮强调环；松手时调用 `ConfigManager.shared.swapItems(at:and:in:)` 持久化。
+  4. **Esc 撤销还原与拖出边界取消保护（`ShelfGridView`）**：
+     - 起拖瞬间保存 `dragOriginalItems` 与 `dragOriginalButtons` 快照，并注册本地按键监听：拖拽途中按下 `Esc` 键、拖出网格边界（`draggingExited`）或未落盘松手时，所有图标立即通过平滑动画回弹恢复至起拖前原位，底层配置零污染。
+  5. **双指横向滑动翻页与拖拽悬停分类胶囊自动切页（`ShelfGridView` & `CategoryBarView`）**：
+     - 在 `ShelfGridView.scrollWheel(with:)` 中识别触控板双指左右滑动手势，联动 `CategoryBarView.moveSelection(by:)` 与 `playCategoryPageTransition(direction:)` 实现丝滑翻页；
+     - 在 `CategoryBarView` 中新增拖拽悬停 `420ms` 自动切换分类（Spring-loaded Category Pill），支持跨分类拖入后继续享受实时平滑让位。
