@@ -350,6 +350,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private var verticalConstraints: [NSLayoutConstraint] = []
 
     internal var selectedCategory: Category?
+    private var dragSessionOriginCategoryId: UUID?
     private var typeAheadQuery = ""
     private var typeAheadResetWorkItem: DispatchWorkItem?
 
@@ -717,14 +718,19 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     // MARK: - CategoryBarDelegate
     public func categoryBar(_ bar: CategoryBarView, didSelectCategory category: Category) {
+        let prevCategory = self.selectedCategory
         typeAheadQuery.removeAll()
         shelfGrid.applyFilter("")
-        if let latestCategory = ConfigManager.shared.config.categories.first(where: { $0.id == category.id }) {
-            self.selectedCategory = latestCategory
-            shelfGrid.reloadData(items: latestCategory.items)
-        } else {
-            self.selectedCategory = category
-            shelfGrid.reloadData(items: category.items)
+        let latestCategory = ConfigManager.shared.config.categories.first(where: { $0.id == category.id }) ?? category
+        self.selectedCategory = latestCategory
+        shelfGrid.reloadData(items: latestCategory.items)
+
+        if let prev = prevCategory, prev.id != latestCategory.id {
+            let allCats = ConfigManager.shared.config.categories
+            let prevIndex = allCats.firstIndex(where: { $0.id == prev.id }) ?? 0
+            let newIndex = allCats.firstIndex(where: { $0.id == latestCategory.id }) ?? 0
+            let direction = newIndex >= prevIndex ? 1 : -1
+            shelfGrid.playCategoryPageTransition(direction: direction, isVertical: categoryBar.orientation == .vertical)
         }
         updateStatusBar()
     }
@@ -943,8 +949,31 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {
-        if categoryBar.moveSelection(by: offset) {
-            shelfGrid.playCategoryPageTransition(direction: offset)
+        _ = categoryBar.moveSelection(by: offset)
+    }
+
+    public func shelfGridDidBeginDrag(_ grid: ShelfGridView) {
+        // 记录拖拽开始时的源分类 ID（在整个会话期间保持唯一锚定，防止多次跨分类悬停后丢失最初源分类）
+        dragSessionOriginCategoryId = selectedCategory?.id
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didEndDragWith operation: NSDragOperation) {
+        defer { dragSessionOriginCategoryId = nil }
+
+        // 若拖拽以失败/取消结束（按 Esc 或松开在非受体区域），且当前分类已被悬停切页至其他分类，自动平滑反向切回原分类
+        if operation == [], let originId = dragSessionOriginCategoryId, originId != selectedCategory?.id {
+            if let originCat = ConfigManager.shared.config.categories.first(where: { $0.id == originId }) {
+                let allCats = ConfigManager.shared.config.categories
+                let oldIndex = allCats.firstIndex(where: { $0.id == selectedCategory?.id }) ?? 0
+                let newIndex = allCats.firstIndex(where: { $0.id == originId }) ?? 0
+                let direction = newIndex >= oldIndex ? 1 : -1
+
+                categoryBar.setSelectedCategory(id: originId, animated: true)
+                self.selectedCategory = originCat
+                shelfGrid.reloadData(items: originCat.items)
+                shelfGrid.playCategoryPageTransition(direction: direction, isVertical: categoryBar.orientation == .vertical)
+                NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+            }
         }
     }
 

@@ -37,6 +37,24 @@ public final class CategoryPillView: NSView {
         }
     }
 
+    internal var isSpringLoadingHovered: Bool = false {
+        didSet {
+            guard oldValue != isSpringLoadingHovered else { return }
+            let scale: CGFloat = isSpringLoadingHovered ? (isVertical ? 1.025 : 1.045) : 1.0
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
+                ctx.allowsImplicitAnimation = true
+                if isSpringLoadingHovered {
+                    layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+                } else {
+                    layer?.setAffineTransform(.identity)
+                }
+            }
+            updateAppearanceStyles()
+        }
+    }
+
     public let isVertical: Bool
     internal let titleLabel = NSTextField(labelWithString: "")
     private var trackingArea: NSTrackingArea?
@@ -56,11 +74,7 @@ public final class CategoryPillView: NSView {
     private func setupViews() {
         wantsLayer = true
         layer?.cornerRadius = isVertical ? 11 : 15
-        layer?.masksToBounds = true
-        registerForDraggedTypes([
-            NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType),
-            .fileURL
-        ])
+        layer?.masksToBounds = false
 
         // Title (Pure text category, zero icon)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -119,12 +133,22 @@ public final class CategoryPillView: NSView {
         let primaryTextColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0)
         let secondaryTextColor = isDark ? NSColor(white: 1.0, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.78)
 
-        if isDropTarget {
+        if isSpringLoadingHovered {
+            layer?.borderWidth = 1.0
+            let highlightBorder = isDark ? NSColor.white.withAlphaComponent(0.65) : NSColor.black.withAlphaComponent(0.40)
+            layer?.borderColor = highlightBorder.cgColor
+            layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
+            layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
+            layer?.shadowOpacity = isDark ? 0.35 : 0.20
+            layer?.shadowRadius = 10
+            titleLabel.textColor = primaryTextColor
+        } else if isDropTarget {
             layer?.borderWidth = 0.75
             layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
             layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
             layer?.shadowColor = GlassPalette.shadowColor(isDark: isDark).cgColor
             layer?.shadowOpacity = 0.16
+            layer?.shadowRadius = 8
             titleLabel.textColor = primaryTextColor
         } else if isSelected {
             // The selected background is rendered by the shared flowing capsule
@@ -258,62 +282,6 @@ public final class CategoryPillView: NSView {
     private func snapshotImage() -> NSImage {
         let pdf = dataWithPDF(inside: bounds)
         return NSImage(data: pdf) ?? NSImage()
-    }
-
-    // MARK: - Drag Destination (Launcher Item Move & External File Drop)
-    override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let pboard = sender.draggingPasteboard
-        let isInternalMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
-        let isFile = pboard.types?.contains(.fileURL) == true
-        guard isInternalMove || isFile else {
-            return []
-        }
-        isDropTarget = true
-        return isInternalMove ? .move : .copy
-    }
-
-    override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        let pboard = sender.draggingPasteboard
-        let isInternalMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
-        let isFile = pboard.types?.contains(.fileURL) == true
-        guard isInternalMove || isFile else {
-            return []
-        }
-        isDropTarget = true
-        return isInternalMove ? .move : .copy
-    }
-
-    override public func draggingExited(_ sender: NSDraggingInfo?) {
-        isDropTarget = false
-    }
-
-    override public func draggingEnded(_ sender: NSDraggingInfo) {
-        isDropTarget = false
-    }
-
-    override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        isDropTarget = false
-
-        let pboard = sender.draggingPasteboard
-
-        // 1. Move existing launcher item
-        if let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)),
-           let id = UUID(uuidString: idString) {
-            delegate?.categoryPill(self, didMoveLauncherItemID: id)
-            return true
-        }
-
-        // 2. Drag-and-drop external file / app into category
-        let readOptions: [NSPasteboard.ReadingOptionKey: Any] = [
-            .urlReadingFileURLsOnly: true
-        ]
-        if let urls = pboard.readObjects(forClasses: [NSURL.self], options: readOptions) as? [URL], !urls.isEmpty {
-            let paths = urls.map { $0.path }
-            delegate?.categoryPill(self, didAddPaths: paths)
-            return true
-        }
-
-        return false
     }
 
     // MARK: - Right Click Context Menu

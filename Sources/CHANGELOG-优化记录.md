@@ -2345,6 +2345,57 @@
   - 执行 `./Scripts/build.sh --test` 综合诊断套件：
     * 13 大项自动化测试**100% 全部 PASSED 通过**；
   - 执行 `./Scripts/package_app.sh` 打包并签名，生成 `ATools.app`、`ATools.zip`、`ATools.dmg` 及其 `.sig` 签名文件；
-  - 通过 GitHub CLI 发布 Release 并上传全部资产。
+### 70. 应用抽屉拖拽悬停分类丝滑切页、呼吸聚能微动效与 Esc 撤销自愈回滚 (2026-10-15)
+
+- **背景与现象**：
+  - 用户反馈：「应用抽屉拖拽图标到对应分类上时，能不能丝滑切换到对应分类页面中」；
+  - 核心痛点与 AppKit 拖拽事件循环深层审查（经子代理 AppKit Architecture Reviewer 审查核验）：
+    1. **AppKit 拖拽命中测试短路缺陷**：`CategoryPillView` 自身调用了 `registerForDraggedTypes` 并实现 `NSDraggingDestination`。光标位于胶囊内部时，系统事件被最内层子视图直接拦截消费，导致外层 `CategoryBarView` 根本收不到 `draggingUpdated`，悬停切页定时器静默失效；
+    2. **响应时序迟钝与缺乏预备反馈**：旧版写死 420ms 延时，悬停等待期间胶囊无缩放或聚能反馈；
+    3. **切页生硬突兀与无转场过渡**：`didSelectCategory` 仅调用 `reloadData` 粗暴替换所有按钮视图，未触发 `playCategoryPageTransition`，导致整个抽屉图标闪烁硬跳；
+    4. **迷航风险**：用户跨分类悬停后若按下 `Esc` 取消拖拽，界面滞留在新分类而源项目留在旧分类。
+- **实施细节与涉及文件**：
+  1. **收归 Dragging Destination 至 `CategoryBarView`**（[`CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift) & [`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)）：
+     - 彻底移除 `CategoryPillView` 的独立拖拽类型注册与受体方法，由 `CategoryBarView` 作为单一受体（Single Source of Truth）；
+     - 将悬停切页延时缩短为黄金感知阈值 `0.28s (280ms)`；
+     - 新增 `isSpringLoadingHovered` 状态：悬停未选中胶囊时触发 `1.045x`（垂直模式 `1.025x`）Core Animation 图层级弹性微缩放与发光边框高亮，移开时平滑回弹。
+  2. **抽屉网格液态自适应切页过渡**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) & [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)）：
+     - 升级 `playCategoryPageTransition(direction:isVertical:)` 支持自适应水平/垂直滑动（水平 `dx: ±18pt`，垂直 `dy: ±14pt`）与液态减速弹簧曲线 `CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)`；
+     - 动画作用范围限制在视口缓冲区域（`documentVisibleRect.insetBy(dx: 0, dy: -40)`），空分类对 `emptyLabel` 执行柔和淡入，保障 120Hz 满帧；
+     - 在 `ShelfPanel.categoryBar(_:didSelectCategory:)` 中统一注入方向计算与转场动画，点击、滑动、拖拽悬停全场景自动触发丝滑滑入。
+  3. **会话生命周期与 Esc 取消自愈回滚**（[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) & [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)）：
+     - `ShelfGridDelegate` 扩展 `shelfGridDidBeginDrag` 与 `shelfGrid(_:didEndDragWith:)`；
+     - 在 `ShelfPanel` 起拖瞬间唯一锚定 `dragSessionOriginCategoryId`；
+     - 拖拽成功落地移入目标分类时保持；若被 `Esc` 撤销或松开在非受体区域（`operation == []`），自动反向平滑切回起拖原分类。
+- **验证与测试结果**：
+  - 在 [`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift) Section 9.2 补充拖拽跨分类悬停与 `Esc` 撤销自动回滚断言；
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项测试全部 100% PASSED 通过**；
+  - 成功编译 Release 并重新签名打包，平滑覆盖部署至 `/Applications/ATools.app` 并重启生效（PID: 40848）。
+
+### 71. 正式发布 ATools v1.3.17 (build 42)：设置界面新版本提醒闭环体系、抽屉拖拽悬停切页与静默更新健壮性加固 (2026-10-15, build 42)
+
+- **背景与需求**：
+  - 用户期望：在 ATools 有更新时，在设置界面左上角应用图标增加提醒（如红点），引导用户及时获知版本更新；
+  - 经由专有子代理（AppKit & UX Architecture Reviewer）进行深度审查，发现旧版 `UpdateManager.swift` 存在重大隐患：`checkForUpdates(isUserInitiated: Bool)` 虽然声明了参数，但在网络请求回调中未向下传递，导致网络断开或触及 GitHub 60次/小时 Rate Limit 时，静默更新会粗暴将全局状态置为 `.error(...)`，使用户随后打开关于页面时看到醒目的红色报错卡片；
+  - 评审淘汰了在 200pt 狭窄侧边栏顶部堆砌「图标红点 + 标题右侧版本号胶囊」的多重视觉过载方案（破坏窗口顶部空白拖拽心智，且版本号过长必遭截断），最终采纳**方案 C（改良版精准闭环微胶囊方案）**。
+- **实施细节与涉及文件**：
+  1. **UpdateManager 底层加固与静默节流**（[`UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift)）：
+     - 修复 `isUserInitiated` 穿透缺陷：网络回调中完整接收 `isUserInitiated` 参数，在静默更新（`isUserInitiated == false`）遇到网络断开、超时、403/429 限流或解析失败时，静默重置为 `.idle` 并仅记录日志，严禁向公开状态与 UI 抛出错误卡片；
+     - 增加 `lastSilentCheckKey`（`"atools.lastSilentUpdateCheckTime"`）与 4 小时间隔节流（14400s），防止用户反复打开设置窗口消耗 GitHub API 配额；
+     - 在拉取到新版本并校验通过后更新时间戳并广播 `stateDidChangeNotification`。
+  2. **设置侧边栏视觉与交互闭环**（[`SettingsSidebarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsSidebarView.swift)）：
+     - 顶部品牌区：封装 `NotificationBadgeView`，在 26×26 的 `appIcon` 右上角挂载 8pt 活力红微圆标（带 1.5pt 毛玻璃背景同色描边隔离环，防粘连与杂色混叠，辅以 0.5pt 细微阴影）；
+     - 图标交互直达：封装 `ClickableAppIconView`，有新版本时提供手型光标与专属 Tooltip（“发现 ATools 新版本，点击查看更新详情”），点击图标直接触发 `selectItem(.about)` 直达关于页面；右侧空白区保留系统背景拖拽能力；
+     - 底部导航项闭环引导：在 `SidebarRowButton` 的 `.about` 项尾部引入精致的 16pt 高度微胶囊（半透明磨砂红底，圆角 8pt，内含 9.5pt Bold 白色 `NEW` 字样），完美引导用户由“左上角发现”顺流而下到“底部关于项点击”；
+     - 绿色能耗与无障碍规范：摒弃无限循环呼吸动画，采用一次性 0.35s 柔和弹性入场动效（`scale: 0.1 -> 1.15 -> 0.95 -> 1.0`），并严密遵循 `accessibilityDisplayShouldReduceMotion` 减弱动态效果规范；版本为最新或更新后平滑淡出隐藏。
+  3. **静默探测触发与渲染避峰**（[`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift) & [`AppDelegate.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/AppDelegate.swift)）：
+     - 在 `SettingsWindowController.showSettingsWindow()` 打开时，延时 1.2 秒发起静默检查（避开首屏渲染与窗口毛玻璃合成峰值）；
+     - 在 `AppDelegate.applicationDidFinishLaunching` 完成后，延时 8.0 秒发起静默检查（避开冷启动资源争抢）。
+- **验证与测试结果**：
+  - 运行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 运行 `./Scripts/package_app.sh` 编译 Release、签署 Designated Requirement 签名并打包；
+  - 成功覆盖安装至 `/Applications/ATools.app` 并完成平滑重启生效（PID: 43478）。
+
+
 
 

@@ -1454,13 +1454,24 @@ if CommandLine.arguments.contains("--test") {
         TestAssertions.expect(shelfVC.selectedCategory?.id == catA.id, "ShelfViewController MUST enter catA after external file drop!")
         TestAssertions.expect(shelfVC.shelfGrid.items.contains(where: { $0.name == "ExternalDroppedApp" }), "ShelfGrid MUST contain newly dropped external app in catA!")
 
+        // 3. Test: Drag start in catA, spring-load category switch to catB, then Esc cancel rollback to catA
+        shelfVC.categoryBar(shelfVC.categoryBar, didSelectCategory: catA)
+        TestAssertions.expect(shelfVC.selectedCategory?.id == catA.id, "catA should be selected initially")
+        shelfVC.shelfGridDidBeginDrag(shelfVC.shelfGrid)
+        // Simulate spring loading switching to catB
+        shelfVC.categoryBar(shelfVC.categoryBar, didSelectCategory: catB)
+        TestAssertions.expect(shelfVC.selectedCategory?.id == catB.id, "Category should switch to catB during hover")
+        // User presses Esc or releases mouse in empty space (operation == [])
+        shelfVC.shelfGrid(shelfVC.shelfGrid, didEndDragWith: [])
+        TestAssertions.expect(shelfVC.selectedCategory?.id == catA.id, "ShelfViewController MUST auto-rollback to catA upon drag cancel!")
+
         // Clean up test items
         ConfigManager.shared.removeItem(id: testDragItem.id, from: catB.id)
         if let extItem = shelfVC.shelfGrid.items.first(where: { $0.name == "ExternalDroppedApp" }) {
             ConfigManager.shared.removeItem(id: extItem.id, from: catA.id)
         }
         shelfVC.loadData()
-        print("      ✓ Drag-and-drop to category tab with immediate category entrance verified.")
+        print("      ✓ Drag-and-drop to category tab with immediate category entrance & drag-cancel auto-rollback verified.")
     }
 
     // 10. Test SearchPanel Spotlight Collapsed & Expanded Layout

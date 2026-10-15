@@ -96,6 +96,11 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
         win.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
         switchToTab(sidebarView.selectedItem)
+
+        // 延迟 1.2 秒发起静默更新检测，避开首屏渲染与窗口毛玻璃合成峰值（内部具备 4 小时间隔节流）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+            UpdateManager.shared.checkForUpdates(isUserInitiated: false)
+        }
     }
 
     public func selectTab(_ item: SettingsSidebarItem) {

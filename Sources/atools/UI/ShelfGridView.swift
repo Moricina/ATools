@@ -13,6 +13,8 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int)
     func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int)
     func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int)
+    func shelfGridDidBeginDrag(_ grid: ShelfGridView)
+    func shelfGrid(_ grid: ShelfGridView, didEndDragWith operation: NSDragOperation)
 }
 
 public extension ShelfGridDelegate {
@@ -22,6 +24,8 @@ public extension ShelfGridDelegate {
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {}
     func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int) {}
     func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {}
+    func shelfGridDidBeginDrag(_ grid: ShelfGridView) {}
+    func shelfGrid(_ grid: ShelfGridView, didEndDragWith operation: NSDragOperation) {}
 }
 
 /// P0-2：失效启动项右上角黄色感叹号微标视图
@@ -930,11 +934,13 @@ public final class ShelfGridView: NSView {
         }
         btn.onDragSessionWillBegin = { [weak self, weak btn] in
             guard let self = self, let btn = btn else { return }
+            self.delegate?.shelfGridDidBeginDrag(self)
             self.beginInternalDragPreview(for: btn)
         }
         btn.onDragSessionDidEnd = { [weak self] operation in
             guard let self = self else { return }
             self.endInternalDragPreview(operation: operation)
+            self.delegate?.shelfGrid(self, didEndDragWith: operation)
         }
 
         // Standard Cocoa context menu using representedObject
@@ -1029,17 +1035,33 @@ public final class ShelfGridView: NSView {
         }
     }
 
-    /// 分类切换时的柔和横向过渡微动画
-    public func playCategoryPageTransition(direction: Int) {
+    /// 分类切换时的柔和过渡微动画（自适应水平/垂直排版）
+    public func playCategoryPageTransition(direction: Int, isVertical: Bool = false) {
         guard direction != 0, window?.isVisible == true else { return }
-        let offsetX: CGFloat = direction > 0 ? 18.0 : -18.0
-        for btn in visibleButtons {
-            let finalFrame = btn.frame
-            btn.frame = finalFrame.offsetBy(dx: offsetX, dy: 0)
-            btn.alphaValue = 0.55
+        let offset: CGFloat = direction > 0 ? 18.0 : -18.0
+        let visibleRect = scrollView.documentVisibleRect
+        let animatingButtons = itemButtons.filter { btn in
+            !btn.isHidden && btn.frame.intersects(visibleRect.insetBy(dx: 0, dy: -40))
+        }
+
+        if animatingButtons.isEmpty && !emptyLabel.isHidden {
+            emptyLabel.alphaValue = 0.45
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.20
-                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
+                ctx.allowsImplicitAnimation = true
+                emptyLabel.animator().alphaValue = 1.0
+            }
+            return
+        }
+
+        for btn in animatingButtons {
+            let finalFrame = btn.frame
+            btn.frame = isVertical ? finalFrame.offsetBy(dx: 0, dy: offset) : finalFrame.offsetBy(dx: offset, dy: 0)
+            btn.alphaValue = 0.50
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
                 ctx.allowsImplicitAnimation = true
                 btn.animator().frame = finalFrame
                 btn.animator().alphaValue = 1.0

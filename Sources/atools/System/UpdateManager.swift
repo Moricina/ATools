@@ -125,6 +125,9 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return false
     }
 
+    private static let lastSilentCheckKey = "atools.lastSilentUpdateCheckTime"
+    private static let silentCheckMinInterval: TimeInterval = 14400 // 4 小时间隔节流
+
     // MARK: - Check for Updates
     public func checkForUpdates(isUserInitiated: Bool = true) {
         guard Thread.isMainThread else {
@@ -134,12 +137,24 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             return
         }
 
+        // 静默检查节流控制：避免频繁呼出设置窗口刷爆 GitHub API 限流
+        if !isUserInitiated {
+            let lastCheck = UserDefaults.standard.double(forKey: UpdateManager.lastSilentCheckKey)
+            if lastCheck > 0 && Date().timeIntervalSince1970 - lastCheck < UpdateManager.silentCheckMinInterval {
+                return
+            }
+        }
+
         guard currentState != .checking else { return }
         currentState = .checking
         targetRelease = nil
 
         guard let apiURL = URL(string: "https://api.github.com/repos/Moricina/ATools/releases/latest") else {
-            currentState = .error("无效的更新检测地址")
+            if isUserInitiated {
+                currentState = .error("无效的更新检测地址")
+            } else {
+                currentState = .idle
+            }
             return
         }
 
@@ -153,14 +168,19 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             guard let self = self else { return }
 
             DispatchQueue.main.async { [weak self] in
-                self?.handleUpdateCheck(data: data, response: response, error: error)
+                self?.handleUpdateCheck(data: data, response: response, error: error, isUserInitiated: isUserInitiated)
             }
         }
         task.resume()
     }
 
-    private func handleUpdateCheck(data: Data?, response: URLResponse?, error: Error?) {
+    private func handleUpdateCheck(data: Data?, response: URLResponse?, error: Error?, isUserInitiated: Bool) {
         if let error = error {
+            if !isUserInitiated {
+                runtimeLog("[UpdateManager] Silent update check encountered error: \(error.localizedDescription), resetting to idle.")
+                currentState = .idle
+                return
+            }
             let msg = (error as NSError).code == NSURLErrorNotConnectedToInternet
                 ? "未连接互联网，请检查网络设置"
                 : "网络请求失败：\(error.localizedDescription)"
@@ -169,23 +189,43 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
+            if !isUserInitiated {
+                currentState = .idle
+                return
+            }
             currentState = .error("服务器返回异常响应")
             return
         }
 
         if httpResponse.statusCode == 403 || httpResponse.statusCode == 429 {
+            if !isUserInitiated {
+                runtimeLog("[UpdateManager] Silent update check hit GitHub rate limit (\(httpResponse.statusCode)), silently ignored.")
+                currentState = .idle
+                return
+            }
             currentState = .error("GitHub API 访问达到限流上限，请稍后再试")
             return
         }
 
         guard httpResponse.statusCode == 200, let data = data else {
+            if !isUserInitiated {
+                currentState = .idle
+                return
+            }
             currentState = .error("检测更新失败 (HTTP \(httpResponse.statusCode))")
             return
         }
 
+        // 成功获取远端 release 数据，记录静默检查时间戳
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: UpdateManager.lastSilentCheckKey)
+
         do {
             guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let tagName = json["tag_name"] as? String else {
+                if !isUserInitiated {
+                    currentState = .idle
+                    return
+                }
                 currentState = .error("解析版本发布数据失败")
                 return
             }
@@ -198,6 +238,10 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             if UpdateManager.isVersion(tagName, greaterThan: currentVer) {
                 let assets = json["assets"] as? [[String: Any]] ?? []
                 guard let preferredAsset = UpdateManager.preferredReleaseAsset(from: assets) else {
+                    if !isUserInitiated {
+                        currentState = .idle
+                        return
+                    }
                     currentState = .error("最新版本未提供 macOS 安装镜像包")
                     return
                 }
@@ -205,6 +249,10 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                     for: preferredAsset.name,
                     from: assets
                 ) else {
+                    if !isUserInitiated {
+                        currentState = .idle
+                        return
+                    }
                     currentState = .error("最新版本缺少 Ed25519 更新签名，已拒绝不安全的安装包")
                     return
                 }
@@ -224,6 +272,10 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 currentState = .upToDate(currentVersion: currentVer)
             }
         } catch {
+            if !isUserInitiated {
+                currentState = .idle
+                return
+            }
             currentState = .error("解析版本数据异常：\(error.localizedDescription)")
         }
     }

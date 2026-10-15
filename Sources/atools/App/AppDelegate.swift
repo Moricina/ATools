@@ -44,6 +44,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         print("         Search Hotkey: \(config.searchHotkey.displayString)")
         runtimeLog("[App] ATools launched. PID: \(getpid()), FullDiskSearch: \(config.enableFullDiskSearch)")
 
+        // 后台静默检测更新（延时 8.0 秒避开冷启动峰值，内部具备 4 小时间隔节流）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8.0) {
+            UpdateManager.shared.checkForUpdates(isUserInitiated: false)
+        }
+
         // Raw key trace for diagnosing accidental-shortcut reports (debug log only;
         // runtimeLog is a no-op unless atools.debugLog is enabled).
         NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in

@@ -465,6 +465,18 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         return closestPill
     }
 
+    public func setSelectedCategory(id: UUID, animated: Bool = true) {
+        guard let targetPill = allPills.first(where: { $0.category.id == id }) else { return }
+        self.selectedCategoryId = id
+        for p in allPills {
+            p.isSelected = (p.category.id == id)
+        }
+        selectedPill = targetPill
+        stackView.layoutSubtreeIfNeeded()
+        layoutSelectionCapsule(animated: animated)
+        scrollSelectedPillIntoView(animated: animated)
+    }
+
     private var springLoadWorkItem: DispatchWorkItem?
     private var springLoadPillId: UUID?
 
@@ -473,6 +485,9 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         for subview in stackView.arrangedSubviews {
             if let pill = subview as? CategoryPillView {
                 pill.isDropTarget = (pill === targetPill)
+                if pill !== targetPill && pill.isSpringLoadingHovered {
+                    pill.isSpringLoadingHovered = false
+                }
             }
         }
 
@@ -480,19 +495,26 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
             if springLoadPillId != targetPill.category.id {
                 springLoadWorkItem?.cancel()
                 springLoadPillId = targetPill.category.id
+                targetPill.isSpringLoadingHovered = true
                 let work = DispatchWorkItem { [weak self, weak targetPill] in
                     guard let self = self, let pill = targetPill else { return }
                     self.springLoadPillId = nil
+                    pill.isSpringLoadingHovered = false
                     NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
                     self.categoryPillDidClick(pill)
                 }
                 springLoadWorkItem = work
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.42, execute: work)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.28, execute: work)
             }
         } else {
             springLoadWorkItem?.cancel()
             springLoadWorkItem = nil
             springLoadPillId = nil
+            for subview in stackView.arrangedSubviews {
+                if let pill = subview as? CategoryPillView, pill.isSpringLoadingHovered {
+                    pill.isSpringLoadingHovered = false
+                }
+            }
         }
     }
 
@@ -503,6 +525,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         for subview in stackView.arrangedSubviews {
             if let pill = subview as? CategoryPillView {
                 pill.isDropTarget = false
+                pill.isSpringLoadingHovered = false
             }
         }
     }
