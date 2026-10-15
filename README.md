@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Architecture-Universal%20(Apple%20Silicon%20%2B%20Intel)-orange?style=flat-square" alt="Universal" />
   <img src="https://img.shields.io/badge/Swift-5.9+-F05138?style=flat-square&logo=swift" alt="Swift 5.9" />
   <img src="https://img.shields.io/badge/Memory-20~30MB%20Footprint-brightgreen?style=flat-square" alt="Memory Footprint" />
-  <img src="https://img.shields.io/badge/Release-v1.3.18-blue?style=flat-square" alt="Latest Release" />
+  <img src="https://img.shields.io/badge/Release-v1.3.19-blue?style=flat-square" alt="Latest Release" />
 </p>
 
 ---
