@@ -313,6 +313,8 @@ public final class ResizeHandleView: NSView {
 /// (pills, grid items, splitter, resize handle) each opt out explicitly.
 private final class ShelfRootView: NSView {
     override var mouseDownCanMoveWindow: Bool { true }
+    var onMouseActivity: (() -> Void)?
+    private var rootTrackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -329,6 +331,40 @@ private final class ShelfRootView: NSView {
         super.layout()
         layer?.cornerRadius = 24
         layer?.masksToBounds = true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateTrackingAreas()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = rootTrackingArea {
+            removeTrackingArea(existing)
+        }
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect]
+        if let window = self.window, NSPointInRect(NSEvent.mouseLocation, window.frame) {
+            options.insert(.assumeInside)
+        }
+        let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        addTrackingArea(area)
+        rootTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        onMouseActivity?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onMouseActivity?()
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        onMouseActivity?()
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -357,13 +393,24 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     override public func loadView() {
         let savedW = CGFloat(ConfigManager.shared.config.shelfWidth)
         let savedH = CGFloat(ConfigManager.shared.config.shelfHeight)
-        self.view = ShelfRootView(frame: NSRect(x: 0, y: 0, width: savedW, height: savedH))
+        let rootView = ShelfRootView(frame: NSRect(x: 0, y: 0, width: savedW, height: savedH))
+        rootView.onMouseActivity = { [weak self] in
+            self?.evaluateMouseExitState()
+        }
+        self.view = rootView
         setupLayout()
     }
 
     override public func viewWillAppear() {
         super.viewWillAppear()
         snapWindowWidthIfNeeded()
+    }
+
+    override public func viewDidAppear() {
+        super.viewDidAppear()
+        if mouseExitPollTimer == nil {
+            beginMouseExitMonitoringOnShow(summonedDirectly: false)
+        }
     }
 
     public func snapWindowWidthIfNeeded() {
@@ -420,35 +467,75 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private var trackingArea: NSTrackingArea?
     private var mouseExitWorkItem: DispatchWorkItem?
     private var mouseExitPollTimer: Timer?
+    private var localMouseMoveMonitor: Any?
+    private var globalMouseMoveMonitor: Any?
     private var hasMouseEnteredPanel: Bool = false
 
-    public func beginMouseExitMonitoringOnShow() {
+    public func cancelPendingMouseExitAutoClose() {
+        mouseExitWorkItem?.cancel()
+        mouseExitWorkItem = nil
+    }
+
+    public func beginMouseExitMonitoringOnShow(summonedDirectly: Bool = false) {
         mouseExitWorkItem?.cancel()
         mouseExitWorkItem = nil
         if let window = self.view.window {
-            hasMouseEnteredPanel = NSPointInRect(NSEvent.mouseLocation, window.frame)
+            window.acceptsMouseMovedEvents = true
+            let mouseLoc = NSEvent.mouseLocation
+            let insideShelf = NSPointInRect(mouseLoc, window.frame)
+            let insideSettings = SettingsWindowController.visibleWindowFrame.map { NSPointInRect(mouseLoc, $0) } ?? false
+            hasMouseEnteredPanel = insideShelf || (summonedDirectly && !insideSettings)
         } else {
-            hasMouseEnteredPanel = false
+            hasMouseEnteredPanel = summonedDirectly
         }
         updateViewTrackingAreas()
 
         mouseExitPollTimer?.invalidate()
-        let timer = Timer(timeInterval: 0.12, target: self, selector: #selector(pollMouseExitState), userInfo: nil, repeats: true)
+        let timer = Timer(timeInterval: 0.10, target: self, selector: #selector(pollMouseExitState), userInfo: nil, repeats: true)
         RunLoop.main.add(timer, forMode: .common)
         mouseExitPollTimer = timer
+
+        installMouseMoveMonitors()
     }
 
     public func stopMouseExitMonitoring() {
         mouseExitPollTimer?.invalidate()
         mouseExitPollTimer = nil
+        removeMouseMoveMonitors()
         mouseExitWorkItem?.cancel()
         mouseExitWorkItem = nil
         hasMouseEnteredPanel = false
     }
 
+    private func installMouseMoveMonitors() {
+        removeMouseMoveMonitors()
+        localMouseMoveMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.mouseMoved, .mouseEntered, .mouseExited, .leftMouseUp, .rightMouseUp]
+        ) { [weak self] event in
+            self?.evaluateMouseExitState()
+            return event
+        }
+        globalMouseMoveMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.mouseMoved, .leftMouseUp, .rightMouseUp]
+        ) { [weak self] _ in
+            self?.evaluateMouseExitState()
+        }
+    }
+
+    private func removeMouseMoveMonitors() {
+        if let local = localMouseMoveMonitor {
+            NSEvent.removeMonitor(local)
+            localMouseMoveMonitor = nil
+        }
+        if let global = globalMouseMoveMonitor {
+            NSEvent.removeMonitor(global)
+            globalMouseMoveMonitor = nil
+        }
+    }
+
     private func updateViewTrackingAreas() {
         if let existing = trackingArea { view.removeTrackingArea(existing) }
-        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect]
         if let window = view.window, NSPointInRect(NSEvent.mouseLocation, window.frame) {
             options.insert(.assumeInside)
             hasMouseEnteredPanel = true
@@ -470,13 +557,22 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     override public func mouseExited(with event: NSEvent) {
-        hasMouseEnteredPanel = true
-        scheduleMouseExitAutoCloseIfNeeded()
+        evaluateMouseExitState()
     }
 
     @objc private func pollMouseExitState() {
+        evaluateMouseExitState()
+    }
+
+    private func evaluateMouseExitState() {
         guard let window = self.view.window, window.isVisible else {
             stopMouseExitMonitoring()
+            return
+        }
+        // 固定在桌面时，绝对不受「移出面板自动关闭」影响
+        guard !PanelCoordinator.shared.isShelfPinned else {
+            mouseExitWorkItem?.cancel()
+            mouseExitWorkItem = nil
             return
         }
         guard ConfigManager.shared.config.autoCloseOnMouseExit else {
@@ -488,7 +584,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             || NSEvent.pressedMouseButtons != 0
             || NSApp.modalWindow != nil
             || PanelCoordinator.shared.isModalDialogOpen
-            || PanelCoordinator.shared.isRightClickMenuOpen {
+            || PanelCoordinator.shared.isEffectiveMenuOpen {
             mouseExitWorkItem?.cancel()
             mouseExitWorkItem = nil
             return
@@ -507,19 +603,21 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     private func scheduleMouseExitAutoCloseIfNeeded() {
         guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
+        guard !PanelCoordinator.shared.isShelfPinned else { return }
         guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
-        if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isRightClickMenuOpen { return }
+        if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isEffectiveMenuOpen { return }
 
         mouseExitWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.mouseExitWorkItem = nil
             guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
+            guard !PanelCoordinator.shared.isShelfPinned else { return }
             guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
-            if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isRightClickMenuOpen { return }
+            if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isEffectiveMenuOpen { return }
             let mouseLoc = NSEvent.mouseLocation
             if let window = self.view.window, window.isVisible, !NSPointInRect(mouseLoc, window.frame) {
-                PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
+                PanelCoordinator.shared.hideShelfPanel()
             }
         }
         mouseExitWorkItem = work
@@ -895,8 +993,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             promptMissingItemAction(for: item)
             return
         }
-        if ConfigManager.shared.config.autoCloseOnLaunch {
-            PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
+        if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
+            PanelCoordinator.shared.hideShelfPanel()
         }
         executeLauncherItem(item)
     }
@@ -1192,6 +1290,7 @@ public final class ShelfPanel: NSPanel {
 
     public func prepareForDisplay() {
         updateWindowAppearanceForTheme()
+        shelfViewController.snapWindowWidthIfNeeded()
         shelfViewController.resetKeyboardState()
         shelfViewController.loadData()
         shelfViewController.categoryBar.updatePillsAppearance()

@@ -2498,13 +2498,16 @@
   - 执行 `./Scripts/package_app.sh` 打包并签名，生成 `ATools.app`、`ATools.zip`、`ATools.dmg` 及其 Ed25519 `.sig` 签名文件；
   - 通过 GitHub CLI 发布 Release 并上传全部发布资产。
 
-### 36. 修复应用抽屉「鼠标移出面板后自动关闭」失效并加固边缘交互边界 (2026-10-15)
+### 36. 修复应用抽屉「鼠标移出面板后自动关闭」失效并严格保障「固定在桌面」优先级保护 (2026-10-15)
 
-- **问题根因与排查结论**：
-  1. **「固定在桌面」(`isShelfPinned`) 静默拦截了「鼠标移出面板后自动关闭」与「点击启动应用后自动关闭」**：`ShelfPanel.swift` 的 `mouseExited` 与 `didLaunchItem` 原先包含 `guard !PanelCoordinator.shared.isShelfPinned else { return }`，且调用 `hideShelfPanel()` 未带 `forceHidePinned: true`。一旦用户勾选过「固定在桌面」（设计定位为“不受失焦关闭影响”），开启「鼠标移出面板后自动关闭」就会完全失效。
-  2. **`NSTrackingArea` 缺少 `.assumeInside`**：抽屉唤出时定位在鼠标正下方（`positionPanelFollowMouse`），且切换分类或重排触发 `viewDidLayout()` 时会重建 `NSTrackingArea`；因缺少 `.assumeInside`，AppKit 在鼠标已处于视图内时不会触发首次 `mouseExited`。
-  3. **右键菜单关闭后或快速划过滚动视图边缘漏发 `mouseExited`**：在面板内呼出右键菜单并将鼠标移到面板外关闭菜单后，AppKit 不会补发 `mouseExited`。
-  4. **其他潜在交互缺陷一并修复**：
+- **问题根因与修复详情**：
+  1. **严格保障「固定在桌面」(`isShelfPinned == true`) 最高优先级保护**：
+     - 当勾选「固定在桌面」时，抽屉面板完全不受「鼠标移出面板后自动关闭」(`autoCloseOnMouseExit`)、「点击启动应用后自动关闭」(`autoCloseOnLaunch`) 及外部点击失焦关闭的影响；勾选瞬间立即取消排队中的自动关闭任务（`cancelPendingMouseExitAutoClose()`），取消固定时若抽屉可见则立即热恢复移出监控。
+  2. **彻底修复未固定时「鼠标移出面板后自动关闭」不生效问题**：
+     - **视图层 `ShelfRootView.updateTrackingAreas()` + `.assumeInside`**：将 `NSTrackingArea` 下沉至 `NSView` 子类 `ShelfRootView` 的生命周期内，并在抽屉唤出到鼠标正下方时动态注入 `.assumeInside` 与 `window.acceptsMouseMovedEvents = true`；
+     - **全局/本地鼠标移动监听 + `0.10s` `.common` 模式轮询双保险**：在抽屉显示期间同时挂载 `NSEvent` 本地与全局鼠标移动监听器（`.mouseMoved` / `.mouseEntered` / `.mouseExited` / `.leftMouseUp` / `.rightMouseUp`）与 `0.10s` 定时器 `evaluateMouseExitState()`，彻底解决被 `NSScrollView` 及图标按钮子视图拦截 `mouseExited` 的问题；
+     - **自愈式菜单状态锁 `isEffectiveMenuOpen`**：结合 `RunLoop.main.currentMode == .eventTracking` 与时间戳校验，防止因状态栏菜单或右键菜单触发模态弹窗导致 `NSMenu.didEndTrackingNotification` 遗漏而永久阻塞自动关闭。
+  3. **其他潜在交互缺陷一并修复**：
      - 跨分类拖拽图标经悬停切到分类 B 后，若又拖回源分类 A 的胶囊上松手，补全自动切回源分类 A 的状态同步；
      - 在抽屉右键菜单切换「固定在桌面」时广播 `.atoolsShelfDataDidChange`，使打开中的偏好设置窗口实时同步开关状态；
      - 在偏好设置中开启「鼠标移出面板后自动关闭」时，若抽屉当前已处于打开状态，立即热启动移出监测。

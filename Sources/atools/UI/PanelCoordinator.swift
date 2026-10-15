@@ -52,6 +52,9 @@ public final class PanelCoordinator {
     private var shelfPanelCreated = false
     private var searchPanelCreated = false
 
+    public var isShelfPanelCreated: Bool { return shelfPanelCreated }
+    public var isShelfPanelVisible: Bool { return shelfPanelCreated && shelfPanel.isVisible }
+
     public private(set) lazy var shelfPanel: ShelfPanel = {
         shelfPanelCreated = true
         return ShelfPanel()
@@ -81,6 +84,23 @@ public final class PanelCoordinator {
     /// Tracks whether a right-click context menu is currently open, so that
     /// the panel is not dismissed when the user right-clicks on a grid item.
     public private(set) var isRightClickMenuOpen: Bool = false
+    private var menuTrackingBeganAt: Date?
+    private var menuTrackingGeneration: UInt = 0
+
+    /// 自愈式菜单追踪状态：结合 RunLoop.Mode.eventTracking 与时间戳校验，防止因菜单动作打开模态窗导致 didEndTrackingNotification 遗漏而永久阻塞自动关闭
+    public var isEffectiveMenuOpen: Bool {
+        guard isRightClickMenuOpen else { return false }
+        if RunLoop.main.currentMode == .eventTracking {
+            return true
+        }
+        if let began = menuTrackingBeganAt, Date().timeIntervalSince(began) < 0.25 {
+            return true
+        }
+        isRightClickMenuOpen = false
+        menuTrackingBeganAt = nil
+        return false
+    }
+
     /// Tracks whether a non-left mouse button is currently pressed (prevents
     /// dismissal on right/middle mouseDown; only dismisses on mouseUp).
     private var isNonLeftMouseDown: Bool = false
@@ -93,10 +113,6 @@ public final class PanelCoordinator {
         set {
             guard newValue != ConfigManager.shared.config.isShelfPinned else { return }
             ConfigManager.shared.updateIsShelfPinned(newValue)
-            if shelfPanelCreated {
-                shelfPanel.shelfViewController.updatePinButtonState(isPinned: newValue)
-            }
-            NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         }
     }
 
@@ -175,17 +191,24 @@ public final class PanelCoordinator {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.isRightClickMenuOpen = true
+            guard let self = self else { return }
+            self.menuTrackingGeneration &+= 1
+            self.menuTrackingBeganAt = Date()
+            self.isRightClickMenuOpen = true
         }
         NotificationCenter.default.addObserver(
             forName: NSMenu.didEndTrackingNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            guard let self = self else { return }
+            let gen = self.menuTrackingGeneration
             // Delay slightly to avoid a race between menu close and the
             // click event that triggered it.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                self?.isRightClickMenuOpen = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                guard let self = self, self.menuTrackingGeneration == gen else { return }
+                self.isRightClickMenuOpen = false
+                self.menuTrackingBeganAt = nil
             }
         }
     }
@@ -262,7 +285,7 @@ public final class PanelCoordinator {
                 isDraggingActive: isDraggingActive,
                 hasModalWindow: NSApp.modalWindow != nil || isModalDialogOpen,
                 isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
-                isRightClickMenuOpen: isRightClickMenuOpen
+                isRightClickMenuOpen: isEffectiveMenuOpen
             )
             runtimeLog("[Panel] autoDismiss reason=\(reason) panel=shelf decision=\(decision)")
             if decision {
@@ -280,6 +303,8 @@ public final class PanelCoordinator {
     public func showShelfPanel() {
         guard ConfigManager.shared.config.enableShelfPanel else { return }
         panelPresentationGeneration &+= 1
+        isRightClickMenuOpen = false
+        menuTrackingBeganAt = nil
         recordPreviousFrontmostAppIfNeeded()
 
         shelfPanel.prepareForDisplay()
@@ -289,7 +314,7 @@ public final class PanelCoordinator {
         shelfPanel.makeKeyAndOrderFront(nil)
         shelfPanel.orderFrontRegardless()
         shelfPanel.makeKey()
-        shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
+        shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow(summonedDirectly: true)
 
         activePanel = .shelf
         installGlobalOutsideClickMonitor()
@@ -548,7 +573,7 @@ public final class PanelCoordinator {
     private func handleOutsideInteraction() {
         guard (shelfPanelCreated && shelfPanel.isVisible) || (searchPanelCreated && searchPanel.isVisible) else { return }
         if isDraggingActive || NSApp.modalWindow != nil || isModalDialogOpen { return }
-        if isRightClickMenuOpen { return }
+        if isEffectiveMenuOpen { return }
 
         let clickLoc = NSEvent.mouseLocation
         if let settingsFrame = SettingsWindowController.visibleWindowFrame, NSPointInRect(clickLoc, settingsFrame) {
@@ -567,7 +592,7 @@ public final class PanelCoordinator {
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
-                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isRightClickMenuOpen { return }
+                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isEffectiveMenuOpen { return }
                     // 再次检查此时是否发生了剪贴板协同变动
                     let initialCount = self.searchPanel.summonPasteboardChangeCount
                     if NSPasteboard.general.changeCount > initialCount {
@@ -587,7 +612,7 @@ public final class PanelCoordinator {
             if !NSPointInRect(clickLoc, visibleFrame) {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
-                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isRightClickMenuOpen { return }
+                    if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isEffectiveMenuOpen { return }
                     if self.isShelfPinned { return }
                     self.hideShelfPanel(restoreFocus: true)
                 }

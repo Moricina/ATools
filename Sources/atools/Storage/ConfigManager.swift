@@ -520,6 +520,15 @@ public final class ConfigManager {
     public func updateIsShelfPinned(_ pinned: Bool) {
         self.config.isShelfPinned = pinned
         save()
+        if PanelCoordinator.shared.isShelfPanelCreated {
+            PanelCoordinator.shared.shelfPanel.shelfViewController.updatePinButtonState(isPinned: pinned)
+            if pinned {
+                PanelCoordinator.shared.shelfPanel.shelfViewController.cancelPendingMouseExitAutoClose()
+            } else if PanelCoordinator.shared.isShelfPanelVisible {
+                PanelCoordinator.shared.shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
+            }
+        }
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
     }
 
     public func updateAutoCloseOnLaunch(_ enabled: Bool) {
@@ -531,10 +540,10 @@ public final class ConfigManager {
         self.config.autoCloseOnMouseExit = enabled
         save()
         if enabled {
-            if PanelCoordinator.shared.shelfPanel.isVisible {
+            if PanelCoordinator.shared.isShelfPanelVisible {
                 PanelCoordinator.shared.shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
             }
-        } else {
+        } else if PanelCoordinator.shared.isShelfPanelCreated {
             PanelCoordinator.shared.shelfPanel.shelfViewController.stopMouseExitMonitoring()
         }
     }
