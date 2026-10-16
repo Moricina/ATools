@@ -263,6 +263,7 @@ public struct AtoolsConfig: Codable {
     public var sidebarWidth: Double
     public var theme: AppTheme
     public var shelfIconScale: Double
+    public var shelfItemSpacing: Double
     public var themeOpacity: Double
 
     // Panel Toggles and Auto-Close Behavior
@@ -342,6 +343,7 @@ public struct AtoolsConfig: Codable {
         sidebarWidth: Double = 84,
         theme: AppTheme = .macosLiquidLight,
         shelfIconScale: Double = 1.0,
+        shelfItemSpacing: Double = 6.0,
         themeOpacity: Double? = nil,
         enableShelfPanel: Bool = true,
         enableSearchPanel: Bool = true,
@@ -389,6 +391,7 @@ public struct AtoolsConfig: Codable {
         self.sidebarWidth = sidebarWidth
         self.theme = theme
         self.shelfIconScale = shelfIconScale
+        self.shelfItemSpacing = max(2.0, min(24.0, shelfItemSpacing))
         let resolvedOpacity = themeOpacity ?? theme.defaultOpacity
         self.themeOpacity = max(0.40, min(1.00, resolvedOpacity))
         self.enableShelfPanel = enableShelfPanel
@@ -436,7 +439,7 @@ public struct AtoolsConfig: Codable {
         case version, shelfHotkey, searchHotkey, categories
         case enableCalculator, enableDictionary, enableFullDiskSearch, searchResultLimit
         case shelfWidth, shelfHeight, categoryOrientation, shelfIconSize, sidebarWidth
-        case theme, shelfIconScale, themeOpacity
+        case theme, shelfIconScale, shelfItemSpacing, themeOpacity
         case enableShelfPanel, enableSearchPanel, enableFavoritesCategory
         case isShelfPinned
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
@@ -467,6 +470,8 @@ public struct AtoolsConfig: Codable {
         self.theme = resolvedTheme
         let rawScale = (try? container.decode(Double.self, forKey: .shelfIconScale)) ?? 1.0
         self.shelfIconScale = max(0.70, min(1.30, rawScale))
+        let rawSpacing = (try? container.decode(Double.self, forKey: .shelfItemSpacing)) ?? 6.0
+        self.shelfItemSpacing = max(2.0, min(24.0, rawSpacing))
         let rawOpacity = (try? container.decode(Double.self, forKey: .themeOpacity)) ?? resolvedTheme.defaultOpacity
         self.themeOpacity = max(0.40, min(1.00, rawOpacity))
 

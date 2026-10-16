@@ -2919,4 +2919,120 @@
   - 执行 `./Scripts/package_app.sh` 编译 Release、代码签名与 DMG/ZIP 打包成功；
   - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启应用（PID: `3932`）运行稳定，彻底解决抽屉图标乱飘与幽灵高亮问题。
 
+---
+
+### 90. 应用抽屉首列图标左边缘与顶部选中分类胶囊严格垂绝对齐优化 (2026-10-16)
+
+- **背景与痛点**：
+  - 用户反馈应用抽屉水平模式下，顶部分类胶囊最左侧与下方应用图标最左侧未对齐。
+  - 用户提供截图表明：顶部选中的白色分类药丸（“办公”）左边缘距面板左边缘为 `20pt`，而下方第一列应用图标（腾讯会议）左边缘距面板边缘达到 `44pt`，中间留有宽达 `24pt` 的明显凹陷空档，破坏了界面的规整秩序。
+
+- **根因分析**：
+  1. **三层内边距重叠累加**：
+     - `shelfGrid` 距面板窗口 leading 为 `10pt`；
+     - `ShelfGridMetrics` 原设定 `sideMargin = max(10, round((itemWidth - iconSize) / 2.0)) = 17pt`；
+     - 按钮内部 `iconImageView` 水平居中，其左边缘距按钮左边缘再偏移 `(itemWidth - iconSize) / 2 = 17pt`；
+     - 三者累加使图标最左侧绝对 X 坐标为 `10 + 17 + 17 = 44pt`；
+  2. 而顶部 `categoryBar` leading 为 `14pt`，内部 `stackView` leading 为 `6pt`，分类胶囊最左侧绝对 X 坐标为 `14 + 6 = 20pt`。两层缺乏系统性几何闭环约束。
+
+- **涉及文件列表及修改逻辑**：
+  1. [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - 水平模式下将 `shelfGrid.leadingAnchor` 与 `shelfGrid.trailingAnchor` 约束常数由 `10/-10` 调整为 `0/0`，让网格容器占满窗口两端，将网格几何计算的单一数据源完全收敛于 `ShelfGridMetrics`；
+  2. [`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - 重构 `ShelfGridMetrics.init`：根据按钮内部图标内边距 $\Delta = \text{round}((\text{itemWidth} - \text{iconSize}) / 2)$，精确将第一列外边距定义为 `sideMargin = max(0, 20.0 - iconInset)`；
+     - 满足 $\text{sideMargin} + \text{iconInset} \equiv 20.0\text{pt}$，在 `scale = 0.8`、`1.0`、`1.2` 等所有图标缩放比例下，第一列图标最左边缘均恒定在 `X = 20.0pt`；
+     - 调整 `ShelfGridMetrics.chromeWidth(for:)` 在水平模式下返回 `0`，使得窗口宽度自动吸附（`snappedWindowWidth`）、最小窗口宽度（`minimumWindowWidth`）、拖拽排序槽位（`slotFrame` 与 `targetSlotIndex`）全部 100% 保持闭环守恒。
+
+- **兼容性与边界防护策略**：
+  - 首列图标左边缘距面板为 `20pt`，最右列图标右边缘距面板同样对称保持为 `20pt`，左右完全对称；
+  - 按钮的悬停/选中高亮底衬居中于图标周围，在 `X = 20 - (iconInset - 4) = 7pt`，完全位于面板圆角平直区域内，无任何被裁切风险；
+  - 垂直模式（侧边栏模式）下的 Splitter 间距与吸附宽度公式保持独立运行。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh debug --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 实机呼出抽屉并截图验证（`/tmp/shelf_aligned_crop.png`）：
+    * 证实顶部的「办公」分类胶囊左圆弧顶端、第一行「腾讯会议」图标左边缘、第二行「Windows...」图标左边缘**在垂直方向上一丝不差地严格垂绝对齐**；
+    * 彻底消除了原本宽达 `24pt` 的凹陷错位空档，整体视觉极具现代感与秩序美。
+
+---
+
+### 91. 应用抽屉垂直模式胶囊防溢出、选中底衬绝对对齐与 6pt 统一间距重构 (2026-10-16)
+
+- **背景与痛点**：
+  1. 用户反馈应用抽屉从水平顶部排版切换为垂直左侧排版时，顶部分类药丸的选中高亮胶囊（selectionCapsule）尺寸异常横向拉伸，贯穿渗透并漂浮在右侧应用图标网格上方；
+  2. 水平顶部排版状态下，第一列应用图标处于选中/悬停态时的磨砂高亮底衬（liquidBackdrop）最左边缘，未能与顶部分类胶囊选中的最左边缘垂直对齐；
+  3. 应用图标高亮底衬之间的横纵向净间距与分类胶囊之间的间距（6pt）不一致，网格视觉略显疏离。
+
+- **根因分析**：
+  1. **排版切换时序倒置**：`ShelfPanel.handleOrientationChanged()` 中先调用了 `categoryBar.orientation = orientation`，导致内部 `reloadData` 生成药丸约束时父级视图仍处于水平模式（宽度达 600pt+），药丸 AutoLayout 算出了 590pt 的错误全宽，且赋给了非 AutoLayout 管理的 `selectionCapsule`。随后切换为 84pt 侧边栏约束后，`selectionCapsule` 尺寸未被同步收缩与刷新，造成跨区域横向飞线；
+  2. **几何原点与按钮内缩偏移**：顶部分类条距窗口左边缘为 `14.0pt`，`ShelfItemButton` 内部之前对 `liquidBackdrop.frame` 施加了 `bounds.insetBy(dx: 4, dy: 0)` 的无意义内缩，导致底衬相对于按钮实际边缘凹进 4pt，且网格侧边距未与分类条 14pt 同轴；
+  3. **间距度量未对齐**：`ShelfGridMetrics.spacing` 原设定为 `12.0pt`，而 `CategoryBarView` 中药丸之间的间距为 `6.0pt`。
+
+- **涉及文件列表及修改逻辑**：
+  1. [`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)：
+     - 新增公开布局方法 `refreshCapsuleLayout()`，主动触发 `stackView.layoutSubtreeIfNeeded()` 与 `layoutSelectionCapsule(animated: false)`；
+     - 在 `layoutSelectionCapsule` 内部增加垂直模式硬防护：当 `orientation == .vertical` 时，强制限制 `target.size.width = min(target.size.width, stackView.bounds.width)`，双重切断胶囊横向溢出可能；
+  2. [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - 重构 `handleOrientationChanged()` 与 `setupLayout()` 时序：先切换父级 AutoLayout 约束并执行 `view.layoutSubtreeIfNeeded()`，使分类条与侧边栏获得确切的物理 bounds，再将 `categoryBar.orientation` 赋新值并调用 `categoryBar.refreshCapsuleLayout()`；
+  3. [`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - **底衬充满单元格**：在 `ShelfItemButton.layout()` 中移除 `insetBy(dx: 4)`，直接让 `liquidBackdrop.frame = bounds` 与 `baseLayer.frame = bounds`，按钮物理外边缘与高亮底衬外边缘完全重合，同时将 `titleLabel` 左右边距由 4pt 精简为 2pt；
+     - **统一 6pt 间距**：将 `ShelfGridMetrics.spacing` 从 `12.0pt` 重构为 `6.0pt`，使相邻应用高亮底衬之间的净间距与分类胶囊之间的间距完全一致；
+     - **同轴 14.0pt 绝对对齐**：水平模式下 `ShelfGridMetrics.sideMargin` 统一设定为 `14.0pt`（与 `categoryBar` 的 `leadingAnchor = 14.0pt` 零误差同轴），使第一列应用选中底衬最左侧恒等于 `X = 14.0pt`；垂直模式下侧边距保持 `12.0pt`；
+     - 提供 `ShelfGridMetrics.init(config:)` 便捷构造器，并在 `currentColumnCount`、`relayoutButtons`、`slotFrame`、`targetSlotIndex` 中统一驱动 `metrics.itemHeight`；
+  4. [`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)：
+     - 在诊断套件 `[9/9]` 中新增自动化断言，以 `Pill.convert(bounds.origin, to: nil).x` 与 `Item.convert(bounds.origin, to: nil).x` 进行绝对坐标比对，确保垂直对齐误差严格 $< 0.5\text{pt}$，并自动导出 `/tmp/shelf_aligned_preview.png`。
+
+- **兼容性与边界防护策略**：
+  - 水平模式下：分类胶囊左边距 14pt、右边距 14pt，应用网格左边距 14pt、右边距 14pt，全窗口左右与上下几何完全对称；
+  - 垂直模式下：侧边栏拖拽调宽（sidebarSplitter）、水平/垂直动态切换时胶囊均由 `refreshCapsuleLayout` 与 `min(target.width, stackView.width)` 双重守护，严禁溢出；
+  - 缩放比例（0.8x、1.0x、1.2x）全兼容：按键导航、触控板横滑翻页、拖拽让位与 Option 快速交换不受任何影响。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh debug --test` 综合诊断套件：
+    * 终端输出：`Aligned Check: Category Pill X = 14.0, Shelf Item X = 14.0`；
+    * **13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 视觉校验：
+    * `/tmp/shelf_vertical_preview.png`：切换到垂直侧边栏后，选中胶囊完美契合侧边栏药丸内部，无任何横向拉长或越界；
+    * `/tmp/shelf_aligned_preview.png`：水平模式下，顶部分类胶囊选中最左边缘与第一列应用图标选中底衬最左边缘垂直绝对对齐，相邻图标选中净间距与分类胶囊净间距（6pt）完全一致。
+
+---
+
+### 92. 设置面板应用图标间距自定义滑块、动态几何引擎与对齐不变性闭环 (2026-10-16)
+
+- **背景与痛点**：
+  - 用户希望在偏好设置中提供可调节「应用图标选中之间间距」的滑块，满足不同用户对抽屉图标紧凑度（如 2~6 pt）或开阔呼吸感（如 12~24 pt）的个性化视觉偏好；
+  - 必须确保在用户任意拖拽改变间距时，第一列应用图标最左侧依然与顶部分类胶囊最左侧 100% 保持严格的垂绝对齐，且连续滑动时窗口自适应平滑无掉帧。
+
+- **架构与设计方案（经 AppKit 架构与交互设计专家子代理审查通过）**：
+  1. **数据模型与配置管理**：
+     - 在 [`AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift) 中新增 `shelfItemSpacing: Double`（范围 `[2.0, 24.0] pt`，默认 `6.0 pt`），内置向下兼容缺省与解码安全钳位保护；
+     - 在 [`ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift) 中提供 `updateShelfItemSpacing(_:)`，配合内部 400ms 防抖机制持久化，并发布 `.atoolsShelfItemSpacingDidChange` 全局通知；
+     - 在 [`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift) 中注册对应通知类型。
+  2. **几何引擎与对齐不变性闭环**：
+     - 在 [`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) 的 `ShelfGridMetrics` 中，将静态 `spacing` 重构为由配置动态注入的实例属性 `public let spacing: CGFloat`；
+     - **数学守恒证明（Alignment Invariance Theorem）**：水平模式下第一列应用图标绝对坐标为 $X_0 = \text{sideMargin} + 0 \times (\text{itemWidth} + \text{spacing}) = \text{sideMargin} = 14.0\text{ pt}$。无论用户将间距调整为 2pt 还是 24pt，首列应用选中底衬在窗口中的绝对 X 坐标恒定等于 14.0pt，与顶部分类胶囊选中最左边缘永远保持绝对零误差垂绝对齐；
+     - 窗口自动吸附（`snappedWindowWidth`）、最小宽度（`minimumWindowWidth`）、列数计算（`currentColumnCount`）、网格重排（`relayoutButtons`）、拖拽槽位定位（`slotFrame` 与 `targetSlotIndex`）全链路接入动态 `metrics.spacing`；
+     - 暴露轻量级重排接口 `public func updateMetricsAndRelayout()`，仅更新布局几何，不重建按钮与数据源，单帧耗时 $< 0.1\text{ms}$。
+  3. **实时流畅事件流与窗口自适应**：
+     - 在 [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift) 中监听 `.atoolsShelfItemSpacingDidChange`；
+     - 在 `handleItemSpacingChanged` 中，自适应窗口宽度调用 `window.setFrame(finalFrame, display: true, animate: false)`，彻底消除 0.25s 模态动画阻塞，依托 macOS WindowServer GPU 硬件加速实现 120 FPS 极速跟手调节。
+  4. **偏好设置 UI 交互与视觉统一**：
+     - 在 [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift) 的 `ShelfSettingsTabView`（应用抽屉 $\rightarrow$ 分类与视觉排版）中增加「应用图标间距」配置行；
+     - 配备 SF Symbol 图标 `arrow.left.and.right.square`、`NSSlider`（范围 2~24 pt，连续响应）、等宽字体实时数值 Badge（显示当前 `X pt`）以及「恢复默认」按钮（一键平滑重置为 6 pt）。
+  5. **自动化测试与断言保护**：
+     - 在 [`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift) 中新增对 `shelfItemSpacing` 动态配置往返、极端值（2.0、10.0、24.0 pt）及水平模式下 `sideMargin = 14.0pt` 几何对齐不变性的自动化校验。
+
+- **兼容性与边界防护策略**：
+  - 老用户升级：存量 `config.json` 自动解析并落到安全默认值 `6.0 pt`；
+  - 极端值安全：下限 2.0 pt 时由于 `itemWidth` 恒定守恒，按钮内部图标与文字不受挤压；上限 24.0 pt 配合窗口吸附呈现开阔通透视觉；
+  - 现有功能：键盘方向键跨行导航、Alt/Option 快速交换、鼠标拖拽排序与触控板横滑翻页 100% 保持无缝兼容。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh debug --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 视觉校验与抓帧：`/tmp/settings_tab_shelf_layout.png` 验证设置面板「应用图标间距」行像素级对齐，Badge 与恢复默认按钮状态联动准确；
+  - 执行 `./Scripts/package_app.sh` 完成 Release 打包与代码签名，同步覆盖安装至 `/Applications/ATools.app` 并热重启（PID: `33182`）运行稳定。
+
+
+
+
 

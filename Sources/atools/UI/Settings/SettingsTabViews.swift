@@ -470,6 +470,9 @@ public final class ShelfTabView: NSView {
     private var iconSizeSlider: NSSlider!
     private var iconSizeBadge: NSTextField!
     private var resetScaleButton: SettingsResetButton!
+    private var itemSpacingSlider: NSSlider!
+    private var itemSpacingBadge: NSTextField!
+    private var resetSpacingButton: SettingsResetButton!
     private var favoritesSwitch: NSSwitch!
     private var shelfMissingItemsRow: SettingsRowView!
     private var shelfCleanMissingBtn: SettingsPillButton!
@@ -732,6 +735,52 @@ public final class ShelfTabView: NSView {
         )
         card3.addRow(rowScale)
 
+        let spacingContainer = NSView()
+        spacingContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        itemSpacingSlider = NSSlider(value: 6, minValue: 2, maxValue: 24, target: self, action: #selector(spacingSliderChanged(_:)))
+        itemSpacingSlider.translatesAutoresizingMaskIntoConstraints = false
+        itemSpacingSlider.numberOfTickMarks = 0
+        itemSpacingSlider.allowsTickMarkValuesOnly = false
+        itemSpacingSlider.isContinuous = true
+        spacingContainer.addSubview(itemSpacingSlider)
+
+        itemSpacingBadge = NSTextField(labelWithString: "6 pt")
+        itemSpacingBadge.translatesAutoresizingMaskIntoConstraints = false
+        itemSpacingBadge.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        itemSpacingBadge.textColor = .secondaryLabelColor
+        itemSpacingBadge.alignment = .left
+        spacingContainer.addSubview(itemSpacingBadge)
+
+        resetSpacingButton = SettingsResetButton(title: "恢复默认", target: self, action: #selector(resetSpacingToDefault))
+        spacingContainer.addSubview(resetSpacingButton)
+
+        NSLayoutConstraint.activate([
+            spacingContainer.widthAnchor.constraint(equalToConstant: 240),
+            spacingContainer.heightAnchor.constraint(equalToConstant: 24),
+
+            itemSpacingSlider.leadingAnchor.constraint(equalTo: spacingContainer.leadingAnchor),
+            itemSpacingSlider.centerYAnchor.constraint(equalTo: spacingContainer.centerYAnchor),
+            itemSpacingSlider.widthAnchor.constraint(equalToConstant: 120),
+
+            itemSpacingBadge.leadingAnchor.constraint(equalTo: itemSpacingSlider.trailingAnchor, constant: 6),
+            itemSpacingBadge.centerYAnchor.constraint(equalTo: spacingContainer.centerYAnchor),
+            itemSpacingBadge.widthAnchor.constraint(equalToConstant: 38),
+
+            resetSpacingButton.leadingAnchor.constraint(equalTo: itemSpacingBadge.trailingAnchor, constant: 8),
+            resetSpacingButton.centerYAnchor.constraint(equalTo: spacingContainer.centerYAnchor),
+            resetSpacingButton.trailingAnchor.constraint(equalTo: spacingContainer.trailingAnchor),
+            resetSpacingButton.heightAnchor.constraint(equalToConstant: 22)
+        ])
+
+        let rowSpacing = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.left.and.right.square"),
+            title: "应用图标间距",
+            subtitle: "自由调节应用抽屉网格内图标选中底衬之间的间隙 (2 ~ 24 pt，默认 6 pt)",
+            accessory: spacingContainer
+        )
+        card3.addRow(rowSpacing)
+
         favoritesSwitch = NSSwitch()
         favoritesSwitch.target = self
         favoritesSwitch.action = #selector(toggleFavorites(_:))
@@ -815,6 +864,13 @@ public final class ShelfTabView: NSView {
         let pct = Int(round(cfg.shelfIconScale * 100.0))
         iconSizeBadge.stringValue = "\(pct)%"
         resetScaleButton.isEnabled = enabled && (pct != 100)
+
+        itemSpacingSlider.isEnabled = enabled
+        let currentSpacing = cfg.shelfItemSpacing
+        itemSpacingSlider.doubleValue = currentSpacing
+        let spacingInt = Int(round(currentSpacing))
+        itemSpacingBadge.stringValue = "\(spacingInt) pt"
+        resetSpacingButton.isEnabled = enabled && (spacingInt != 6)
 
         favoritesSwitch.isEnabled = enabled
         favoritesSwitch.state = cfg.enableFavoritesCategory ? .on : .off
@@ -906,6 +962,20 @@ public final class ShelfTabView: NSView {
     @objc private func resetScaleToDefault() {
         iconSizeSlider.doubleValue = 100.0
         scaleSliderChanged(iconSizeSlider)
+    }
+
+    @objc private func spacingSliderChanged(_ sender: NSSlider) {
+        let val = round(sender.doubleValue)
+        let spacingInt = Int(val)
+        itemSpacingBadge.stringValue = "\(spacingInt) pt"
+        resetSpacingButton.isEnabled = (spacingInt != 6)
+        guard abs(val - ConfigManager.shared.config.shelfItemSpacing) > 0.001 else { return }
+        ConfigManager.shared.updateShelfItemSpacing(val)
+    }
+
+    @objc private func resetSpacingToDefault() {
+        itemSpacingSlider.doubleValue = 6.0
+        spacingSliderChanged(itemSpacingSlider)
     }
 
     @objc private func toggleFavorites(_ sender: NSSwitch) {

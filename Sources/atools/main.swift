@@ -1379,6 +1379,51 @@ if CommandLine.arguments.contains("--test") {
         }
     }
 
+    // Verify horizontal alignment: first category pill leading == first item button leading == 20.0pt
+    if let firstCat = ConfigManager.shared.config.categories.first {
+        let app1 = LauncherItem(name: "App1", itemType: .application, target: "/Applications/Safari.app")
+        let app2 = LauncherItem(name: "App2", itemType: .application, target: "/Applications/Mail.app")
+        ConfigManager.shared.addItems([app1, app2], to: firstCat.id)
+        shelfPanel.shelfViewController.loadData()
+        ConfigManager.shared.updateCategoryOrientation(.horizontal)
+        NotificationCenter.default.post(name: .atoolsCategoryOrientationDidChange, object: nil)
+        shelfPanel.prepareForDisplay()
+        if let shelfContent = shelfPanel.contentView {
+            shelfPanel.displayIfNeeded()
+            shelfContent.layoutSubtreeIfNeeded()
+            let gridButtons = shelfPanel.shelfViewController.shelfGrid.itemButtons
+            if let firstBtn = gridButtons.first, let selectedPill = shelfPanel.shelfViewController.categoryBar.allPills.first(where: { $0.isSelected }) {
+                firstBtn.isSelected = true
+                firstBtn.displayIfNeeded()
+                let btnPointInWindow = firstBtn.convert(firstBtn.bounds.origin, to: nil)
+                let pillPointInWindow = selectedPill.convert(selectedPill.bounds.origin, to: nil)
+                print("      -> Aligned Check: Category Pill X = \(pillPointInWindow.x), Shelf Item X = \(btnPointInWindow.x)")
+                TestAssertions.expect(abs(pillPointInWindow.x - btnPointInWindow.x) < 0.5, "First category pill X must match first shelf item X! Pill: \(pillPointInWindow.x), Item: \(btnPointInWindow.x)")
+            }
+            if let rep = shelfContent.bitmapImageRepForCachingDisplay(in: shelfContent.bounds) {
+                shelfContent.cacheDisplay(in: shelfContent.bounds, to: rep)
+                if let pngData = rep.representation(using: .png, properties: [:]) {
+                    try? pngData.write(to: URL(fileURLWithPath: "/tmp/shelf_aligned_preview.png"))
+                    print("      ✓ Saved horizontal aligned shelf preview to /tmp/shelf_aligned_preview.png")
+                }
+            }
+        }
+        ConfigManager.shared.removeItem(id: app1.id, from: firstCat.id)
+        ConfigManager.shared.removeItem(id: app2.id, from: firstCat.id)
+        shelfPanel.shelfViewController.loadData()
+    }
+
+    // Verify shelfItemSpacing dynamic adjustment & alignment invariance
+    let originalSpacing = ConfigManager.shared.config.shelfItemSpacing
+    for testSpacing in [2.0, 10.0, 24.0] {
+        ConfigManager.shared.updateShelfItemSpacing(testSpacing)
+        let metrics = ShelfGridMetrics(config: ConfigManager.shared.config)
+        TestAssertions.expect(abs(metrics.spacing - CGFloat(testSpacing)) < 0.01, "Metrics spacing must match testSpacing: \(testSpacing)")
+        // Verify alignment invariance: sideMargin is constant 14.0pt in horizontal mode
+        TestAssertions.expect(abs(metrics.sideMargin - 14.0) < 0.01, "Side margin must remain 14.0pt regardless of spacing: \(testSpacing)")
+    }
+    ConfigManager.shared.updateShelfItemSpacing(originalSpacing)
+
     // Verify category pills under liquidDark theme have consistent white text
     let originalTheme = ConfigManager.shared.config.theme
 

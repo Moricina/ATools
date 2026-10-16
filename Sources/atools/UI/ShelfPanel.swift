@@ -457,6 +457,13 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             name: .atoolsShelfDataDidChange,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleItemSpacingChanged),
+            name: .atoolsShelfItemSpacingDidChange,
+            object: nil
+        )
     }
 
     override public func viewDidLayout() {
@@ -673,8 +680,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             categoryBar.heightAnchor.constraint(equalToConstant: 36),
 
             shelfGrid.topAnchor.constraint(equalTo: categoryBar.bottomAnchor, constant: 4),
-            shelfGrid.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
-            shelfGrid.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
+            shelfGrid.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 0),
+            shelfGrid.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: 0),
             shelfGrid.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12)
         ]
 
@@ -701,7 +708,6 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         ]
 
         let orientation = ConfigManager.shared.config.categoryOrientation
-        categoryBar.orientation = orientation
         if orientation == .horizontal {
             sidebarSplitter.isHidden = true
             NSLayoutConstraint.activate(horizontalConstraints)
@@ -709,11 +715,13 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             sidebarSplitter.isHidden = false
             NSLayoutConstraint.activate(verticalConstraints)
         }
+        view.layoutSubtreeIfNeeded()
+        categoryBar.orientation = orientation
+        categoryBar.refreshCapsuleLayout()
     }
 
     @objc private func handleOrientationChanged() {
         let orientation = ConfigManager.shared.config.categoryOrientation
-        categoryBar.orientation = orientation
 
         NSLayoutConstraint.deactivate(horizontalConstraints)
         NSLayoutConstraint.deactivate(verticalConstraints)
@@ -726,6 +734,10 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             NSLayoutConstraint.activate(verticalConstraints)
         }
         view.layoutSubtreeIfNeeded()
+
+        categoryBar.orientation = orientation
+        categoryBar.refreshCapsuleLayout()
+
         snapWindowWidthIfNeeded()
         shelfGrid.reloadData(items: selectedCategory?.items ?? [])
     }
@@ -743,6 +755,19 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             }
         }
         shelfGrid.reloadData(items: selectedCategory?.items ?? [])
+    }
+
+    @objc private func handleItemSpacingChanged() {
+        if let window = self.view.window {
+            let snappedWidth = ShelfGridMetrics.snappedWindowWidth(currentWidth: window.frame.width, config: ConfigManager.shared.config)
+            let finalFrame = NSRect(x: window.frame.origin.x, y: window.frame.origin.y, width: snappedWidth, height: window.frame.height)
+            if finalFrame != window.frame {
+                // 实时拖拽滑动滑块时严禁使用 animate: true，通过 animate: false 杜绝 0.25s 模态动画阻塞队列，实现 120 FPS 极速流畅跟手
+                window.setFrame(finalFrame, display: true, animate: false)
+                ConfigManager.shared.updateShelfSize(width: snappedWidth, height: window.frame.height)
+            }
+        }
+        shelfGrid.updateMetricsAndRelayout()
     }
 
     public func updatePinButtonState(isPinned: Bool) {

@@ -327,6 +327,11 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         scrollSelectedPillIntoView(animated: false)
     }
 
+    public func refreshCapsuleLayout() {
+        stackView.layoutSubtreeIfNeeded()
+        layoutSelectionCapsule(animated: false)
+    }
+
     private func layoutSelectionCapsule(animated: Bool) {
         guard let pill = selectedPill else {
             selectionCapsule.isHidden = true
@@ -336,7 +341,12 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         selectionCapsule.updateCornerRadius(pill.layer?.cornerRadius ?? 15)
         selectionCapsule.updateColors()
 
-        let target = pill.convert(pill.bounds, to: stackView)
+        var target = pill.convert(pill.bounds, to: stackView)
+        // 关键防御：垂直模式下防止由于旧约束未完全收缩导致胶囊宽度溢出贯穿到网格
+        if orientation == .vertical && stackView.bounds.width > 0 {
+            target.size.width = min(target.size.width, stackView.bounds.width)
+        }
+
         if animated {
             // Flow like a liquid: slide and stretch toward the new pill with a
             // soft, slightly-overshooting ease-out so it reads as inertia.

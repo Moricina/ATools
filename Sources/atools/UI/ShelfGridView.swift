@@ -250,8 +250,8 @@ public final class ShelfItemButton: NSControl {
             missingBadgeView.heightAnchor.constraint(equalToConstant: 18),
 
             titleLabel.topAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 4),
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4)
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2)
         ])
 
         ThumbnailPipeline.shared.icon(forItem: item) { [weak self] img in
@@ -307,8 +307,8 @@ public final class ShelfItemButton: NSControl {
         // lags behind the button during window resizes and grid reflows.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        baseLayer.frame = bounds.insetBy(dx: 4, dy: 0)
-        liquidBackdrop.frame = bounds.insetBy(dx: 4, dy: 0)
+        baseLayer.frame = bounds
+        liquidBackdrop.frame = bounds
         CATransaction.commit()
     }
 
@@ -899,9 +899,9 @@ public final class ShelfGridView: NSView {
     }
 
     private func currentColumnCount() -> Int {
-        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let metrics = ShelfGridMetrics(config: ConfigManager.shared.config)
         let availableWidth = max(bounds.width, 100)
-        return max(1, Int((availableWidth - metrics.sideMargin * 2 + ShelfGridMetrics.spacing) / (metrics.itemWidth + ShelfGridMetrics.spacing)))
+        return max(1, Int((availableWidth - metrics.sideMargin * 2 + metrics.spacing) / (metrics.itemWidth + metrics.spacing)))
     }
 
     private func scrollToKeyboardSelection() {
@@ -982,6 +982,10 @@ public final class ShelfGridView: NSView {
         return btn
     }
 
+    public func updateMetricsAndRelayout() {
+        relayoutButtons(animated: false)
+    }
+
     private func relayoutButtons(animated: Bool, duration: TimeInterval = 0.24) {
         let buttons = visibleButtons
         guard !buttons.isEmpty else {
@@ -989,13 +993,13 @@ public final class ShelfGridView: NSView {
             return
         }
 
-        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let metrics = ShelfGridMetrics(config: ConfigManager.shared.config)
         let itemWidth = metrics.itemWidth
-        let itemHeight = metrics.itemWidth
+        let itemHeight = metrics.itemHeight
         let sideMargin = metrics.sideMargin
         let topMargin = ShelfGridView.gridTopMargin
-        let spacingX = ShelfGridMetrics.spacing
-        let spacingY = ShelfGridMetrics.spacing
+        let spacingX = metrics.spacing
+        let spacingY = metrics.spacing
         let bottomSafePadding: CGFloat = 20
 
         let availableWidth = max(bounds.width, 100)
@@ -1363,13 +1367,13 @@ public final class ShelfGridView: NSView {
 
     /// 计算指定网格槽位的矩形坐标
     private func slotFrame(for index: Int) -> NSRect {
-        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let metrics = ShelfGridMetrics(config: ConfigManager.shared.config)
         let itemWidth = metrics.itemWidth
-        let itemHeight = metrics.itemWidth
+        let itemHeight = metrics.itemHeight
         let sideMargin = metrics.sideMargin
         let topMargin = ShelfGridView.gridTopMargin
-        let spacingX = ShelfGridMetrics.spacing
-        let spacingY = ShelfGridMetrics.spacing
+        let spacingX = metrics.spacing
+        let spacingY = metrics.spacing
         let availableWidth = max(bounds.width, 100)
         let cols = max(1, Int((availableWidth - sideMargin * 2 + spacingX) / (itemWidth + spacingX)))
         let col = max(0, index % cols)
@@ -1382,13 +1386,13 @@ public final class ShelfGridView: NSView {
     /// 根据 contentView 内的坐标计算目标网格槽位索引（含 14% 边界磁滞防抖区，彻底消除边界闪烁）
     private func targetSlotIndex(at contentPoint: NSPoint, itemCount: Int, currentSlot: Int?) -> Int {
         guard itemCount > 0 else { return 0 }
-        let metrics = ShelfGridMetrics(scale: ConfigManager.shared.config.shelfIconScale)
+        let metrics = ShelfGridMetrics(config: ConfigManager.shared.config)
         let itemWidth = metrics.itemWidth
-        let itemHeight = metrics.itemWidth
+        let itemHeight = metrics.itemHeight
         let sideMargin = metrics.sideMargin
         let topMargin = ShelfGridView.gridTopMargin
-        let spacingX = ShelfGridMetrics.spacing
-        let spacingY = ShelfGridMetrics.spacing
+        let spacingX = metrics.spacing
+        let spacingY = metrics.spacing
 
         let availableWidth = max(bounds.width, 100)
         let cols = max(1, Int((availableWidth - sideMargin * 2 + spacingX) / (itemWidth + spacingX)))
@@ -1670,16 +1674,30 @@ public final class ShelfGridView: NSView {
 /// four places (grid layout, resize handle, snapping, icon-size change) with chrome widths
 /// that didn't match the real constraints, leaving the right margin 4–8pt wider than the left.
 public struct ShelfGridMetrics {
-    public static let spacing: CGFloat = 12
+    public static let defaultSpacing: CGFloat = 6.0
 
+    public let spacing: CGFloat
     public let itemWidth: CGFloat
+    public let itemHeight: CGFloat
     public let iconSize: CGFloat
     public let sideMargin: CGFloat
 
-    public init(scale: Double) {
-        itemWidth = round(82.0 * scale)
-        iconSize = round(48.0 * scale)
-        sideMargin = max(10, round((itemWidth - iconSize) / 2.0))
+    public init(scale: Double, spacing: Double = 6.0, isVertical: Bool = false) {
+        self.spacing = CGFloat(max(2.0, min(24.0, spacing)))
+        self.itemWidth = round(74.0 * scale)
+        self.itemHeight = round(80.0 * scale)
+        self.iconSize = round(48.0 * scale)
+        // 水平模式下使第一列应用选中底衬最左边缘与分类胶囊选中最左边缘（距窗口左边缘 14.0pt）垂直精确对齐：
+        // 垂直模式下为侧边栏预留 12.0pt 的呼吸间隙
+        self.sideMargin = isVertical ? 12.0 : 14.0
+    }
+
+    public init(config: AtoolsConfig) {
+        self.init(
+            scale: config.shelfIconScale,
+            spacing: config.shelfItemSpacing,
+            isVertical: config.categoryOrientation == .vertical
+        )
     }
 
     /// Horizontal window space not occupied by the grid view (must mirror ShelfViewController's constraints).
@@ -1688,24 +1706,24 @@ public struct ShelfGridMetrics {
             // bar leading 10 + sidebar + splitter gap 2 + splitter 8 + grid trailing 4
             return 10 + CGFloat(config.sidebarWidth) + 2 + 8 + 4
         }
-        // grid leading 10 + trailing 10
-        return 20
+        // 水平模式下 shelfGrid 占满窗口两端（leading: 0, trailing: 0），几何完全由 sideMargin 统一驱动
+        return 0
     }
 
     /// Window width that fits an exact number of columns with symmetric margins.
     public static func snappedWindowWidth(currentWidth: CGFloat, config: AtoolsConfig, minColumns: Int = 2) -> CGFloat {
-        let metrics = ShelfGridMetrics(scale: config.shelfIconScale)
+        let metrics = ShelfGridMetrics(config: config)
         let chrome = chromeWidth(for: config)
         let availableW = max(100, currentWidth - chrome)
-        let rawCols = (availableW - metrics.sideMargin * 2 + spacing) / (metrics.itemWidth + spacing)
+        let rawCols = (availableW - metrics.sideMargin * 2 + metrics.spacing) / (metrics.itemWidth + metrics.spacing)
         let cols = max(minColumns, Int(round(rawCols)))
-        let gridW = CGFloat(cols) * metrics.itemWidth + CGFloat(cols - 1) * spacing + metrics.sideMargin * 2
+        let gridW = CGFloat(cols) * metrics.itemWidth + CGFloat(cols - 1) * metrics.spacing + metrics.sideMargin * 2
         return min(1400, chrome + gridW)
     }
 
     public static func minimumWindowWidth(config: AtoolsConfig) -> CGFloat {
-        let metrics = ShelfGridMetrics(scale: config.shelfIconScale)
-        let minContentW = 2 * metrics.itemWidth + spacing + metrics.sideMargin * 2
+        let metrics = ShelfGridMetrics(config: config)
+        let minContentW = 2 * metrics.itemWidth + metrics.spacing + metrics.sideMargin * 2
         return max(240, chromeWidth(for: config) + minContentW)
     }
 }

@@ -4,6 +4,7 @@ import AppKit
 public extension Notification.Name {
     static let atoolsCategoryOrientationDidChange = Notification.Name("atoolsCategoryOrientationDidChange")
     static let atoolsShelfIconSizeDidChange = Notification.Name("atoolsShelfIconSizeDidChange")
+    static let atoolsShelfItemSpacingDidChange = Notification.Name("atoolsShelfItemSpacingDidChange")
     static let atoolsFavoritesToggleDidChange = Notification.Name("atoolsFavoritesToggleDidChange")
     static let atoolsPanelTogglesDidChange = Notification.Name("atoolsPanelTogglesDidChange")
     static let atoolsThemeDidChange = Notification.Name("atoolsThemeDidChange")

@@ -289,6 +289,13 @@ public final class ConfigManager {
         save()
     }
 
+    public func updateShelfItemSpacing(_ spacing: Double) {
+        let clamped = max(2.0, min(24.0, spacing))
+        self.config.shelfItemSpacing = clamped
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfItemSpacingDidChange, object: nil)
+    }
+
     public func updateEnableDictionary(_ enabled: Bool) {
         self.config.enableDictionary = enabled
         save()
