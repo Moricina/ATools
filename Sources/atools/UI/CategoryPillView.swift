@@ -73,7 +73,7 @@ public final class CategoryPillView: NSView {
 
     private func setupViews() {
         wantsLayer = true
-        layer?.cornerRadius = isVertical ? 11 : 15
+        layer?.cornerRadius = isVertical ? 11 : 13
         layer?.masksToBounds = false
 
         // Title (Pure text category, zero icon)
@@ -83,7 +83,7 @@ public final class CategoryPillView: NSView {
         titleLabel.alignment = .center
         addSubview(titleLabel)
 
-        let heightConstant: CGFloat = isVertical ? 29 : 28
+        let heightConstant: CGFloat = isVertical ? 29 : 26
         let hPadding: CGFloat = isVertical ? 3 : 14
 
         NSLayoutConstraint.activate([

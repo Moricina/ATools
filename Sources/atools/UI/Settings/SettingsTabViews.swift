@@ -269,7 +269,7 @@ public final class GeneralTabView: NSView {
         panel.canCreateDirectories = true
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)
 
-        guard panel.runModal() == .OK, let destURL = panel.url else { return }
+        guard panel.runModalAboveFloatingWindows() == .OK, let destURL = panel.url else { return }
 
         do {
             let manifest = try BackupService.shared.exportBackup(to: destURL)
@@ -309,7 +309,7 @@ public final class GeneralTabView: NSView {
         panel.treatsFilePackagesAsDirectories = true
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)
 
-        guard panel.runModal() == .OK, let srcURL = panel.url else { return }
+        guard panel.runModalAboveFloatingWindows() == .OK, let srcURL = panel.url else { return }
 
         // 1. 恢复前内存干跑预校验 (Dry-Run Pre-Validation)
         switch BackupService.shared.validateBackup(at: srcURL) {
@@ -1813,7 +1813,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         panel.canCreateDirectories = false
         panel.prompt = "添加"
         panel.message = "选择加入热目录快照的文件夹（深度 3 层，每目录上限 25,000 条）"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModalAboveFloatingWindows() == .OK, let url = panel.url else { return }
         if ConfigManager.shared.addHotFolder(url.path) {
             reloadHotFolderRows()
         } else {
@@ -1821,7 +1821,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             alert.messageText = "无法添加该目录"
             alert.informativeText = "目录不存在、与已有热目录重复或互相包含、或已达到上限（\(ConfigManager.maxExtraHotFolders) 个）。"
             alert.alertStyle = .warning
-            alert.runModal()
+            alert.runModalAboveFloatingWindows()
         }
     }
 
@@ -1997,7 +1997,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         panel.canCreateDirectories = false
         panel.prompt = "排除"
         panel.message = "选择要从全盘搜索中排除的文件夹"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModalAboveFloatingWindows() == .OK, let url = panel.url else { return }
         if ConfigManager.shared.addCustomExcludedPath(url.path) {
             reloadCustomExclusionRows()
         } else {
@@ -2005,7 +2005,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             alert.messageText = "无法排除该目录"
             alert.informativeText = "该目录不存在、已被包含在已有排除项中、或是系统根/用户家目录，或已达到最大排除数量（\(ConfigManager.maxCustomExcludedPaths) 个）。"
             alert.alertStyle = .warning
-            alert.runModal()
+            alert.runModalAboveFloatingWindows()
         }
     }
 

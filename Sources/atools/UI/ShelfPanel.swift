@@ -670,9 +670,9 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             categoryBar.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
             categoryBar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 14),
             categoryBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
-            categoryBar.heightAnchor.constraint(equalToConstant: 34),
+            categoryBar.heightAnchor.constraint(equalToConstant: 36),
 
-            shelfGrid.topAnchor.constraint(equalTo: categoryBar.bottomAnchor, constant: 10),
+            shelfGrid.topAnchor.constraint(equalTo: categoryBar.bottomAnchor, constant: 8),
             shelfGrid.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
             shelfGrid.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
             shelfGrid.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12)
@@ -1098,8 +1098,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             panel.directoryURL = URL(fileURLWithPath: "/Applications")
         }
 
-        NSApp.activate(ignoringOtherApps: true)
-        if panel.runModal() == .OK, let url = panel.url {
+        if panel.runModalAboveFloatingWindows() == .OK, let url = panel.url {
             ConfigManager.shared.relocateItem(id: item.id, in: selectedCategory?.id, newTarget: url.path)
             loadData()
         }

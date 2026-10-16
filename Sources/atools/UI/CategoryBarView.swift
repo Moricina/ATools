@@ -131,7 +131,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     internal var allPills: [CategoryPillView] {
         stackView.arrangedSubviews.compactMap { $0 as? CategoryPillView }
     }
-    private let scrollView = NSScrollView()
+    private let scrollView = ModernScrollView()
     private let selectionCapsule = SelectionCapsuleView()
     private var stackViewConstraints: [NSLayoutConstraint] = []
     private weak var selectedPill: CategoryPillView?
@@ -157,6 +157,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = false
+        scrollView.horizontalScroller = KnobOnlyScroller()
+        scrollView.verticalScroller = KnobOnlyScroller()
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
@@ -223,6 +225,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         if orientation == .horizontal {
             scrollView.hasHorizontalScroller = true
             scrollView.hasVerticalScroller = false
+            scrollView.horizontalScroller = KnobOnlyScroller()
             stackView.orientation = .horizontal
             stackView.spacing = 6
             stackView.alignment = .centerY
@@ -230,21 +233,22 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
             stackViewConstraints = [
                 stackView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor, constant: 4),
                 stackView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 2),
-                stackView.bottomAnchor.constraint(equalTo: scrollView.contentView.bottomAnchor, constant: -2),
-                stackView.heightAnchor.constraint(equalTo: scrollView.heightAnchor, constant: -4)
+                stackView.heightAnchor.constraint(equalToConstant: 26),
+                stackView.bottomAnchor.constraint(lessThanOrEqualTo: scrollView.contentView.bottomAnchor, constant: -6)
             ]
         } else {
             scrollView.hasHorizontalScroller = false
             scrollView.hasVerticalScroller = true
+            scrollView.verticalScroller = KnobOnlyScroller()
             stackView.orientation = .vertical
             stackView.spacing = 5
             stackView.alignment = .width
 
             stackViewConstraints = [
                 stackView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor, constant: 3),
-                stackView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor, constant: -3),
+                stackView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor, constant: -6),
                 stackView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 4),
-                stackView.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -6)
+                stackView.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -9)
             ]
         }
         NSLayoutConstraint.activate(stackViewConstraints)
@@ -334,6 +338,16 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         pinItem.target = self
         menu.addItem(pinItem)
 
+        let isIconsHidden = DesktopIconManager.shared.isDesktopIconsHidden
+        let desktopIconsItem = NSMenuItem(
+            title: isIconsHidden ? "✓ 隐藏桌面图标" : "隐藏桌面图标",
+            action: #selector(contextToggleDesktopIcons),
+            keyEquivalent: ""
+        )
+        desktopIconsItem.image = ThumbnailPipeline.shared.symbolIcon(name: isIconsHidden ? "eye.slash.fill" : "eye.slash", pointSize: 13)
+        desktopIconsItem.target = self
+        menu.addItem(desktopIconsItem)
+
         let settingsItem = NSMenuItem(title: "偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
         settingsItem.image = ThumbnailPipeline.shared.symbolIcon(name: "gearshape", pointSize: 13)
         settingsItem.keyEquivalentModifierMask = .command
@@ -354,6 +368,11 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     @objc private func contextTogglePin() {
         PanelCoordinator.shared.isShelfPinned.toggle()
+    }
+
+    @objc private func contextToggleDesktopIcons() {
+        _ = DesktopIconManager.shared.toggleDesktopIcons()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }
 
     @objc private func contextOpenSettings() {

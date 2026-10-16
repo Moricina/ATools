@@ -130,6 +130,13 @@ public final class SystemActions {
                 keywords: ["activity monitor", "huodongjianshiqi", "任务管理器", "活动监视器"],
                 iconSymbol: "chart.bar.xaxis",
                 run: { LauncherExecutor.open(path: "/System/Applications/Utilities/Activity Monitor.app") }
+            ),
+            SystemActionItem(
+                id: "toggle_desktop_icons",
+                name: "一键切换桌面图标显示/隐藏 (Toggle Desktop Icons)",
+                keywords: ["desktop", "icons", "zhuomian", "tubiao", "桌面", "桌面图标", "隐藏桌面", "显示桌面"],
+                iconSymbol: "eye.slash",
+                run: { _ = DesktopIconManager.shared.toggleDesktopIcons() }
             )
         ]
     }

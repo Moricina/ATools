@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Darwin
 
 public struct IndexedApp {
     public let name: String
@@ -70,13 +71,54 @@ public final class AppHotspotIndex {
     private let appsLock = NSLock()
     private let queue = DispatchQueue(label: "cc.atools.appindex", qos: .utility)
     private var lastRefreshDate = Date.distantPast
+    private var directorySources: [DispatchSourceFileSystemObject] = []
+    private var debounceWorkItem: DispatchWorkItem?
 
     private init() {
         refreshIndex()
+        startWatchingAppDirectories()
+    }
+
+    deinit {
+        for source in directorySources {
+            source.cancel()
+        }
+    }
+
+    private func startWatchingAppDirectories() {
+        let home = NSHomeDirectory()
+        let watchDirs = ["/Applications", "\(home)/Applications"]
+        for dir in watchDirs {
+            guard FileManager.default.fileExists(atPath: dir) else { continue }
+            let fd = open(dir, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: fd,
+                eventMask: [.write, .link, .rename, .extend, .attrib],
+                queue: queue
+            )
+            source.setEventHandler { [weak self] in
+                self?.scheduleDebouncedRefresh()
+            }
+            source.setCancelHandler {
+                close(fd)
+            }
+            source.resume()
+            directorySources.append(source)
+        }
+    }
+
+    private func scheduleDebouncedRefresh() {
+        debounceWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.refreshIndex()
+        }
+        debounceWorkItem = item
+        queue.asyncAfter(deadline: .now() + 0.5, execute: item)
     }
 
     /// Re-scans at most once per `interval` so apps installed after launch become searchable.
-    public func refreshIfStale(interval: TimeInterval = 120) {
+    public func refreshIfStale(interval: TimeInterval = 30) {
         guard Date().timeIntervalSince(lastRefreshDate) > interval else { return }
         refreshIndex()
     }

@@ -448,7 +448,7 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
     public weak var delegate: SearchResultsTableDelegate?
 
     fileprivate var results: [SearchResult] = []
-    private let scrollView = NSScrollView()
+    private let scrollView = ModernScrollView()
     public let tableView = ContextualSearchTableView()
 
     // MARK: - Scroll edge fades

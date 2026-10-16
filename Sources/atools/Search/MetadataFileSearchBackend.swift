@@ -135,8 +135,11 @@ public final class MetadataFileSearchBackend: NSObject {
 
             guard let path = MDItemCopyAttribute(item, kMDItemPath) as? String,
                   !path.isEmpty,
-                  !path.hasSuffix(".app"),
                   !Self.isExcluded(path) else { continue }
+
+            let isApp = path.hasSuffix(".app") || path.hasSuffix(".prefPane")
+            if filter == .application && !isApp { continue }
+            if filter != .application && filter != .all && isApp { continue }
 
             let rawName = (path as NSString).lastPathComponent
             var resolvedName = rawName
@@ -183,7 +186,8 @@ public final class MetadataFileSearchBackend: NSObject {
             let modified = MDItemCopyAttribute(c.item, kMDItemContentModificationDate) as? Date
             let lastUsed = MDItemCopyAttribute(c.item, kMDItemLastUsedDate) as? Date
             let contentType = MDItemCopyAttribute(c.item, kMDItemContentType) as? String
-            let isFolder = contentType.map { UTType($0)?.conforms(to: .folder) ?? false } ?? false
+            let isApp = c.path.hasSuffix(".app") || c.path.hasSuffix(".prefPane")
+            let isFolder = !isApp && (contentType.map { UTType($0)?.conforms(to: .folder) ?? false } ?? false)
 
             let score = c.baseScore + SearchRanking.freshnessScore(modified: modified, lastUsed: lastUsed)
             finalized.append((score, c.name, c.path, isFolder))
@@ -192,8 +196,11 @@ public final class MetadataFileSearchBackend: NSObject {
         let best = finalized.sorted { $0.score > $1.score }
         return best.map { c in
             let path = c.path
-            return SearchResult(title: c.name, subtitle: path, path: path,
-                                type: c.isFolder ? .folder : .file,
+            let isApp = path.hasSuffix(".app") || path.hasSuffix(".prefPane")
+            let type: SearchResultType = isApp ? .application : (c.isFolder ? .folder : .file)
+            let name = isApp ? (c.name as NSString).deletingPathExtension : c.name
+            return SearchResult(title: name, subtitle: path, path: path,
+                                type: type,
                                 score: c.score,
                                 action: { LauncherExecutor.open(path: path) })
         }

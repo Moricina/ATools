@@ -79,8 +79,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { notif in
-            let senderPid = notif.object as? String ?? ""
-            if senderPid != "\(getpid())" {
+            guard let senderPidStr = notif.object as? String,
+                  let senderPid = pid_t(senderPidStr),
+                  senderPid != getpid(),
+                  senderPid > 0 else { return }
+            // 严格验证发送者真实存在且必须为 ATools 自身 Bundle，防止被恶意伪造或非法空值误杀
+            if let senderApp = NSRunningApplication(processIdentifier: senderPid),
+               let bundleID = senderApp.bundleIdentifier,
+               bundleID.hasPrefix("cc.atools.app") {
+                runtimeLog("[AppDelegate] Verified another ATools instance (PID \(senderPid)) launched, exiting current instance cleanly.")
                 NSApp.terminate(nil)
             }
         }
@@ -317,6 +324,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             SettingsWindowController.shared.showSettingsWindow()
         }
         return true
+    }
+
+    public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        // ATools 为常驻菜单栏与桌面浮窗工具，关闭设置窗口或收起抽屉绝不退出主应用
+        return false
     }
 
     public func applicationWillTerminate(_ notification: Notification) {

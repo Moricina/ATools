@@ -311,9 +311,9 @@ public final class SearchCoordinator {
             }
         }
 
-        // 若当前只查找应用，Layer 1 AppHotspotIndex 已全量返回，无需触发 Layer 2 全盘扫描
-        if effectiveFilter == .application {
-            return
+        // 若当前查找应用但在内存快照中未命中任何项目，触发一次紧急短冷却刷新（5s），并放行 Layer 2 Spotlight 全盘兜底
+        if effectiveFilter == .application && instantResults.isEmpty {
+            AppHotspotIndex.shared.refreshIfStale(interval: 5)
         }
 
         // Layer 2: Debounced Spotlight Full-Disk File Search (150ms)

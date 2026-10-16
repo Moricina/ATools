@@ -643,7 +643,7 @@ public final class ShelfGridView: NSView {
     private var horizontalSwipeDelta: CGFloat = 0
     private var hasTriggeredSwipeInGesture: Bool = false
 
-    private let scrollView = NSScrollView()
+    private let scrollView = ModernScrollView()
     private let contentView = FlippedContentView()
     private let emptyLabel = NSTextField(labelWithString: "拖拽软件、文件或脚本至此处快速添加")
 
@@ -668,11 +668,11 @@ public final class ShelfGridView: NSView {
     private func setupViews() {
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
+        scrollView.verticalScroller = KnobOnlyScroller()
         scrollView.hasHorizontalScroller = false
         scrollView.horizontalScrollElasticity = .none
         scrollView.scrollerStyle = .overlay
         scrollView.autohidesScrollers = true
-        scrollView.verticalScroller?.controlSize = .small
         scrollView.drawsBackground = false
         addSubview(scrollView)
 
@@ -1130,6 +1130,16 @@ public final class ShelfGridView: NSView {
         pinItem.target = self
         menu.addItem(pinItem)
 
+        let isIconsHidden = DesktopIconManager.shared.isDesktopIconsHidden
+        let desktopIconsItem = NSMenuItem(
+            title: isIconsHidden ? "✓ 隐藏桌面图标" : "隐藏桌面图标",
+            action: #selector(contextToggleDesktopIcons),
+            keyEquivalent: ""
+        )
+        desktopIconsItem.image = ThumbnailPipeline.shared.symbolIcon(name: isIconsHidden ? "eye.slash.fill" : "eye.slash", pointSize: 13)
+        desktopIconsItem.target = self
+        menu.addItem(desktopIconsItem)
+
         let settingsItem = NSMenuItem(title: "偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
         settingsItem.image = ThumbnailPipeline.shared.symbolIcon(name: "gearshape", pointSize: 13)
         settingsItem.keyEquivalentModifierMask = .command
@@ -1154,6 +1164,11 @@ public final class ShelfGridView: NSView {
 
     @objc private func contextTogglePin() {
         PanelCoordinator.shared.isShelfPinned.toggle()
+    }
+
+    @objc private func contextToggleDesktopIcons() {
+        _ = DesktopIconManager.shared.toggleDesktopIcons()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }
 
     @objc private func contextOpenSettings() {

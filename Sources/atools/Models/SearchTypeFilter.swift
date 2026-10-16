@@ -116,8 +116,7 @@ public enum SearchTypeFilter: String, CaseIterable, Identifiable, Codable {
         case .all:
             return nil
         case .application:
-            // 应用直接走 Layer 1 AppHotspotIndex，跳过 MDQuery
-            return nil
+            return "(kMDItemContentTypeTree == 'com.apple.application-bundle' || kMDItemFSName == '*.app'c || kMDItemFSName == '*.prefPane'c)"
         case .document:
             return "(kMDItemContentTypeTree == 'public.composite-content' || kMDItemContentTypeTree == 'public.text')"
         case .image:

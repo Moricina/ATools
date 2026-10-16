@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Darwin
 
 /// macOS 辅助功能私有/标准常量补全
 private let kAXWindowClosedNotification = "AXWindowClosed" as CFString
@@ -29,12 +30,14 @@ private let autoQuitObserverCallback: AXObserverCallback = { _, element, notific
 public final class AutoQuitManager {
     public static let shared = AutoQuitManager()
 
-    /// 硬排除的系统应用：退出 Finder 会被 launchd 立即拉起，其余为常驻系统服务。
+    /// 硬排除的系统应用：退出 Finder 会被 launchd 立即拉起，其余为常驻系统服务与 ATools 自身
     public static let systemExcludedBundleIDs: Set<String> = [
         "com.apple.finder",
         "com.apple.Spotlight",
         "com.apple.notificationcenterui",
-        "com.apple.dock"
+        "com.apple.dock",
+        "cc.atools.app",
+        "cc.atools.app.dev"
     ]
 
     private struct WatchedApp {
@@ -107,14 +110,25 @@ public final class AutoQuitManager {
         ) { [weak self] _ in
             self?.lastSpaceChangeDate = Date()
         })
-        // 睡眠唤醒后其他应用的 AX 树可能整体失效，与 TrackpadGestureManager 一致地重建
+        // 监听系统即将休眠：立刻清空排队退出的计时任务，防止睡眠中产生定时器竞争与误杀
+        workspaceObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            self.cancelAllPendingTasks()
+        })
+        // 睡眠唤醒后其他应用的 AX 树可能整体失效，防抖延时 1.0s 等待系统及所有应用恢复在屏窗口后安全重建
         workspaceObservers.append(workspaceCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            guard let self = self, self.isRunning else { return }
-            self.rebuild()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                guard let self = self, self.isRunning else { return }
+                self.rebuild()
+            }
         })
     }
 
@@ -290,13 +304,40 @@ public final class AutoQuitManager {
         return isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount)
     }
 
+    /// 当 LaunchServices 刚启动应用或沙盒映射未就绪时，app.processIdentifier 可能短暂返回 -1。
+    /// 通过 libproc proc_listpids + proc_pidpath 极速在内核中根据可执行文件路径或 Bundle 路径反查真实 PID
+    public static func resolveProcessIdentifier(for app: NSRunningApplication) -> pid_t? {
+        let pid = app.processIdentifier
+        if pid > 0 { return pid }
+
+        if let targetPath = app.executableURL?.path ?? app.bundleURL?.path {
+            var pids = [pid_t](repeating: 0, count: 2048)
+            let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * pids.count))
+            let count = Int(bytes) / MemoryLayout<pid_t>.size
+            var pathBuffer = [CChar](repeating: 0, count: 4096)
+            for i in 0..<count {
+                let p = pids[i]
+                guard p > 0, p != ProcessInfo.processInfo.processIdentifier else { continue }
+                let len = proc_pidpath(p, &pathBuffer, UInt32(pathBuffer.count))
+                if len > 0 {
+                    let path = String(cString: pathBuffer)
+                    if path == targetPath || path.hasPrefix(targetPath) {
+                        return p
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
     private func shouldAttach(_ app: NSRunningApplication) -> Bool {
         let cfg = ConfigManager.shared.config
+        let resolvedPid = AutoQuitManager.resolveProcessIdentifier(for: app) ?? app.processIdentifier
         return AutoQuitManager.shouldWatch(
             bundleID: app.bundleIdentifier,
             activationPolicy: app.activationPolicy,
             isFinishedLaunching: app.isFinishedLaunching,
-            isSelf: app.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+            isSelf: resolvedPid == ProcessInfo.processInfo.processIdentifier,
             mode: cfg.autoQuitMode,
             rules: cfg.autoQuitAppRules
         )
@@ -359,7 +400,10 @@ public final class AutoQuitManager {
     private func handleAppActivated(_ app: NSRunningApplication) {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
-        let pid = app.processIdentifier
+        guard let pid = AutoQuitManager.resolveProcessIdentifier(for: app), pid > 0 else {
+            attachLocked(app)
+            return
+        }
         if watched[pid] == nil {
             attachLocked(app)
         } else if var entry = watched[pid] {
@@ -393,7 +437,13 @@ public final class AutoQuitManager {
     }
 
     private func attachLocked(_ app: NSRunningApplication) {
-        let pid = app.processIdentifier
+        guard let pid = AutoQuitManager.resolveProcessIdentifier(for: app), pid > 0 else {
+            // 若应用处于极早期启动阶段，PID 尚未由系统注册完毕，防抖延迟 0.4s 重新挂载
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                self?.attachIfEligible(app)
+            }
+            return
+        }
         guard watched[pid] == nil else { return }
         guard shouldAttach(app) else { return }
 
@@ -566,6 +616,15 @@ public final class AutoQuitManager {
         guard isRunning else { return }
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
+
+        // 自愈轮询：定期扫描 runningApplications，确保任何漏网之鱼（如早先 PID=-1 挂载失败的应用）能自动补全监视
+        for app in NSWorkspace.shared.runningApplications {
+            if let pid = AutoQuitManager.resolveProcessIdentifier(for: app), pid > 0 {
+                if watched[pid] == nil && shouldAttach(app) {
+                    attachLocked(app)
+                }
+            }
+        }
         
         let pids = Array(watched.keys)
         for pid in pids {
@@ -678,6 +737,16 @@ public final class AutoQuitManager {
         }
     }
 
+    private func cancelAllPendingTasks() {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        for work in pendingQuits.values { work.cancel() }
+        pendingQuits.removeAll()
+        for work in pendingRechecks.values { work.cancel() }
+        pendingRechecks.removeAll()
+        recheckCounts.removeAll()
+    }
+
     private func cancelPendingQuitLocked(_ pid: pid_t) {
         recheckCounts.removeValue(forKey: pid)
         cancelPendingRecheckLocked(pid)
@@ -700,16 +769,22 @@ public final class AutoQuitManager {
 
         // 关键防御：某些应用（如 WPS Office、部分 Qt/CEF 应用）失焦或置于后台时，
         // 其 kAXWindowsAttribute 可能暂时返回空数组，但其 kAXMainWindowAttribute 或 kAXFocusedWindowAttribute 仍真实在活。
+        // 注意：仅当 WindowServer 确证仍有在屏标准窗口时才探测，彻底防止关窗后 AppKit 内部尚未置空的残留主窗体对象被误判为“仍有窗口”而阻断退出
         if result.isEmpty {
-            for attr in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
-                var winVal: CFTypeRef?
-                if AXUIElementCopyAttributeValue(element, attr as CFString, &winVal) == .success, let win = winVal {
-                    let winEl = win as! AXUIElement
-                    var roleVal: CFTypeRef?
-                    if AXUIElementCopyAttributeValue(winEl, kAXRoleAttribute as CFString, &roleVal) == .success,
-                       (roleVal as? String) == "AXWindow" {
-                        if !result.contains(where: { CFEqual($0, winEl) }) {
-                            result.append(winEl)
+            var pid: pid_t = 0
+            AXUIElementGetPid(element, &pid)
+            let wsCount = (pid > 0) ? AutoQuitManager.windowServerStandardWindowCount(for: pid) : nil
+            if (wsCount ?? 0) > 0 {
+                for attr in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+                    var winVal: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(element, attr as CFString, &winVal) == .success, let win = winVal {
+                        let winEl = win as! AXUIElement
+                        var roleVal: CFTypeRef?
+                        if AXUIElementCopyAttributeValue(winEl, kAXRoleAttribute as CFString, &roleVal) == .success,
+                           (roleVal as? String) == "AXWindow" {
+                            if !result.contains(where: { CFEqual($0, winEl) }) {
+                                result.append(winEl)
+                            }
                         }
                     }
                 }

@@ -17,11 +17,98 @@ public extension NSAlert {
     /// The settings window and panels float at `.statusBar` or above. A plain `runModal()`
     /// alert opens at modal-panel level *behind* them, leaving an invisible modal loop that
     /// makes the app look frozen. Raise the alert above every ATools window first.
+    ///
+    /// NOTE: AppKit forcefully resets `window.level` to `.modalPanel` (8) internally upon entering `runModal()`.
+    /// We dynamically enforce `targetLevel` both synchronously via `NSWindow.didUpdateNotification`
+    /// and asynchronously via `NSModalPanelRunLoopMode` so the alert always floats above floating panels.
     @discardableResult
-    func runModalAboveFloatingWindows() -> NSApplication.ModalResponse {
-        window.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
+    func runModalAboveFloatingWindows(targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)) -> NSApplication.ModalResponse {
+        PanelCoordinator.shared.isModalDialogOpen = true
+        defer {
+            PanelCoordinator.shared.isModalDialogOpen = false
+        }
+
+        let target = targetLevel
+        let alertWin = self.window
+        alertWin.level = target
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification,
+            object: alertWin,
+            queue: nil
+        ) { [weak alertWin] _ in
+            guard let alertWin = alertWin else { return }
+            if alertWin.level.rawValue < target.rawValue {
+                alertWin.level = target
+                alertWin.orderFrontRegardless()
+            }
+        }
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        let timer = Timer(timeInterval: 0.001, repeats: false) { [weak alertWin] _ in
+            guard let alertWin = alertWin else { return }
+            alertWin.level = target
+            alertWin.orderFrontRegardless()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode"))
+
         NSApp.activate(ignoringOtherApps: true)
+        alertWin.makeKeyAndOrderFront(nil)
+        alertWin.orderFrontRegardless()
+
         return runModal()
+    }
+}
+
+public extension NSWindow {
+    /// Runs a modal session while ensuring the window's level is maintained at or above `targetLevel`
+    /// (preventing AppKit from demoting it to `.modalPanel` (8) during `runModal()`).
+    /// Automatically handles both standard NSWindows and NSSavePanel / NSOpenPanel instances.
+    @discardableResult
+    func runModalAboveFloatingWindows(targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)) -> NSApplication.ModalResponse {
+        PanelCoordinator.shared.isModalDialogOpen = true
+        defer {
+            PanelCoordinator.shared.isModalDialogOpen = false
+        }
+
+        let target = targetLevel
+        self.level = target
+
+        let observer = NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification,
+            object: self,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            if self.level.rawValue < target.rawValue {
+                self.level = target
+                self.orderFrontRegardless()
+            }
+        }
+        defer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+
+        let timer = Timer(timeInterval: 0.001, repeats: false) { [weak self] _ in
+            guard let self = self else { return }
+            self.level = target
+            self.orderFrontRegardless()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        RunLoop.main.add(timer, forMode: RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode"))
+
+        NSApp.activate(ignoringOtherApps: true)
+        self.makeKeyAndOrderFront(nil)
+        self.orderFrontRegardless()
+
+        if let savePanel = self as? NSSavePanel {
+            return savePanel.runModal()
+        } else {
+            return NSApp.runModal(for: self)
+        }
     }
 }
 

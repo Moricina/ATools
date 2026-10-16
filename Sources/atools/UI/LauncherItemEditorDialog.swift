@@ -68,11 +68,8 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
             activeDialog = nil
         }
 
-        win.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)
         win.center()
-        NSApp.activate(ignoringOtherApps: true)
-        win.makeKeyAndOrderFront(nil)
-        NSApp.runModal(for: win)
+        win.runModalAboveFloatingWindows()
     }
 
     private init(
@@ -455,7 +452,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         panel.allowedContentTypes = [.png, .icns, .jpeg, .tiff, .applicationBundle, .image]
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)
 
-        if panel.runModal() == .OK, let url = panel.url {
+        if panel.runModalAboveFloatingWindows(targetLevel: NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)) == .OK, let url = panel.url {
             pendingCustomIconSourceURL = url
             didResetCustomIcon = false
             refreshIconPreview()
@@ -489,7 +486,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
             panel.directoryURL = URL(fileURLWithPath: "/Applications")
         }
 
-        if panel.runModal() == .OK, let url = panel.url {
+        if panel.runModalAboveFloatingWindows(targetLevel: NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)) == .OK, let url = panel.url {
             targetField.stringValue = url.path
             if nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 nameField.stringValue = Self.defaultDisplayName(forPath: url.path)
@@ -507,7 +504,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         panel.allowsMultipleSelection = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)
 
-        if panel.runModal() == .OK, let url = panel.url {
+        if panel.runModalAboveFloatingWindows(targetLevel: NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 3)) == .OK, let url = panel.url {
             workingDirField.stringValue = url.path
         }
     }

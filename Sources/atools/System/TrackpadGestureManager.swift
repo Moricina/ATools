@@ -58,8 +58,9 @@ private typealias MTContactCallbackFunction = @convention(c) (
 private typealias MTDeviceCreateListFunc = @convention(c) () -> Unmanaged<CFArray>?
 private typealias MTRegisterContactFrameCallbackFunc = @convention(c) (UnsafeMutableRawPointer, MTContactCallbackFunction) -> Void
 private typealias MTUnregisterContactFrameCallbackFunc = @convention(c) (UnsafeMutableRawPointer, MTContactCallbackFunction) -> Void
-private typealias MTDeviceStartFunc = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
-private typealias MTDeviceStopFunc = @convention(c) (UnsafeMutableRawPointer, Int32) -> Void
+private typealias MTDeviceIsRunningFunc = @convention(c) (UnsafeMutableRawPointer) -> Bool
+private typealias MTDeviceStartFunc = @convention(c) (UnsafeMutableRawPointer, Int32) -> Int32
+private typealias MTDeviceStopFunc = @convention(c) (UnsafeMutableRawPointer) -> Int32
 
 /// 静态 C 回调跳板（Trampoline），将 MultitouchSupport 内核分发线程数据派发至单例处理
 private func multitouchCallbackTrampoline(
@@ -85,12 +86,18 @@ public final class TrackpadGestureManager {
     private var mtDeviceCreateList: MTDeviceCreateListFunc?
     private var mtRegisterCallback: MTRegisterContactFrameCallbackFunc?
     private var mtUnregisterCallback: MTUnregisterContactFrameCallbackFunc?
+    private var mtDeviceIsRunning: MTDeviceIsRunningFunc?
     private var mtDeviceStart: MTDeviceStartFunc?
     private var mtDeviceStop: MTDeviceStopFunc?
 
+    /// 持有底层 CFArray 引用，防止 MTDeviceRef 在局部变量作用域结束时被提前过早释放
+    private var activeDeviceList: CFArray?
     private var activeDevices: [UnsafeMutableRawPointer] = []
     private var isListening: Bool = false
     private var lock = os_unfair_lock()
+
+    private var sleepWakeObservers: [NSObjectProtocol] = []
+    private var wakeReinitWorkItem: DispatchWorkItem?
 
     // 手势识别周期状态
     private struct TouchCycleState {
@@ -115,6 +122,11 @@ public final class TrackpadGestureManager {
     }
 
     deinit {
+        wakeReinitWorkItem?.cancel()
+        for token in sleepWakeObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(token)
+        }
+        sleepWakeObservers.removeAll()
         stopListening()
         if let handle = dylibHandle {
             dlclose(handle)
@@ -122,14 +134,35 @@ public final class TrackpadGestureManager {
     }
 
     private func setupSleepWakeObservers() {
-        NSWorkspace.shared.notificationCenter.addObserver(
+        let center = NSWorkspace.shared.notificationCenter
+        // 1. 系统准备休眠时：立刻平稳停止触控监听并释放设备引用，防止内核断电后后台线程竞争崩溃
+        sleepWakeObservers.append(center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            runtimeLog("[TrackpadGesture] System will sleep, safely pausing touch devices...")
+            self?.wakeReinitWorkItem?.cancel()
+            self?.wakeReinitWorkItem = nil
+            self?.stopListening()
+        })
+
+        // 2. 系统从睡眠唤醒时：硬件 I2C/SPI 总线需完成电源恢复，防抖延迟 0.8s 后再重建监听
+        sleepWakeObservers.append(center.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            runtimeLog("[TrackpadGesture] System woke from sleep, reinitializing devices...")
-            self?.reinitializeDevices()
-        }
+            runtimeLog("[TrackpadGesture] System woke from sleep, scheduling stabilized touch reinitialization...")
+            self?.wakeReinitWorkItem?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                guard let self = self else { return }
+                runtimeLog("[TrackpadGesture] Hardware bus stabilized, re-listening devices...")
+                self.startListeningIfEnabled()
+            }
+            self?.wakeReinitWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        })
     }
 
     private func loadMultitouchFramework() -> Bool {
@@ -155,6 +188,9 @@ public final class TrackpadGestureManager {
         self.mtUnregisterCallback = unsafeBitCast(symUnregister, to: MTUnregisterContactFrameCallbackFunc.self)
         self.mtDeviceStart = unsafeBitCast(symStart, to: MTDeviceStartFunc.self)
         self.mtDeviceStop = unsafeBitCast(symStop, to: MTDeviceStopFunc.self)
+        if let symRunning = dlsym(handle, "MTDeviceIsRunning") {
+            self.mtDeviceIsRunning = unsafeBitCast(symRunning, to: MTDeviceIsRunningFunc.self)
+        }
         return true
     }
 
@@ -196,6 +232,7 @@ public final class TrackpadGestureManager {
               let startDev = mtDeviceStart else { return }
 
         guard let list = createList()?.takeRetainedValue() else { return }
+        self.activeDeviceList = list
         let count = CFArrayGetCount(list)
         activeDevices.removeAll()
 
@@ -203,7 +240,7 @@ public final class TrackpadGestureManager {
             if let rawDev = CFArrayGetValueAtIndex(list, i) {
                 let dev = UnsafeMutableRawPointer(mutating: rawDev)
                 registerCb(dev, multitouchCallbackTrampoline)
-                startDev(dev, 0)
+                _ = startDev(dev, 0)
                 activeDevices.append(dev)
             }
         }
@@ -219,19 +256,33 @@ public final class TrackpadGestureManager {
         pendingEndWorkItem?.cancel()
         pendingEndWorkItem = nil
 
-        guard isListening || !activeDevices.isEmpty else { return }
+        guard isListening || !activeDevices.isEmpty else {
+            activeDeviceList = nil
+            return
+        }
         guard let unregisterCb = mtUnregisterCallback,
               let stopDev = mtDeviceStop else {
             activeDevices.removeAll()
+            activeDeviceList = nil
             isListening = false
             return
         }
 
         for dev in activeDevices {
-            stopDev(dev, 0)
+            // 关键时序防御 1：必须先反注册 C 帧回调，切断后续所有 touch 派发
             unregisterCb(dev, multitouchCallbackTrampoline)
+            // 关键时序防御 2：仅当设备处于 running 状态时才调用 MTDeviceStop，避免在已停机/断电对象上过释放
+            if let isRunning = mtDeviceIsRunning {
+                if isRunning(dev) {
+                    _ = stopDev(dev)
+                }
+            } else {
+                _ = stopDev(dev)
+            }
         }
         activeDevices.removeAll()
+        // 关键时序防御 3：在设备完全停机且回调已解除之后，才释放 CFArray 设备列表
+        activeDeviceList = nil
         isListening = false
         cycleState = TouchCycleState()
         runtimeLog("[TrackpadGesture] Stopped listening and released all touch devices")

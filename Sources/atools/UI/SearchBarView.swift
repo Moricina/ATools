@@ -106,6 +106,13 @@ public final class SearchTextField: NSTextField {
         guard currentCount > initialCount, currentCount != lastHandledPasteboardChangeCount else {
             return false
         }
+        // 防重保护：若输入框当前内容已经与剪贴板文本一致，避免外部剪贴板工具二次写入导致重复双贴
+        if let currentText = NSPasteboard.general.string(forType: .string),
+           !currentText.isEmpty,
+           self.stringValue.contains(currentText) {
+            lastHandledPasteboardChangeCount = currentCount
+            return false
+        }
         pasteFromClipboard()
         return true
     }

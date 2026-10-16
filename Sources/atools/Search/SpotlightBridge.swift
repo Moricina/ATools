@@ -63,14 +63,6 @@ public final class SpotlightBridge {
             return
         }
 
-        if filter == .application {
-            // 应用分类直接由 Layer 1 AppHotspotIndex 闪电直出，跳过文件全盘检索
-            DispatchQueue.main.async {
-                completion([])
-            }
-            return
-        }
-
         // The hot-folder snapshot can block on an in-progress rebuild (up to
         // 0.3s) and MDQuery scoring is CPU/XPC heavy: both belong off the main
         // thread. Typing a query like "how" used to freeze the UI because all
@@ -102,9 +94,12 @@ public final class SpotlightBridge {
                 let file = candidate.file
                 let lastUsed = Self.lastUsedDate(forPath: file.path)
                 let path = file.path
+                let isApp = path.hasSuffix(".app") || path.hasSuffix(".prefPane")
+                let resultType: SearchResultType = isApp ? .application : (file.isDirectory ? .folder : .file)
+                let displayName = isApp ? (file.name as NSString).deletingPathExtension : file.name
                 hotResults.append(SearchResult(
-                    title: file.name, subtitle: path, path: path,
-                    type: file.isDirectory ? .folder : .file,
+                    title: displayName, subtitle: path, path: path,
+                    type: resultType,
                     score: SearchRanking.finalScore(baseTier: candidate.base, path: path,
                                                     modified: file.modified, lastUsed: lastUsed),
                     action: { LauncherExecutor.open(path: path) }))

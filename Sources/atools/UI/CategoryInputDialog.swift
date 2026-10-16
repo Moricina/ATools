@@ -35,15 +35,17 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
         }
 
         activeDialogs.append(dialog)
-        if let parentWindow = parentWindow {
-            parentWindow.beginSheet(win) { _ in
-                dialog.finish(with: nil)
-            }
+        if let parent = parentWindow {
+            let pFrame = parent.frame
+            let x = pFrame.origin.x + (pFrame.width - win.frame.width) / 2
+            let y = pFrame.origin.y + (pFrame.height - win.frame.height) / 2
+            win.setFrameOrigin(NSPoint(x: x, y: y))
         } else {
             win.center()
-            NSApp.runModal(for: win)
-            dialog.finish(with: nil)
         }
+
+        win.runModalAboveFloatingWindows()
+        dialog.finish(with: nil)
     }
 
     private init(
@@ -63,6 +65,7 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isReleasedWhenClosed = false
+        win.isMovableByWindowBackground = true
 
         super.init(window: win)
         window?.delegate = self
