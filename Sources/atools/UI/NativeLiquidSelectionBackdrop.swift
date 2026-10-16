@@ -215,22 +215,22 @@ public final class NativeLiquidSelectionBackdrop: NSView {
         }
 
         // 自然物理微环境投影 (Natural Ambient Shadow)
-        // 在 isFlipped 坐标系下，y 偏移设为 +1.0 贴合自然顺光向下投影，绝不向上溢出
-        // 配合 5.5pt 宽阔漫射模糊与极低浓度，呈现如丝般柔润的悬浮过渡
+        // 在 isFlipped 坐标系下，y 偏移设为 +1.5 贴合自然顺光向下投影，绝不向上溢出
+        // 配合 6.5pt 宽阔漫射模糊与极低浓度，呈现如丝般柔润的悬浮过渡，根除任何生硬截断
         if !contactShadowEnabled {
             layer?.shadowOpacity = 0.0
             layer?.shadowColor = nil
             layer?.shadowPath = nil
         } else {
             layer?.shadowColor = NSColor.black.cgColor
-            layer?.shadowOffset = CGSize(width: 0, height: 1.0)
-            layer?.shadowRadius = customShadowRadius ?? 5.5
+            layer?.shadowOffset = CGSize(width: 0, height: 1.5)
+            layer?.shadowRadius = customShadowRadius ?? 6.5
             if let custom = customShadowOpacity {
                 layer?.shadowOpacity = (isSelected || isHovered) ? custom : 0.0
             } else if isDark {
-                layer?.shadowOpacity = isSelected ? 0.14 : (isHovered ? 0.07 : 0.0)
+                layer?.shadowOpacity = isSelected ? 0.10 : (isHovered ? 0.05 : 0.0)
             } else {
-                layer?.shadowOpacity = isSelected ? 0.05 : (isHovered ? 0.03 : 0.0)
+                layer?.shadowOpacity = isSelected ? 0.04 : (isHovered ? 0.02 : 0.0)
             }
             updatePaths()
         }

@@ -440,32 +440,38 @@ public final class SearchFilterPillButton: NSButton, NSDraggingSource {
         } else {
             liquidBackdrop.isHidden = true
             if isPillSelected {
-                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.05, alpha: 1.0)
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
                 layer?.backgroundColor = isDark
-                    ? NSColor.white.withAlphaComponent(0.20).cgColor
-                    : NSColor.black.withAlphaComponent(0.10).cgColor
+                    ? NSColor(white: 1.0, alpha: 0.20).cgColor
+                    : NSColor.white.cgColor
                 layer?.borderWidth = 0.5
                 layer?.borderColor = isDark
-                    ? NSColor.white.withAlphaComponent(0.32).cgColor
-                    : NSColor.black.withAlphaComponent(0.18).cgColor
+                    ? NSColor(white: 1.0, alpha: 0.25).cgColor
+                    : NSColor(white: 0.0, alpha: 0.08).cgColor
+                layer?.shadowColor = NSColor.black.cgColor
+                layer?.shadowOpacity = isDark ? 0.25 : 0.08
+                layer?.shadowOffset = CGSize(width: 0, height: -1)
+                layer?.shadowRadius = isDark ? 3.0 : 2.5
             } else if isHovered {
-                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.08, alpha: 1.0)
+                textColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(white: 0.10, alpha: 1.0)
                 layer?.backgroundColor = isDark
                     ? NSColor.white.withAlphaComponent(0.12).cgColor
                     : NSColor.black.withAlphaComponent(0.06).cgColor
                 layer?.borderWidth = 0.5
                 layer?.borderColor = isDark
                     ? NSColor.white.withAlphaComponent(0.20).cgColor
-                    : NSColor.black.withAlphaComponent(0.12).cgColor
+                    : NSColor.black.withAlphaComponent(0.10).cgColor
+                layer?.shadowOpacity = 0.0
             } else {
-                textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.75)
+                textColor = isDark ? NSColor(white: 0.92, alpha: 0.88) : NSColor(white: 0.20, alpha: 0.75)
                 layer?.backgroundColor = isDark
                     ? NSColor.white.withAlphaComponent(0.05).cgColor
                     : NSColor.black.withAlphaComponent(0.03).cgColor
                 layer?.borderWidth = 0.5
                 layer?.borderColor = isDark
                     ? NSColor.white.withAlphaComponent(0.10).cgColor
-                    : NSColor.black.withAlphaComponent(0.06).cgColor
+                    : NSColor.black.withAlphaComponent(0.05).cgColor
+                layer?.shadowOpacity = 0.0
             }
         }
 

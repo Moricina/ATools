@@ -2290,7 +2290,7 @@ public final class ThemeTabView: NSView {
         let rowOpacity = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.below.rectangle"),
             title: "面板背景透明度",
-            subtitle: "40% 轻透玻璃，数值越高遮光越强 (默认 90%)",
+            subtitle: "40% 纯净水滴透镜，数值越高遮光越强 (原生液态默认 40%，磨砂玻璃默认 90%)",
             accessory: opacityContainer
         )
         card2.addRow(rowOpacity, isLast: true)
@@ -2321,7 +2321,8 @@ public final class ThemeTabView: NSView {
         opacitySlider.doubleValue = cfg.themeOpacity * 100.0
         let pct = Int(round(cfg.themeOpacity * 100.0))
         opacityBadge.stringValue = "\(pct)%"
-        resetOpacityButton.isEnabled = (pct != 90)
+        let defaultPct = Int(round(cfg.theme.defaultOpacity * 100.0))
+        resetOpacityButton.isEnabled = (pct != defaultPct)
     }
 
     private func handleThemeSelected(_ theme: AppTheme) {
@@ -2329,6 +2330,11 @@ public final class ThemeTabView: NSView {
         for card in themeCards {
             card.isSelected = (card.theme == theme)
         }
+        let currentPct = Int(round(ConfigManager.shared.config.themeOpacity * 100.0))
+        let defaultPct = Int(round(theme.defaultOpacity * 100.0))
+        opacitySlider.doubleValue = Double(currentPct)
+        opacityBadge.stringValue = "\(currentPct)%"
+        resetOpacityButton.isEnabled = (currentPct != defaultPct)
         // Theme change notification is now posted by ConfigManager
     }
 
@@ -2337,14 +2343,16 @@ public final class ThemeTabView: NSView {
         let opacity = val / 100.0
         let pct = Int(val)
         opacityBadge.stringValue = "\(pct)%"
-        resetOpacityButton.isEnabled = (pct != 90)
+        let defaultPct = Int(round(ConfigManager.shared.config.theme.defaultOpacity * 100.0))
+        resetOpacityButton.isEnabled = (pct != defaultPct)
         guard abs(opacity - ConfigManager.shared.config.themeOpacity) > 0.001 else { return }
         ConfigManager.shared.updateThemeOpacity(opacity)
         // Theme change notification is now posted by ConfigManager
     }
 
     @objc private func resetOpacityToDefault() {
-        opacitySlider.doubleValue = 90.0
+        let defaultPct = round(ConfigManager.shared.config.theme.defaultOpacity * 100.0)
+        opacitySlider.doubleValue = defaultPct
         opacitySliderChanged(opacitySlider)
     }
 }

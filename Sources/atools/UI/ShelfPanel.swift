@@ -672,7 +672,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             categoryBar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -14),
             categoryBar.heightAnchor.constraint(equalToConstant: 36),
 
-            shelfGrid.topAnchor.constraint(equalTo: categoryBar.bottomAnchor, constant: 8),
+            shelfGrid.topAnchor.constraint(equalTo: categoryBar.bottomAnchor, constant: 4),
             shelfGrid.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 10),
             shelfGrid.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -10),
             shelfGrid.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -12)

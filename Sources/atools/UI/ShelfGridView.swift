@@ -604,6 +604,7 @@ private final class FlippedContentView: NSView {
 }
 
 public final class ShelfGridView: NSView {
+    public static let gridTopMargin: CGFloat = 6
     public weak var delegate: ShelfGridDelegate?
     override public var mouseDownCanMoveWindow: Bool { false }
 
@@ -1007,7 +1008,7 @@ public final class ShelfGridView: NSView {
         let itemWidth = metrics.itemWidth
         let itemHeight = metrics.itemWidth
         let sideMargin = metrics.sideMargin
-        let topMargin: CGFloat = 12
+        let topMargin = ShelfGridView.gridTopMargin
         let spacingX = ShelfGridMetrics.spacing
         let spacingY = ShelfGridMetrics.spacing
         let bottomSafePadding: CGFloat = 20
@@ -1381,7 +1382,7 @@ public final class ShelfGridView: NSView {
         let itemWidth = metrics.itemWidth
         let itemHeight = metrics.itemWidth
         let sideMargin = metrics.sideMargin
-        let topMargin: CGFloat = 12
+        let topMargin = ShelfGridView.gridTopMargin
         let spacingX = ShelfGridMetrics.spacing
         let spacingY = ShelfGridMetrics.spacing
         let availableWidth = max(bounds.width, 100)
@@ -1400,7 +1401,7 @@ public final class ShelfGridView: NSView {
         let itemWidth = metrics.itemWidth
         let itemHeight = metrics.itemWidth
         let sideMargin = metrics.sideMargin
-        let topMargin: CGFloat = 12
+        let topMargin = ShelfGridView.gridTopMargin
         let spacingX = ShelfGridMetrics.spacing
         let spacingY = ShelfGridMetrics.spacing
 

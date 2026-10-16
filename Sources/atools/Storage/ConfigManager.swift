@@ -162,7 +162,7 @@ public final class ConfigManager {
         categories.append(Category(name: "效率", iconSymbol: "bolt.fill", sortWeight: 1, items: []))
         categories.append(Category(name: "文件与脚本", iconSymbol: "folder.fill", sortWeight: 2, items: []))
 
-        return AtoolsConfig(categories: categories, enableFavoritesCategory: false)
+        return AtoolsConfig(categories: categories, theme: .macosLiquidLight, enableFavoritesCategory: false)
     }
 
     private var pendingSaveWorkItem: DispatchWorkItem?

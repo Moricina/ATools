@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Architecture-Universal%20(Apple%20Silicon%20%2B%20Intel)-orange?style=flat-square" alt="Universal" />
   <img src="https://img.shields.io/badge/Swift-5.9+-F05138?style=flat-square&logo=swift" alt="Swift 5.9" />
   <img src="https://img.shields.io/badge/Memory-20~30MB%20Footprint-brightgreen?style=flat-square" alt="Memory Footprint" />
-  <img src="https://img.shields.io/badge/Release-v1.3.21-blue?style=flat-square" alt="Latest Release" />
+  <img src="https://img.shields.io/badge/Release-v1.3.22-blue?style=flat-square" alt="Latest Release" />
 </p>
 
 ---
@@ -23,7 +23,7 @@
 
 **ATools 的核心哲学是「解耦、纯粹、极速」**：
 1. **物理级双面板解耦**：将日常最高频的「应用分类整理与启停」与「全盘极速检索与即时工具」彻底分离，互不干扰；
-2. **零第三方依赖与零 Electron 臃肿**：纯原生 Swift + AppKit 手工精雕细琢，运行流畅如丝，后台常驻物理内存仅严格锁定在 **20–30MB**；
+2. **零第三方依赖与零 Electron 臃肿**：纯原生 Swift + AppKit 手工精雕细琢，运行流畅如丝；
 3. **原子互斥调度器 (`PanelCoordinator`)**：双快捷键（`⌥A` 与 `⌥Space`）毫秒级原子切换，绝不发生窗口重叠、冲突与闪烁，点击外部即刻退让并优雅归还工作区焦点。
 
 ---

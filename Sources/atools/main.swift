@@ -51,6 +51,8 @@ if CommandLine.arguments.contains("--test") {
     // 3. Test ConfigManager & Dual Hotkeys & Resizable Shelf Dimensions & Panel Toggles
     print("[3/7] Testing ConfigManager & Resizable Shelf Dimensions & Safety Guards...")
     let config = ConfigManager.shared.config
+    TestAssertions.expect(config.theme == .macosLiquidLight, "Default theme for new installs should be .macosLiquidLight")
+    TestAssertions.expect(config.themeOpacity == 0.40, "Default theme opacity for macosLiquidLight should be 0.40")
     TestAssertions.expect(!config.categories.isEmpty, "Default categories should not be empty")
     TestAssertions.expect(config.shelfWidth >= 240, "Shelf width should be at least minSize 240")
     TestAssertions.expect(config.shelfHeight >= 180, "Shelf height should be at least minSize 180")
@@ -116,11 +118,19 @@ if CommandLine.arguments.contains("--test") {
     TestAssertions.expect(ConfigManager.shared.config.theme == .liquidDark, "Theme should update to .liquidDark")
     TestAssertions.expect(ConfigManager.shared.config.theme.isDark == true, "liquidDark isDark should be true")
     TestAssertions.expect(AppTheme.allCases == [.liquidDark, .liquidLight, .macosLiquidDark, .macosLiquidLight], "AppTheme should include liquidDark, liquidLight, macosLiquidDark, and macosLiquidLight")
+    TestAssertions.expect(AppTheme.liquidDark.title == "磨砂玻璃 (深色)", "liquidDark title should be 磨砂玻璃 (深色)")
+    TestAssertions.expect(AppTheme.liquidLight.title == "磨砂玻璃 (浅色)", "liquidLight title should be 磨砂玻璃 (浅色)")
+    TestAssertions.expect(AppTheme.macosLiquidDark.title == "原生液态 (深色)", "macosLiquidDark title should be 原生液态 (深色)")
+    TestAssertions.expect(AppTheme.macosLiquidLight.title == "原生液态 (浅色)", "macosLiquidLight title should be 原生液态 (浅色)")
     // Configs saved with the retired solid themes migrate to the matching liquid theme.
     let solidLightJSON = "{\"theme\": \"solidLight\"}".data(using: .utf8)!
     TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidLightJSON)).theme == .liquidLight, "solidLight -> liquidLight")
     let solidDarkJSON = "{\"theme\": \"solidDark\"}".data(using: .utf8)!
     TestAssertions.expect((try! JSONDecoder().decode(AtoolsConfig.self, from: solidDarkJSON)).theme == .liquidDark, "solidDark -> liquidDark")
+    let emptyThemeJSON = "{}".data(using: .utf8)!
+    let decodedEmpty = try! JSONDecoder().decode(AtoolsConfig.self, from: emptyThemeJSON)
+    TestAssertions.expect(decodedEmpty.theme == .macosLiquidLight, "Empty theme decodes to .macosLiquidLight")
+    TestAssertions.expect(decodedEmpty.themeOpacity == 0.40, "Empty theme opacity defaults to 0.40")
     let legacyNativeJSON = "{\"theme\": \"macosLiquid\"}".data(using: .utf8)!
     let decodedLegacyNative = try! JSONDecoder().decode(AtoolsConfig.self, from: legacyNativeJSON)
     TestAssertions.expect(decodedLegacyNative.theme == .macosLiquidLight, "macosLiquid -> macosLiquidLight")
@@ -1371,6 +1381,24 @@ if CommandLine.arguments.contains("--test") {
 
     // Verify category pills under liquidDark theme have consistent white text
     let originalTheme = ConfigManager.shared.config.theme
+
+    for theme in [AppTheme.liquidDark, AppTheme.liquidLight, AppTheme.macosLiquidDark, AppTheme.macosLiquidLight] {
+        ConfigManager.shared.updateTheme(theme)
+        NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
+        shelfPanel.prepareForDisplay()
+        if let content = shelfPanel.contentView {
+            shelfPanel.displayIfNeeded()
+            content.layoutSubtreeIfNeeded()
+            if let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+                content.cacheDisplay(in: content.bounds, to: rep)
+                if let pngData = rep.representation(using: .png, properties: [:]) {
+                    let filename = "/tmp/shelf_preview_\(theme.rawValue).png"
+                    try? pngData.write(to: URL(fileURLWithPath: filename))
+                }
+            }
+        }
+    }
+
     ConfigManager.shared.updateTheme(.liquidDark)
     NotificationCenter.default.post(name: .atoolsThemeDidChange, object: nil)
     shelfPanel.prepareForDisplay()

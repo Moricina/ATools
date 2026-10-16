@@ -175,17 +175,24 @@ public final class CategoryPillView: NSView {
             }
         }
 
-        let sh = NSShadow()
         if isDark {
-            sh.shadowColor = NSColor.black.withAlphaComponent(isNativeLiquidTheme ? 0.68 : 0.50)
+            let sh = NSShadow()
+            sh.shadowColor = NSColor.black.withAlphaComponent(isNativeLiquidTheme ? 0.68 : 0.40)
             sh.shadowOffset = NSSize(width: 0, height: -1.0)
             sh.shadowBlurRadius = isNativeLiquidTheme ? 1.5 : 1.2
+            titleLabel.shadow = sh
         } else {
-            sh.shadowColor = NSColor.white.withAlphaComponent(0.65)
-            sh.shadowOffset = NSSize(width: 0, height: 0.5)
-            sh.shadowBlurRadius = 1.0
+            if isNativeLiquidTheme {
+                let sh = NSShadow()
+                sh.shadowColor = NSColor.white.withAlphaComponent(0.65)
+                sh.shadowOffset = NSSize(width: 0, height: 0.5)
+                sh.shadowBlurRadius = 1.0
+                titleLabel.shadow = sh
+            } else {
+                // 磨砂玻璃 (浅色)：在纯白白瓷浮动胶囊上，取消白色光晕阴影，呈现最为纯净锐利的黑字印刷质感
+                titleLabel.shadow = nil
+            }
         }
-        titleLabel.shadow = sh
 
         NSAnimationContext.endGrouping()
     }

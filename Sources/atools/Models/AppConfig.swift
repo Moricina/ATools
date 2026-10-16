@@ -80,8 +80,8 @@ public struct HotkeyBinding: Codable, Equatable {
 }
 
 public enum AppTheme: String, Codable, CaseIterable {
-    case liquidDark = "liquidDark"             // 液态玻璃 (深色)
-    case liquidLight = "liquidLight"           // 液态玻璃 (浅色)
+    case liquidDark = "liquidDark"             // 磨砂玻璃 (深色)
+    case liquidLight = "liquidLight"           // 磨砂玻璃 (浅色)
     case macosLiquidDark = "macosLiquidDark"   // 原生液态 (深色)
     case macosLiquidLight = "macosLiquidLight" // 原生液态 (浅色)
 
@@ -99,8 +99,8 @@ public enum AppTheme: String, Codable, CaseIterable {
 
     public var title: String {
         switch self {
-        case .liquidDark: return "液态玻璃 (深色)"
-        case .liquidLight: return "液态玻璃 (浅色)"
+        case .liquidDark: return "磨砂玻璃 (深色)"
+        case .liquidLight: return "磨砂玻璃 (浅色)"
         case .macosLiquidDark: return "原生液态 (深色)"
         case .macosLiquidLight: return "原生液态 (浅色)"
         }
@@ -117,7 +117,7 @@ public enum AppTheme: String, Codable, CaseIterable {
         return self == .macosLiquidDark || self == .macosLiquidLight
     }
 
-    /// 原生液态主题默认透明度为 40% (0.40)，经典液态玻璃主题默认透明度为 90% (0.90)
+    /// 原生液态主题默认透明度为 40% (0.40)，磨砂玻璃主题默认透明度为 90% (0.90)
     public var defaultOpacity: Double {
         return isNativeLiquid ? 0.40 : 0.90
     }
@@ -340,7 +340,7 @@ public struct AtoolsConfig: Codable {
         categoryOrientation: CategoryOrientation = .horizontal,
         shelfIconSize: ShelfIconSize = .medium,
         sidebarWidth: Double = 84,
-        theme: AppTheme = .liquidDark,
+        theme: AppTheme = .macosLiquidLight,
         shelfIconScale: Double = 1.0,
         themeOpacity: Double? = nil,
         enableShelfPanel: Bool = true,
@@ -463,7 +463,7 @@ public struct AtoolsConfig: Codable {
         self.shelfIconSize = (try? container.decode(ShelfIconSize.self, forKey: .shelfIconSize)) ?? .medium
         self.sidebarWidth = (try? container.decode(Double.self, forKey: .sidebarWidth)) ?? 84
         let rawTheme = (try? container.decode(String.self, forKey: .theme)) ?? ""
-        let resolvedTheme = AppTheme.migrated(from: rawTheme) ?? .liquidDark
+        let resolvedTheme = AppTheme.migrated(from: rawTheme) ?? .macosLiquidLight
         self.theme = resolvedTheme
         let rawScale = (try? container.decode(Double.self, forKey: .shelfIconScale)) ?? 1.0
         self.shelfIconScale = max(0.70, min(1.30, rawScale))

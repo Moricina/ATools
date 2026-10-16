@@ -15,29 +15,36 @@ private final class FlippedStackView: NSStackView {
     override var isFlipped: Bool { true }
 }
 
-/// A single flowing liquid-glass capsule that slides between category pills.
+/// A single flowing liquid-glass / frosted-glass capsule that slides between category pills.
 /// It is the shared "selected" element: the pill text stays put while this
 /// capsule glides from the old pill to the new one on selection change.
-///
-/// The capsule uses the same regular liquid-glass material as the drawer
-/// backdrop. Only this compact selected-state frame remains; the category
-/// container itself stays transparent.
 private final class SelectionCapsuleView: NSView {
-    private let glass = LiquidGlassContainerView()
-    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 14)
+    private let frostedLayer = CALayer()
+    private let liquidBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 13)
+
+    override public var isFlipped: Bool { true }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.masksToBounds = false
-        liquidBackdrop.contactShadowEnabled = true
-        liquidBackdrop.customShadowRadius = 6.0
-        liquidBackdrop.customShadowOpacity = 0.05
 
-        glass.usesRegularGlass = true
-        glass.softEdgeEnabled = false
-        addSubview(glass)
+        frostedLayer.masksToBounds = false
+        layer?.addSublayer(frostedLayer)
+
+        liquidBackdrop.contactShadowEnabled = true
+        liquidBackdrop.customShadowRadius = 6.5
+        liquidBackdrop.customShadowOpacity = 0.04
+        liquidBackdrop.translatesAutoresizingMaskIntoConstraints = false
         addSubview(liquidBackdrop)
+
+        NSLayoutConstraint.activate([
+            liquidBackdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            liquidBackdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+            liquidBackdrop.topAnchor.constraint(equalTo: topAnchor),
+            liquidBackdrop.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
         updateColors()
     }
 
@@ -49,11 +56,16 @@ private final class SelectionCapsuleView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        let r = bounds.height > 0 ? (bounds.height / 2) : 14
+        let r = bounds.height > 0 ? (bounds.height / 2) : 13
         layer?.cornerRadius = r
-        glass.frame = bounds
-        glass.cornerRadius = r
-        liquidBackdrop.frame = bounds
+        frostedLayer.frame = bounds
+        frostedLayer.cornerRadius = r
+        if bounds.width > 0 && bounds.height > 0 {
+            let path = CGPath(roundedRect: bounds, cornerWidth: r, cornerHeight: r, transform: nil)
+            frostedLayer.shadowPath = path
+        } else {
+            frostedLayer.shadowPath = nil
+        }
         liquidBackdrop.cornerRadius = r
         CATransaction.commit()
     }
@@ -85,31 +97,50 @@ private final class SelectionCapsuleView: NSView {
             liquidBackdrop.isHidden = false
             liquidBackdrop.isDark = isDark
             liquidBackdrop.isSelected = true
-            liquidBackdrop.customShadowOpacity = isDark ? 0.16 : 0.05
-            liquidBackdrop.customShadowRadius = 6.0
+            // 原生液态：晶莹剔透的水滴透镜折射，配以极轻柔顺光向下漫射，根绝任何生硬黑边与截断
+            liquidBackdrop.customShadowOpacity = isDark ? 0.09 : 0.04
+            liquidBackdrop.customShadowRadius = 6.5
             liquidBackdrop.updateStyles()
-            glass.isHidden = true
+            frostedLayer.isHidden = true
             return
         }
+
         liquidBackdrop.isHidden = true
-        glass.isHidden = false
-        glass.isNativeLiquid = false
-        glass.isDark = isDark
-        // Keep the selected capsule on exactly the same glass recipe as the
-        // drawer backdrop; the compact shape alone provides the selection cue.
+        frostedLayer.isHidden = false
+
+        let px = physicalOnePixel
+        let r = bounds.height > 0 ? (bounds.height / 2) : 13
+        frostedLayer.cornerRadius = r
+
         if isDark {
-            glass.tintColor = GlassPalette.darkBaseTop
-            glass.tintOpacity = 0.72
+            // 磨砂玻璃 (深色)：深邃高级的微熏磨砂胶囊，极其柔润通透的漫射环境微投影，彻底告别生硬粗黑块与平底刀切截断
+            frostedLayer.backgroundColor = NSColor(white: 1.0, alpha: 0.18).cgColor
+            frostedLayer.borderWidth = px
+            frostedLayer.borderColor = NSColor(white: 1.0, alpha: 0.20).cgColor
+            frostedLayer.shadowColor = NSColor.black.cgColor
+            frostedLayer.shadowOpacity = 0.16
+            frostedLayer.shadowOffset = CGSize(width: 0, height: 1.5)
+            frostedLayer.shadowRadius = 6.0
         } else {
-            glass.tintColor = GlassPalette.lightGlassTint
-            glass.tintOpacity = 0.48
+            // 磨砂玻璃 (浅色)：纯净温润的纯白白瓷浮动胶囊，100% 极致平滑，杜绝杂斑，呈现通透无痕微浮动感
+            frostedLayer.backgroundColor = NSColor.white.cgColor
+            frostedLayer.borderWidth = px
+            frostedLayer.borderColor = NSColor(white: 0.0, alpha: 0.07).cgColor
+            frostedLayer.shadowColor = NSColor(white: 0.0, alpha: 0.08).cgColor
+            frostedLayer.shadowOpacity = 1.0
+            frostedLayer.shadowOffset = CGSize(width: 0, height: 1.5)
+            frostedLayer.shadowRadius = 5.0
+        }
+
+        if bounds.width > 0 && bounds.height > 0 {
+            frostedLayer.shadowPath = CGPath(roundedRect: bounds, cornerWidth: r, cornerHeight: r, transform: nil)
         }
     }
 
     func updateCornerRadius(_ radius: CGFloat) {
         let r = bounds.height > 0 ? (bounds.height / 2) : radius
         layer?.cornerRadius = r
-        glass.cornerRadius = r
+        frostedLayer.cornerRadius = r
         liquidBackdrop.cornerRadius = r
     }
 }
@@ -148,6 +179,9 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     }
 
     private func setupViews() {
+        wantsLayer = true
+        layer?.masksToBounds = false
+
         registerForDraggedTypes([
             NSPasteboard.PasteboardType(AppConstants.categoryReorderType),
             NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType),
@@ -155,6 +189,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         ])
 
         scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.wantsLayer = true
+        scrollView.layer?.masksToBounds = false
         scrollView.hasHorizontalScroller = true
         scrollView.hasVerticalScroller = false
         scrollView.horizontalScroller = KnobOnlyScroller()
@@ -163,6 +199,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.backgroundColor = .clear
+        scrollView.contentView.wantsLayer = true
+        scrollView.contentView.layer?.masksToBounds = false
         scrollView.contentView.drawsBackground = false
         scrollView.contentView.layer?.backgroundColor = NSColor.clear.cgColor
         scrollView.layer?.backgroundColor = NSColor.clear.cgColor
@@ -170,6 +208,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
         addSubview(scrollView)
 
+        stackView.wantsLayer = true
+        stackView.layer?.masksToBounds = false
         stackView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.documentView = stackView
         // The flowing capsule sits below every pill so only its text remains
@@ -231,10 +271,10 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
             stackView.alignment = .centerY
 
             stackViewConstraints = [
-                stackView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor, constant: 4),
-                stackView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 2),
+                stackView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor, constant: 6),
+                stackView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 3),
                 stackView.heightAnchor.constraint(equalToConstant: 26),
-                stackView.bottomAnchor.constraint(lessThanOrEqualTo: scrollView.contentView.bottomAnchor, constant: -6)
+                stackView.bottomAnchor.constraint(lessThanOrEqualTo: scrollView.contentView.bottomAnchor, constant: -5)
             ]
         } else {
             scrollView.hasHorizontalScroller = false
@@ -245,10 +285,10 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
             stackView.alignment = .width
 
             stackViewConstraints = [
-                stackView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor, constant: 3),
+                stackView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor, constant: 4),
                 stackView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor, constant: -6),
                 stackView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor, constant: 4),
-                stackView.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -9)
+                stackView.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -10)
             ]
         }
         NSLayoutConstraint.activate(stackViewConstraints)
