@@ -2714,3 +2714,31 @@
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
   - 物理内存占用稳定在 148.89 MB，无任何泄漏或额外 CPU 开销。
+
+### 83. 彻底修复全盘搜索面板「失焦时自动关闭」失效的问题 (2026-10-16)
+
+- **问题背景与真实场景排查**：
+  - **现象**：用户在偏好设置「常规」中开启了「失焦时自动关闭」（点击面板外部任意工作区或切换应用时自动收起窗口），但在呼出全盘搜索（Spotlight-style）面板后，点击屏幕任意外部区域、桌面或其他应用窗口，搜索面板均未能按预期自动关闭退出；
+  - **底层日志与现场追踪定位**：
+    - 排查运行追踪日志 `~/Library/Logs/ATools/runtime.log`，发现当全盘搜索失焦时频繁出现：
+      `[Panel] autoDismiss(appDeactivated) skipped: search panel preserves state for auxiliary floating tools.`
+      `[Panel] windowResign: search panel is open, preserving panel for auxiliary input / clipboard tools.`
+    - **根因一（失焦通知被显式阻断）**：
+      `PanelCoordinator.swift` 在 `windowResignObserver` 与 `handleAutomaticDismissal` 中，对 `searchPanel` 进行了无条件拦截（直接 `return`），使得当搜索面板失去 Key 窗口焦点或主程序失焦（`appDeactivated`）时，完全跳过了自动收回逻辑；
+    - **根因二（外部点击命中检测产生全屏常真误判）**：
+      `isClickOnAuxiliaryToolWindow(at:)` 中的 Tier 2 原先直接遍历 `NSWorkspace.shared.runningApplications`，当检测到后台驻留有常驻辅助工具（如本机已安装运行的 `AuraSnap.app`）时，对屏幕上**任意坐标**的鼠标点击均返回 `true`，导致外部点击检测将所有普通工作区点击误判为辅助工具点击，彻底阻断了 `hideSearchPanel`。
+- **涉及文件列表及修改逻辑**：
+  - [`PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：
+    - **解除 `windowResign` 与 `appDeactivated` 的无条件硬阻断**：移除 `windowResignObserver` 中对搜索面板的强制跳过逻辑，使失去 Key 状态后能正常派发退出动作；
+    - **统一接入 `PanelDismissPolicy.shouldDismiss` 策略矩阵**：在 `handleAutomaticDismissal` 中统一比对 `ConfigManager.shared.config.autoCloseOnDeactivate`，仅在用户未勾选该开关、或正处于模态弹窗/右键菜单/拖拽等特殊保护态时才豁免，与常规抽屉保持一致的严密配置契约；
+    - **修正辅助浮层窗口判定（精准在屏几何命中）**：
+      1. Tier 0：过滤非可见的隐藏窗口（`window.isVisible`），杜绝隐藏状态下的抽屉面板等几何区域导致误判；
+      2. Tier 2：使用 `CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], ...)` 探测实际位于鼠标下方的在屏物理窗口，严禁仅因后台进程存活就全屏放行；
+    - **精准限制 `workspaceActivationObserver` 保护作用域**：仅当激活的确实为已登记的有效剪贴板辅助工具（`knownAuxiliaryToolIdentifiers`）时才保护搜索面板，切换常规应用时迅速平稳收拢。
+- **兼容性与边界防护策略**：
+  - **剪贴板协同工具无缝兼容**：当真实呼出并点击 AuraSnap、Maccy 等剪贴板管理器在屏窗口时，搜索面板依然平稳保活并在选中记录后无缝粘贴回填；
+  - **常规工作区失焦极速响应**：点击桌面、点击浏览器或文档、Cmd+Tab 切换应用时，全盘搜索面板 100% 丝滑自动收起；
+  - **测试套件 100% 绿色**：经 `./Scripts/build.sh --test` 全量回归，13 个测试项全部 PASSED。
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 物理内存占用稳定在 148.42 MB。

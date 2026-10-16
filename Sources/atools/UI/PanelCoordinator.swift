@@ -136,11 +136,13 @@ public final class PanelCoordinator {
             let activated = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             if activated?.processIdentifier == ProcessInfo.processInfo.processIdentifier { return }
 
-            // 关键保护：若激活的是无 Dock 图标的辅助浮层工具（如剪贴板管理器 AuraSnap、Maccy、系统表情面板等，activationPolicy != .regular），
-            // 绝不视为真正的切应用退出，保持全盘搜索面板开启并等待接收其回传粘贴内容！
+            // 关键保护：若激活的是无 Dock 图标的已知辅助浮层工具（如剪贴板管理器 AuraSnap、Maccy 等，activationPolicy != .regular），
+            // 且处于全盘搜索开启状态，等待接收其回传粘贴内容
             if activated?.activationPolicy == .accessory || activated?.activationPolicy == .prohibited {
-                runtimeLog("[Panel] workspaceObserver: ignoring activation of accessory tool \(activated?.bundleIdentifier ?? "")")
-                return
+                if let bid = activated?.bundleIdentifier, Self.knownAuxiliaryToolIdentifiers.contains(bid) {
+                    runtimeLog("[Panel] workspaceObserver: accessory tool \(bid) activated while search panel is open, preserving panel.")
+                    return
+                }
             }
 
             // 关键保护：若全盘搜索可见，外部剪贴板工具退场时系统可能短暂将焦点切给原先的后台应用。
@@ -174,12 +176,6 @@ public final class PanelCoordinator {
             // AppKit can briefly resign a panel key while opening a menu or
             // child sheet. Re-check after the current event is dispatched.
             DispatchQueue.main.async {
-                // 关键保护：全盘搜索面板作为系统级临时输入中心（类似 Spotlight），
-                // 绝不因暂时的 windowResigned（如呼出剪贴板历史 AuraSnap、Maccy、系统表情输入、输入法选词等）而自动关闭！
-                if self.searchPanelCreated && self.searchPanel.isVisible {
-                    runtimeLog("[Panel] windowResign: search panel is open, preserving panel for auxiliary input / clipboard tools.")
-                    return
-                }
                 self.handleAutomaticDismissal(.windowResigned)
             }
         }
@@ -263,13 +259,21 @@ public final class PanelCoordinator {
             }
         }
 
-        // 如果全盘搜索可见：严禁因 windowResigned 或 appDeactivated 关闭全盘搜索，仅在应用明确切换或外部点击时遵循收拢
+        // 如果全盘搜索可见：遵循失焦时自动关闭配置策略
         if searchPanelCreated && searchPanel.isVisible {
-            if reason == .windowResigned || reason == .appDeactivated {
-                runtimeLog("[Panel] autoDismiss(\(reason)) skipped: search panel preserves state for auxiliary floating tools.")
-                return
+            let decision = PanelDismissPolicy.shouldDismiss(
+                activePanel: .search,
+                isShelfPinned: false,
+                autoCloseOnDeactivate: ConfigManager.shared.config.autoCloseOnDeactivate,
+                isDraggingActive: isDraggingActive,
+                hasModalWindow: NSApp.modalWindow != nil || isModalDialogOpen,
+                isSettingsWindowKey: SettingsWindowController.isSettingsWindowKey,
+                isRightClickMenuOpen: isEffectiveMenuOpen
+            )
+            runtimeLog("[Panel] autoDismiss reason=\(reason) panel=search decision=\(decision)")
+            if decision {
+                hideSearchPanel(restoreFocus: false)
             }
-            hideSearchPanel(restoreFocus: false)
         }
 
         // 如果应用抽屉可见：固定在桌面时受绝对保护，绝不响应失焦退出；未固定时遵循自动收起策略
@@ -693,9 +697,9 @@ public final class PanelCoordinator {
 
     /// 检查点击的屏幕坐标是否落在辅助浮层工具（如 AuraSnap、Maccy、Paste、CleanClip 等无 Dock 图标的工具面板）的窗口范围内
     internal static func isClickOnAuxiliaryToolWindow(at screenPoint: NSPoint) -> Bool {
-        // Tier 0: 优先检查是否落在本应用自身的任何有效窗口内（极速毫秒级，无需发起 IPC 或 AX 查询）
+        // Tier 0: 优先检查是否落在本应用自身的任何有效窗口内（含当前搜索面板自身或可见辅助窗）
         for window in NSApp.windows {
-            if window.frame.contains(screenPoint) {
+            if (window.isVisible || window is SearchPanel) && window.frame.contains(screenPoint) {
                 return true
             }
         }
@@ -719,9 +723,6 @@ public final class PanelCoordinator {
                     if bundleID == "com.apple.dock" || bundleID == "com.apple.controlcenter" || bundleID == "com.apple.systemuiserver" {
                         return false
                     }
-                    if app.activationPolicy == .accessory || app.activationPolicy == .prohibited {
-                        return true
-                    }
                     if knownAuxiliaryToolIdentifiers.contains(bundleID) {
                         return true
                     }
@@ -729,12 +730,28 @@ public final class PanelCoordinator {
             }
         }
 
-        // Tier 2: 若 AX 降级或未命中，检查系统当前运行中是否处于活跃状态的已知辅助/剪贴板工具
-        for runningApp in NSWorkspace.shared.runningApplications {
-            if runningApp.activationPolicy == .accessory,
-               let bid = runningApp.bundleIdentifier,
-               knownAuxiliaryToolIdentifiers.contains(bid) {
-                return true
+        // Tier 2: 若 AX 降级或未命中，检查屏幕上此点击点是否实际落在已知辅助工具的在屏窗口内
+        if let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+            for info in windowList {
+                guard let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
+                      let windowBounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else { continue }
+                let appKitRect = NSRect(
+                    x: windowBounds.origin.x,
+                    y: mainScreenHeight - windowBounds.origin.y - windowBounds.height,
+                    width: windowBounds.width,
+                    height: windowBounds.height
+                )
+                if appKitRect.contains(screenPoint) {
+                    let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t ?? 0
+                    if ownerPID == ProcessInfo.processInfo.processIdentifier {
+                        return true
+                    }
+                    if let app = NSRunningApplication(processIdentifier: ownerPID),
+                       let bid = app.bundleIdentifier,
+                       knownAuxiliaryToolIdentifiers.contains(bid) {
+                        return true
+                    }
+                }
             }
         }
 
