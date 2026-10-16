@@ -5,10 +5,19 @@ public protocol CategoryBarDelegate: AnyObject {
     func categoryBar(_ bar: CategoryBarView, didSelectCategory category: Category)
     func categoryBarDidRequestAddCategory(_ bar: CategoryBarView)
     func categoryBar(_ bar: CategoryBarView, didRequestRenameCategory category: Category)
+    func categoryBar(_ bar: CategoryBarView, didCreateCategoryWithName name: String)
+    func categoryBar(_ bar: CategoryBarView, didRenameCategory category: Category, to newName: String)
     func categoryBar(_ bar: CategoryBarView, didRequestDeleteCategory category: Category)
     func categoryBar(_ bar: CategoryBarView, didMoveCategoryFrom fromIndex: Int, to toIndex: Int)
     func categoryBar(_ bar: CategoryBarView, didMoveLauncherItem item: LauncherItem, to category: Category)
     func categoryBar(_ bar: CategoryBarView, didAddPaths paths: [String], to category: Category)
+}
+
+public extension CategoryBarDelegate {
+    func categoryBarDidRequestAddCategory(_ bar: CategoryBarView) {}
+    func categoryBar(_ bar: CategoryBarView, didRequestRenameCategory category: Category) {}
+    func categoryBar(_ bar: CategoryBarView, didCreateCategoryWithName name: String) {}
+    func categoryBar(_ bar: CategoryBarView, didRenameCategory category: Category, to newName: String) {}
 }
 
 private final class FlippedStackView: NSStackView {
@@ -166,8 +175,15 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     private let selectionCapsule = SelectionCapsuleView()
     private var stackViewConstraints: [NSLayoutConstraint] = []
     private weak var selectedPill: CategoryPillView?
+    private weak var activeEditingPill: CategoryPillView?
+    private var fallbackSelectedCategoryId: UUID?
+    private var clickOutsideMonitor: Any?
 
     override public var isFlipped: Bool { return true }
+
+    deinit {
+        removeClickOutsideMonitor()
+    }
 
     override public init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -299,6 +315,8 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     }
 
     public func reloadData(categories: [Category], selectedId: UUID?) {
+        removeClickOutsideMonitor()
+        activeEditingPill = nil
         self.categories = categories
         self.selectedCategoryId = selectedId ?? categories.first?.id
 
@@ -435,6 +453,9 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     // MARK: - CategoryPillDelegate
     public func categoryPillDidClick(_ pill: CategoryPillView) {
+        if let editing = activeEditingPill, editing !== pill {
+            commitActiveEditing()
+        }
         self.selectedCategoryId = pill.category.id
         for view in stackView.arrangedSubviews {
             if let p = view as? CategoryPillView {
@@ -466,13 +487,34 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         stackView.layoutSubtreeIfNeeded()
         let target = pill.convert(pill.bounds, to: stackView)
         let visible = scrollView.contentView.bounds
-        guard visible.intersects(target) == false else { return }
+
+        var paddedTarget = target
+        if orientation == .vertical {
+            paddedTarget = NSRect(
+                x: target.origin.x,
+                y: max(0, target.origin.y - 12),
+                width: target.size.width,
+                height: target.size.height + 24
+            )
+        } else {
+            paddedTarget = NSRect(
+                x: max(0, target.origin.x - 16),
+                y: target.origin.y,
+                width: target.size.width + 32,
+                height: target.size.height
+            )
+        }
+
+        // 关键防护：只要药丸或其呼吸内边距未被完全包含，即平滑滚动
+        guard !visible.contains(target) || !visible.contains(paddedTarget) else { return }
+
         let action = {
-            _ = self.scrollView.contentView.scrollToVisible(target)
+            _ = self.scrollView.contentView.scrollToVisible(paddedTarget)
         }
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.20
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
                 context.allowsImplicitAnimation = true
                 action()
             }
@@ -500,6 +542,151 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     public func categoryPill(_ pill: CategoryPillView, didAddPaths paths: [String]) {
         delegate?.categoryBar(self, didAddPaths: paths, to: pill.category)
+    }
+
+    // MARK: - In-Place Inline Editing
+    public func beginAddCategoryInline() {
+        if activeEditingPill != nil {
+            commitActiveEditing()
+        }
+
+        fallbackSelectedCategoryId = selectedCategoryId
+
+        let tempCategory = Category(id: UUID(), name: "", items: [])
+        let pill = CategoryPillView(category: tempCategory, isSelected: true, isVertical: orientation == .vertical)
+        pill.isPendingNew = true
+        pill.delegate = self
+        stackView.addArrangedSubview(pill)
+        if orientation == .vertical {
+            pill.widthAnchor.constraint(equalTo: stackView.widthAnchor).isActive = true
+        }
+
+        activeEditingPill = pill
+        selectedCategoryId = tempCategory.id
+        for p in allPills {
+            p.isSelected = (p === pill)
+        }
+        selectedPill = pill
+
+        stackView.layoutSubtreeIfNeeded()
+        layoutSelectionCapsule(animated: true)
+        scrollSelectedPillIntoView(animated: true)
+
+        pill.beginEditing(cursorAtEnd: false)
+        installClickOutsideMonitor()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollSelectedPillIntoView(animated: true)
+        }
+    }
+
+    public func beginRenameCategoryInline(for category: Category) {
+        if activeEditingPill != nil {
+            commitActiveEditing()
+        }
+
+        guard let pill = allPills.first(where: { $0.category.id == category.id }) else { return }
+
+        activeEditingPill = pill
+        fallbackSelectedCategoryId = selectedCategoryId
+        selectedCategoryId = category.id
+        for p in allPills {
+            p.isSelected = (p === pill)
+        }
+        selectedPill = pill
+
+        stackView.layoutSubtreeIfNeeded()
+        layoutSelectionCapsule(animated: true)
+        scrollSelectedPillIntoView(animated: true)
+
+        pill.beginEditing(cursorAtEnd: true)
+        installClickOutsideMonitor()
+
+        DispatchQueue.main.async { [weak self] in
+            self?.scrollSelectedPillIntoView(animated: true)
+        }
+    }
+
+    public func commitActiveEditing() {
+        guard let pill = activeEditingPill else { return }
+        removeClickOutsideMonitor()
+        let result = pill.commitEditing()
+        categoryPillDidCommitEditing(pill, name: result)
+    }
+
+    public func cancelActiveEditing() {
+        guard let pill = activeEditingPill else { return }
+        removeClickOutsideMonitor()
+        pill.cancelEditing()
+        categoryPillDidCancelEditing(pill)
+    }
+
+    private func installClickOutsideMonitor() {
+        removeClickOutsideMonitor()
+        clickOutsideMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self = self, let activePill = self.activeEditingPill else { return event }
+
+            let pointInPill = activePill.convert(event.locationInWindow, from: nil)
+            if activePill.bounds.contains(pointInPill) {
+                return event
+            }
+
+            self.commitActiveEditing()
+            return event
+        }
+    }
+
+    private func removeClickOutsideMonitor() {
+        if let monitor = clickOutsideMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickOutsideMonitor = nil
+        }
+    }
+
+    public func categoryPillDidCommitEditing(_ pill: CategoryPillView, name: String?) {
+        guard activeEditingPill === pill else { return }
+        activeEditingPill = nil
+        removeClickOutsideMonitor()
+
+        if pill.isPendingNew {
+            stackView.removeArrangedSubview(pill)
+            pill.removeFromSuperview()
+            if let safeName = name, !safeName.isEmpty {
+                delegate?.categoryBar(self, didCreateCategoryWithName: safeName)
+            } else {
+                if let fallbackId = fallbackSelectedCategoryId {
+                    setSelectedCategory(id: fallbackId, animated: true)
+                }
+            }
+        } else {
+            if let safeName = name, !safeName.isEmpty, safeName != pill.category.name {
+                delegate?.categoryBar(self, didRenameCategory: pill.category, to: safeName)
+            } else {
+                if let fallbackId = fallbackSelectedCategoryId {
+                    setSelectedCategory(id: fallbackId, animated: false)
+                }
+            }
+        }
+        fallbackSelectedCategoryId = nil
+    }
+
+    public func categoryPillDidCancelEditing(_ pill: CategoryPillView) {
+        guard activeEditingPill === pill else { return }
+        activeEditingPill = nil
+        removeClickOutsideMonitor()
+
+        if pill.isPendingNew {
+            stackView.removeArrangedSubview(pill)
+            pill.removeFromSuperview()
+            if let fallbackId = fallbackSelectedCategoryId {
+                setSelectedCategory(id: fallbackId, animated: true)
+            }
+        } else {
+            if let fallbackId = fallbackSelectedCategoryId {
+                setSelectedCategory(id: fallbackId, animated: false)
+            }
+        }
+        fallbackSelectedCategoryId = nil
     }
 
     // MARK: - Dragging Destination Helpers

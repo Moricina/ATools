@@ -34,7 +34,8 @@ public final class SearchCoordinator {
         fileResults.removeAll()
 
         var effectiveFilter = filter
-        var effectiveText = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitizedRaw = SearchInputSanitizer.sanitize(query)
+        var effectiveText = sanitizedRaw.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // 若当前未显式指定分类（为 .all），尝试从输入文本中解析快捷前缀（如 "doc: report"）
         if effectiveFilter == .all, let extracted = SearchTypeFilter.extractPrefix(from: effectiveText) {
@@ -98,7 +99,7 @@ public final class SearchCoordinator {
                     icon: ThumbnailPipeline.shared.symbolIcon(name: "globe", pointSize: 16, weight: .medium),
                     action: {
                         if let url = engine.searchURL(for: query, customTemplate: ConfigManager.shared.config.customWebSearchURL) {
-                            NSWorkspace.shared.open(url)
+                            SearchInputSanitizer.openSafeURL(url)
                         }
                     }
                 )
@@ -303,7 +304,7 @@ public final class SearchCoordinator {
                         icon: ThumbnailPipeline.shared.symbolIcon(name: "character.book.closed.fill"),
                         action: {
                             let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryValueAllowed) ?? trimmed
-                            if let url = URL(string: "dict://\(encoded)") { NSWorkspace.shared.open(url) }
+                            if let url = URL(string: "dict://\(encoded)") { SearchInputSanitizer.openSafeURL(url) }
                         }
                     )
                     deliver()
@@ -360,7 +361,7 @@ public final class SearchCoordinator {
             icon: ThumbnailPipeline.shared.symbolIcon(name: "globe"),
             action: {
                 if let url = engine.searchURL(for: trimmed, customTemplate: customURL) {
-                    NSWorkspace.shared.open(url)
+                    SearchInputSanitizer.openSafeURL(url)
                 }
             }
         )

@@ -81,9 +81,7 @@ public final class SearchTextField: NSTextField {
 
         guard let text = textToPaste, !text.isEmpty else { return }
 
-        let sanitized = text.replacingOccurrences(of: "\r\n", with: " ")
-                            .replacingOccurrences(of: "\n", with: " ")
-                            .replacingOccurrences(of: "\r", with: " ")
+        let sanitized = SearchInputSanitizer.sanitize(text)
 
         if let editor = currentEditor() as? NSTextView {
             editor.insertText(sanitized, replacementRange: editor.selectedRange)

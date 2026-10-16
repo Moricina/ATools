@@ -931,13 +931,13 @@ public final class NativeLiquidButtonBackdrop: NSView {
         glassContainer.cornerRadius = cornerRadius
 
         if isPrimary {
-            // 🌟 突出主操作：黑曜石高光水滴晶体（深色下为耀眼晶莹白水滴，浅色下为深邃黑曜石液态玻璃）
+            // 🌟 突出主操作：高对比晶莹液态水滴晶体，与常规液态按钮保持相同透亮光学语言，杜绝生硬水泥灰
             if isDark {
-                glassContainer.tintColor = NSColor(white: 0.95, alpha: 1.0)
-                glassContainer.tintOpacity = isHovered ? 0.95 : 0.88
+                glassContainer.tintColor = NSColor(white: 1.0, alpha: 1.0)
+                glassContainer.tintOpacity = isHovered ? 0.35 : 0.25
             } else {
-                glassContainer.tintColor = NSColor(red: 0.10, green: 0.11, blue: 0.14, alpha: 1.0)
-                glassContainer.tintOpacity = isHovered ? 0.96 : 0.90
+                glassContainer.tintColor = NSColor(white: 0.0, alpha: 1.0)
+                glassContainer.tintOpacity = isHovered ? 0.20 : 0.12
             }
         } else {
             // 🌟 常规水滴透镜：晶莹清透，深浅自适应
@@ -1152,8 +1152,6 @@ public final class SettingsPillButton: NSButton {
         let text: NSColor
         if !isEnabled {
             text = isDark ? NSColor(white: 1.0, alpha: 0.35) : NSColor(white: 0.0, alpha: 0.30)
-        } else if style == .primary {
-            text = isDark ? NSColor(white: 0.08, alpha: 1.0) : .white
         } else {
             text = GlassPalette.textPrimary(isDark: isDark)
         }

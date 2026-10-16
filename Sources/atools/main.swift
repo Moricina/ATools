@@ -1247,7 +1247,58 @@ if CommandLine.arguments.contains("--test") {
         print("      ✓ 复制后呼出自动粘贴（时效性/单次消费/过期拦截/自环防护/敏感凭据过滤/连续多次有效/极速捕获/持久化编解码）全部验证通过.")
     }
 
+    print("[6.13] Testing SearchInputSanitizer & Global Search Security Hardening...")
+    do {
+        // (a) DoS 超长文本长度截断测试（50,000 字符强力截断至 256）
+        let massiveString = String(repeating: "A", count: 50_000)
+        let sanitizedMassive = SearchInputSanitizer.sanitize(massiveString)
+        TestAssertions.expect(sanitizedMassive.count == SearchInputSanitizer.maxQueryLength, "超长文本必须被安全截断至 \(SearchInputSanitizer.maxQueryLength) 字符，实际: \(sanitizedMassive.count)")
 
+        // (b) ANSI 逃逸码过滤测试（防止终端日志 Escape Injection）
+        let ansiPayload = "\u{001B}[2J\u{001B}[31mDangerousMalware\u{001B}[0m"
+        let sanitizedAnsi = SearchInputSanitizer.sanitize(ansiPayload)
+        TestAssertions.expect(sanitizedAnsi == "DangerousMalware", "ANSI 逃逸码必须被彻底剥除，实际: '\(sanitizedAnsi)'")
+
+        // (c) 空字符 \0 与 C0/C1 控制字符过滤测试（防底层 C 字符串截断与崩溃）
+        let nullAndControl = "Safe\0Prefix\u{0007}\u{0008}\u{001F}Middle\u{007F}\u{0080}\u{009F}Suffix"
+        let sanitizedNull = SearchInputSanitizer.sanitize(nullAndControl)
+        TestAssertions.expect(sanitizedNull == "SafePrefixMiddleSuffix", "空字符与 C0/C1 控制字符必须被完全剥除，实际: '\(sanitizedNull)'")
+
+        // (d) BiDi 覆写欺骗符与零宽字符过滤测试（防视觉钓鱼与不可见字符匹配破坏）
+        let bidiAndZeroWidth = "Normal\u{202E}Rev\u{202A}\u{200B}Invis\u{200C}\u{200D}End\u{FEFF}"
+        let sanitizedBidi = SearchInputSanitizer.sanitize(bidiAndZeroWidth)
+        TestAssertions.expect(sanitizedBidi == "NormalRevInvisEnd", "BiDi 伪装符与零宽字符必须被剔除，实际: '\(sanitizedBidi)'")
+
+        // (e) 换行与制表符折叠测试
+        let multiline = "Line1\r\nLine2\nLine3\tLine4"
+        let sanitizedMultiline = SearchInputSanitizer.sanitize(multiline)
+        TestAssertions.expect(sanitizedMultiline == "Line1 Line2 Line3 Line4", "换行符与制表符必须折叠为单空格，实际: '\(sanitizedMultiline)'")
+
+        // (f) Unicode NFC 预组合规范化测试
+        let nfdString = "e\u{0301}" // 'e' + combining acute accent (NFD 形式)
+        let sanitizedNfc = SearchInputSanitizer.sanitize(nfdString)
+        TestAssertions.expect(sanitizedNfc == "é", "Unicode 必须规范化为 NFC 预组合形式，实际: '\(sanitizedNfc)'")
+
+        // (g) URL Scheme 协议白名单校验防御测试
+        TestAssertions.expect(SearchInputSanitizer.isSafeURL(URL(string: "https://www.google.com")!) == true, "https 协议必须允许")
+        TestAssertions.expect(SearchInputSanitizer.isSafeURL(URL(string: "http://example.com")!) == true, "http 协议必须允许")
+        TestAssertions.expect(SearchInputSanitizer.isSafeURL(URL(string: "dict://apple")!) == true, "dict 协议必须允许")
+        TestAssertions.expect(SearchInputSanitizer.isSafeURL(URL(string: "file:///bin/sh")!) == false, "file 协议必须拦截阻断")
+        TestAssertions.expect(SearchInputSanitizer.isSafeURL(URL(string: "javascript:alert(1)")!) == false, "javascript 协议必须拦截阻断")
+        TestAssertions.expect(SearchInputSanitizer.isSafeURL(URL(string: "applescript://run")!) == false, "applescript 协议必须拦截阻断")
+
+        // (h) MetadataFileSearchBackend 复合恶意串谓词转义与解析测试
+        let maliciousQuery = "report' OR '1'='1\\*?\0\"\n"
+        let pred = MetadataFileSearchBackend.predicateText(matching: maliciousQuery)
+        TestAssertions.expect(!pred.isEmpty, "经过清洗与转义后的谓词不应为空")
+        if let mq = MDQueryCreate(kCFAllocatorDefault, pred as CFString, nil, nil) {
+            _ = mq // 验证系统 CoreServices 能够合法解析转义后的谓词，无语法崩溃
+        } else {
+            TestAssertions.expect(false, "加固后的谓词无法被 MDQueryCreate 成功解析: \(pred)")
+        }
+
+        print("      ✓ 全局搜索安全防御（DoS截断/ANSI剥离/空字符与控制符清洗/BiDi与零宽过滤/多行折叠/NFC规范化/URL协议白名单/MDQuery谓词安全）全部验证通过.")
+    }
 
     var coordinatorResults: [SearchResult] = []
     var isCoordDone = false
@@ -1423,6 +1474,135 @@ if CommandLine.arguments.contains("--test") {
         TestAssertions.expect(abs(metrics.sideMargin - 14.0) < 0.01, "Side margin must remain 14.0pt regardless of spacing: \(testSpacing)")
     }
     ConfigManager.shared.updateShelfItemSpacing(originalSpacing)
+
+    // [9.3] Test CategoryInputDialog Native Liquid Style & Centered Alignment
+    print("[9.3] Testing CategoryInputDialog Native Liquid Style & Centered Alignment...")
+    do {
+        // 创建 CategoryInputDialog 实例（不进入 runModal 阻塞事件循环）
+        let dialog = CategoryInputDialog(
+            titleText: "新建分类",
+            promptText: "请输入新分类的名称：",
+            placeholder: "例如：设计、多媒体、常用工具",
+            initialValue: "",
+            confirmTitle: "创建"
+        )
+        if let dWin = dialog.window, let dContent = dWin.contentView {
+            dWin.displayIfNeeded()
+            dContent.layoutSubtreeIfNeeded()
+            
+            // 查找 text field
+            func findTextField(in view: NSView) -> NSTextField? {
+                if let tf = view as? NSTextField, tf.isEditable { return tf }
+                for sub in view.subviews {
+                    if let found = findTextField(in: sub) { return found }
+                }
+                return nil
+            }
+            
+            let editableField = findTextField(in: dContent)
+            TestAssertions.expect(editableField != nil, "CategoryInputDialog 必须包含可编辑输入框")
+            if let tf = editableField {
+                TestAssertions.expect(tf.alignment == .center, "CategoryInputDialog 输入框文字必须水平居中 (.center)")
+                TestAssertions.expect(tf.focusRingType == .none, "CategoryInputDialog 输入框聚焦环必须为 .none 以融入液态水滴胶囊")
+                TestAssertions.expect(tf.isBordered == false, "CategoryInputDialog 输入框不得包含系统旧版方形边框")
+            }
+
+            // 保存预览图像供目测核验
+            if let rep = dContent.bitmapImageRepForCachingDisplay(in: dContent.bounds) {
+                dContent.cacheDisplay(in: dContent.bounds, to: rep)
+                if let pngData = rep.representation(using: .png, properties: [:]) {
+                    try? pngData.write(to: URL(fileURLWithPath: "/tmp/category_input_preview.png"))
+                    print("      ✓ Saved CategoryInputDialog preview to /tmp/category_input_preview.png")
+                }
+            }
+        }
+        print("      ✓ CategoryInputDialog Native Liquid Style & Centered Alignment verified.")
+    }
+
+    // [9.4] Test CategorySanitizer & In-Place Inline Editing Architecture
+    print("[9.4] Testing CategorySanitizer & In-Place Inline Editing Architecture...")
+    do {
+        // 1. CategorySanitizer 安全过滤测试
+        // 1.1 基础空白截断
+        TestAssertions.expect(CategorySanitizer.sanitize("   ") == nil, "纯空白字符必须返回 nil")
+        TestAssertions.expect(CategorySanitizer.sanitize("  常用工具  ") == "常用工具", "首尾空白必须被去除")
+
+        // 1.2 控制字符与换行注入过滤
+        let dirtyCtrl = "工作台\0\u{0007}\r\n项目"
+        TestAssertions.expect(CategorySanitizer.sanitize(dirtyCtrl) == "工作台项目", "控制字符与换行必须被剥除")
+
+        // 1.3 BiDi 伪装攻击过滤 (RLO)
+        let bidiAttack = "合规\u{202E}txt.exe"
+        TestAssertions.expect(CategorySanitizer.sanitize(bidiAttack) == "合规txt.exe", "BiDi 控制字符必须被剥除")
+
+        // 1.4 Emoji ZWJ 连字保护 (保证 👨‍💻 与 🏳️‍🌈 等不碎裂)
+        let coderEmoji = "👨‍💻 开发者"
+        let sanitizedEmoji = CategorySanitizer.sanitize(coderEmoji)
+        TestAssertions.expect(sanitizedEmoji == "👨‍💻 开发者", "复合 Emoji 连字符 ZWJ 必须完整保留")
+
+        // 1.5 路径穿越字符清洗 (纯点或正反斜杠)
+        TestAssertions.expect(CategorySanitizer.sanitize("..") == nil, "纯路径穿越符号 '..' 必须被拒")
+        TestAssertions.expect(CategorySanitizer.sanitize("folder/sub\\name:test") == "foldersubnametest", "正反斜杠与冒号必须被剔除")
+
+        // 1.6 超长字符截断 (<= 32)
+        let superLong = String(repeating: "分类", count: 30) // 60 characters
+        let sanitizedLong = CategorySanitizer.sanitize(superLong)
+        TestAssertions.expect(sanitizedLong != nil && sanitizedLong!.count <= 32, "超长输入必须被截断至 32 字符以内")
+
+        // 2. 内联分类胶囊组件测试
+        let testCat = Category(id: UUID(), name: "测试分类", items: [])
+        let pill = CategoryPillView(category: testCat, isSelected: false, isVertical: false)
+        TestAssertions.expect(!pill.isEditing, "初始状态不得处于编辑态")
+        TestAssertions.expect(pill.inlineTextField.isHidden, "未编辑时 inlineTextField 必须隐藏")
+        TestAssertions.expect(!pill.titleLabel.isHidden, "未编辑时 titleLabel 必须可见")
+        TestAssertions.expect(pill.inlineTextField.alignment == .center, "inlineTextField 必须居中对齐")
+
+        // 2.1 启动编辑模式
+        pill.beginEditing(cursorAtEnd: true)
+        TestAssertions.expect(pill.isEditing, "beginEditing 后 isEditing 必须为 true")
+        TestAssertions.expect(!pill.inlineTextField.isHidden, "beginEditing 后 inlineTextField 必须显示")
+        TestAssertions.expect(pill.titleLabel.isHidden, "beginEditing 后 titleLabel 必须隐藏")
+
+        // 2.2 提交编辑
+        pill.inlineTextField.stringValue = "  🎨 核心设计  "
+        let committed = pill.commitEditing()
+        TestAssertions.expect(committed == "🎨 核心设计", "commitEditing 必须返回净化后的名称")
+        TestAssertions.expect(!pill.isEditing, "commitEditing 后 isEditing 必须恢复为 false")
+        TestAssertions.expect(pill.titleLabel.stringValue == "🎨 核心设计", "titleLabel 必须更新为新名称")
+
+        // 2.3 取消编辑测试
+        pill.beginEditing(cursorAtEnd: true)
+        pill.inlineTextField.stringValue = "未保存的垃圾输入"
+        pill.cancelEditing()
+        TestAssertions.expect(!pill.isEditing, "cancelEditing 后 isEditing 必须恢复为 false")
+        TestAssertions.expect(pill.titleLabel.stringValue == "🎨 核心设计", "cancelEditing 必须保留原名称")
+
+        // 3. CategoryBarView 内联流程集成测试
+        let bar = CategoryBarView(frame: NSRect(x: 0, y: 0, width: 300, height: 36))
+        bar.reloadData(categories: [testCat], selectedId: testCat.id)
+        TestAssertions.expect(bar.allPills.count == 1, "初始药丸数量应为 1")
+
+        // 模拟新建分类内联唤起
+        bar.beginAddCategoryInline()
+        TestAssertions.expect(bar.allPills.count == 2, "beginAddCategoryInline 后应插入临时胶囊，药丸数量应为 2")
+        let pendingPill = bar.allPills.last
+        TestAssertions.expect(pendingPill?.isPendingNew == true, "临时药丸 isPendingNew 必须为 true")
+        TestAssertions.expect(pendingPill?.isEditing == true, "临时药丸必须处于编辑态")
+        TestAssertions.expect(pendingPill?.inlineTextField.placeholderAttributedString == nil, "临时药丸不得包含占位提示词以防遮挡居中光标")
+        TestAssertions.expect(pendingPill?.inlineTextField.placeholderString == nil, "临时药丸 placeholderString 必须为 nil")
+
+        // 验证 hitTest 穿透全胶囊
+        if let p = pendingPill {
+            let hit = p.hitTest(NSPoint(x: p.bounds.midX, y: 2))
+            TestAssertions.expect(hit === p.inlineTextField, "编辑态下点击胶囊边缘必须穿透聚焦 inlineTextField")
+        }
+
+        // 取消临时胶囊
+        bar.cancelActiveEditing()
+        TestAssertions.expect(bar.allPills.count == 1, "取消新建后应清除临时胶囊，恢复为 1 个药丸")
+
+        print("      ✓ CategorySanitizer & In-Place Inline Editing verified successfully.")
+    }
 
     // Verify category pills under liquidDark theme have consistent white text
     let originalTheme = ConfigManager.shared.config.theme

@@ -47,14 +47,18 @@ public final class MetadataFileSearchBackend: NSObject {
     /// `kMDItemFSName == '*<text>*'cd`（c=忽略大小写 d=忽略变音符）。
     /// 查询串中的 `\ ' * ?` 是元字符/转义符，必须按字面量转义。
     static func predicateText(matching text: String, filter: SearchTypeFilter = .all) -> String {
+        let clean = SearchInputSanitizer.sanitize(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return "" }
+
         var escaped = ""
-        escaped.reserveCapacity(text.count + 4)
-        for ch in text {
+        escaped.reserveCapacity(clean.count * 2)
+        for ch in clean {
             switch ch {
             case "\\": escaped += "\\\\"   // 反斜杠先转
             case "'":  escaped += "\\'"
             case "*":  escaped += "\\*"    // 防止用户输入变成通配符（如 a*b 扫全盘）
             case "?":  escaped += "\\?"
+            case "\"": escaped += "\\\""
             default:   escaped.append(ch)
             }
         }
@@ -101,6 +105,7 @@ public final class MetadataFileSearchBackend: NSObject {
 
     private func execute(predicateText text: String, limit: Int, scope: ScopeTarget, filter: SearchTypeFilter = .all) -> [SearchResult] {
         let predicate = Self.predicateText(matching: text, filter: filter)
+        guard !predicate.isEmpty else { return [] }
 
         guard let query = MDQueryCreate(kCFAllocatorDefault, predicate as CFString,
                                         Self.prefetchAttributes as CFArray, [] as CFArray) else {

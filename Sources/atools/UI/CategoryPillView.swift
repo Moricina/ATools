@@ -8,6 +8,36 @@ public protocol CategoryPillDelegate: AnyObject {
     func categoryPillDidRequestAdd()
     func categoryPill(_ pill: CategoryPillView, didMoveLauncherItemID id: UUID)
     func categoryPill(_ pill: CategoryPillView, didAddPaths paths: [String])
+    func categoryPillDidCommitEditing(_ pill: CategoryPillView, name: String?)
+    func categoryPillDidCancelEditing(_ pill: CategoryPillView)
+}
+
+public extension CategoryPillDelegate {
+    func categoryPillDidCommitEditing(_ pill: CategoryPillView, name: String?) {}
+    func categoryPillDidCancelEditing(_ pill: CategoryPillView) {}
+}
+
+/// 🌟 原生分类胶囊就地内联单行编辑框
+internal final class InlineCategoryTextField: NSTextField {
+    override func selectText(_ sender: Any?) {
+        super.selectText(sender)
+        // 关键防护：重写默认全选，将光标定位至末尾（基于 UTF-16 NSString.length 防 Emoji 截断与崩溃）
+        let utf16Len = (stringValue as NSString).length
+        currentEditor()?.selectedRange = NSRange(location: utf16Len, length: 0)
+    }
+
+    @objc func paste(_ sender: Any?) {
+        if let raw = NSPasteboard.general.string(forType: .string) {
+            let sanitized = CategorySanitizer.sanitize(raw) ?? ""
+            let remaining = max(0, CategorySanitizer.maxNameLength - stringValue.count)
+            let toInsert = String(sanitized.prefix(remaining))
+            if let editor = currentEditor() as? NSTextView {
+                editor.insertText(toInsert, replacementRange: editor.selectedRange())
+            } else {
+                stringValue = toInsert
+            }
+        }
+    }
 }
 
 public final class CategoryPillView: NSView {
@@ -20,6 +50,11 @@ public final class CategoryPillView: NSView {
             }
         }
     }
+
+    public private(set) var isEditing: Bool = false
+    public var isPendingNew: Bool = false
+    private var originalNameBeforeEditing: String = ""
+    private var minWidthConstraint: NSLayoutConstraint?
 
     private var isHovered: Bool = false {
         didSet {
@@ -57,6 +92,7 @@ public final class CategoryPillView: NSView {
 
     public let isVertical: Bool
     internal let titleLabel = NSTextField(labelWithString: "")
+    internal let inlineTextField = InlineCategoryTextField()
     private var trackingArea: NSTrackingArea?
 
     public init(category: Category, isSelected: Bool, isVertical: Bool = false) {
@@ -83,6 +119,23 @@ public final class CategoryPillView: NSView {
         titleLabel.alignment = .center
         addSubview(titleLabel)
 
+        // 🌟 原位就地编辑输入框 (Inline Text Field)
+        inlineTextField.translatesAutoresizingMaskIntoConstraints = false
+        inlineTextField.isBordered = false
+        inlineTextField.drawsBackground = false
+        if let cell = inlineTextField.cell as? NSTextFieldCell {
+            cell.drawsBackground = false
+            cell.backgroundColor = .clear
+        }
+        inlineTextField.focusRingType = .none
+        inlineTextField.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        inlineTextField.alignment = .center
+        inlineTextField.maximumNumberOfLines = 1
+        inlineTextField.lineBreakMode = .byClipping
+        inlineTextField.delegate = self
+        inlineTextField.isHidden = true
+        addSubview(inlineTextField)
+
         let heightConstant: CGFloat = isVertical ? 29 : 26
         let hPadding: CGFloat = isVertical ? 3 : 14
 
@@ -90,7 +143,11 @@ public final class CategoryPillView: NSView {
             heightAnchor.constraint(equalToConstant: heightConstant),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hPadding),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -hPadding),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor)
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            inlineTextField.leadingAnchor.constraint(equalTo: leadingAnchor, constant: hPadding),
+            inlineTextField.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -hPadding),
+            inlineTextField.centerYAnchor.constraint(equalTo: centerYAnchor)
         ])
 
         setAccessibilityRole(.button)
@@ -245,12 +302,97 @@ public final class CategoryPillView: NSView {
         trackingArea = area
     }
 
+    // MARK: - In-Place Inline Editing
+    public func beginEditing(cursorAtEnd: Bool) {
+        guard !isEditing else { return }
+        isEditing = true
+        originalNameBeforeEditing = titleLabel.stringValue.isEmpty ? category.name : titleLabel.stringValue
+
+        let isDark = pillIsDark
+        inlineTextField.textColor = isDark ? .white : GlassPalette.textPrimary(isDark: false)
+        inlineTextField.stringValue = isPendingNew ? "" : originalNameBeforeEditing
+
+        inlineTextField.placeholderAttributedString = nil
+        inlineTextField.placeholderString = nil
+
+        titleLabel.isHidden = true
+        inlineTextField.isHidden = false
+
+        if !isVertical {
+            minWidthConstraint = widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
+            minWidthConstraint?.isActive = true
+        }
+
+        window?.makeFirstResponder(inlineTextField)
+
+        // 基于 UTF-16 NSString.length 精确设置光标位置，杜绝 Emoji 截断与底层异常
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.isEditing else { return }
+            let utf16Len = cursorAtEnd ? (self.inlineTextField.stringValue as NSString).length : 0
+            if let textView = self.inlineTextField.currentEditor() as? NSTextView {
+                textView.alignment = .center
+                textView.selectedRange = NSRange(location: utf16Len, length: 0)
+            } else {
+                self.inlineTextField.currentEditor()?.selectedRange = NSRange(location: utf16Len, length: 0)
+            }
+        }
+    }
+
+    @discardableResult
+    public func commitEditing() -> String? {
+        guard isEditing else { return nil }
+        isEditing = false
+        minWidthConstraint?.isActive = false
+        inlineTextField.isHidden = true
+        titleLabel.isHidden = false
+
+        if window?.firstResponder == inlineTextField || window?.firstResponder == inlineTextField.currentEditor() {
+            window?.makeFirstResponder(self)
+        }
+
+        let raw = inlineTextField.stringValue
+        let safeName = CategorySanitizer.sanitize(raw)
+        if let safe = safeName, !safe.isEmpty {
+            titleLabel.stringValue = safe
+            return safe
+        } else {
+            titleLabel.stringValue = originalNameBeforeEditing
+            return nil
+        }
+    }
+
+    public func cancelEditing() {
+        guard isEditing else { return }
+        isEditing = false
+        minWidthConstraint?.isActive = false
+        inlineTextField.isHidden = true
+        titleLabel.stringValue = originalNameBeforeEditing
+        titleLabel.isHidden = false
+
+        if window?.firstResponder == inlineTextField || window?.firstResponder == inlineTextField.currentEditor() {
+            window?.makeFirstResponder(self)
+        }
+    }
+
+    override public func hitTest(_ point: NSPoint) -> NSView? {
+        if isEditing {
+            let p = superview != nil ? convert(point, from: superview) : point
+            if bounds.contains(p) || bounds.contains(point) {
+                return inlineTextField
+            }
+        }
+        return super.hitTest(point)
+    }
+
     override public func resetCursorRects() {
         super.resetCursorRects()
-        addCursorRect(bounds, cursor: .pointingHand)
+        if !isEditing {
+            addCursorRect(bounds, cursor: .pointingHand)
+        }
     }
 
     override public func mouseEntered(with event: NSEvent) {
+        if isEditing { return }
         isHovered = true
     }
 
@@ -259,14 +401,18 @@ public final class CategoryPillView: NSView {
     }
 
     override public func cursorUpdate(with event: NSEvent) {
-        NSCursor.pointingHand.set()
+        if !isEditing {
+            NSCursor.pointingHand.set()
+        }
     }
 
     override public func mouseDown(with event: NSEvent) {
+        if isEditing { return }
         mouseDownLocation = event.locationInWindow
     }
 
     override public func mouseDragged(with event: NSEvent) {
+        if isEditing { return }
         guard let startPoint = mouseDownLocation else { return }
         let currentPoint = event.locationInWindow
         let dist = hypot(currentPoint.x - startPoint.x, currentPoint.y - startPoint.y)
@@ -277,9 +423,15 @@ public final class CategoryPillView: NSView {
     }
 
     override public func mouseUp(with event: NSEvent) {
+        if isEditing { return }
         if mouseDownLocation != nil {
             mouseDownLocation = nil
-            delegate?.categoryPillDidClick(self)
+            if event.clickCount == 2 {
+                // 双击分类胶囊直接进入重命名
+                delegate?.categoryPillDidRequestRename(self)
+            } else {
+                delegate?.categoryPillDidClick(self)
+            }
         }
     }
 
@@ -369,3 +521,38 @@ extension CategoryPillView: NSDraggingSource {
         PanelCoordinator.shared.isDraggingActive = false
     }
 }
+
+extension CategoryPillView: NSTextFieldDelegate {
+    public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if textView.hasMarkedText() {
+            return false
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            let result = commitEditing()
+            delegate?.categoryPillDidCommitEditing(self, name: result)
+            return true
+        } else if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelEditing()
+            delegate?.categoryPillDidCancelEditing(self)
+            return true
+        }
+        return false
+    }
+
+    public func controlTextDidChange(_ obj: Notification) {
+        let text = inlineTextField.stringValue
+        if text.count > CategorySanitizer.maxNameLength {
+            NSSound.beep()
+            let trimmed = String(text.prefix(CategorySanitizer.maxNameLength))
+            inlineTextField.stringValue = trimmed
+        }
+    }
+
+    public func controlTextDidEndEditing(_ obj: Notification) {
+        if isEditing {
+            let result = commitEditing()
+            delegate?.categoryPillDidCommitEditing(self, name: result)
+        }
+    }
+}
+

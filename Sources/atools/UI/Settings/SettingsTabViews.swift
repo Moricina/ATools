@@ -153,7 +153,7 @@ public final class GeneralTabView: NSView {
         restoreButtonsStack.alignment = .centerY
 
         rollbackSnapshotBtn = SettingsPillButton(title: "回滚快照", target: self, action: #selector(rollbackSnapshotClicked))
-        let importBtn = SettingsPillButton(title: "导入恢复...", style: .primary, target: self, action: #selector(importBackupClicked))
+        let importBtn = SettingsPillButton(title: "导入恢复...", target: self, action: #selector(importBackupClicked))
         restoreButtonsStack.addArrangedSubview(rollbackSnapshotBtn)
         restoreButtonsStack.addArrangedSubview(importBtn)
 
@@ -2659,7 +2659,7 @@ public final class PerformanceTabView: NSView {
 // MARK: - 7. About Tab View
 public final class AboutTabView: NSView {
     private let statusLabel = NSTextField(labelWithString: "点击右侧按钮连接 GitHub 检查最新发布版本")
-    private let actionButton = SettingsPillButton(title: "", style: .primary)
+    private let actionButton = SettingsPillButton(title: "")
     private let progressIndicator = NSProgressIndicator()
     private let releaseNotesBox = NSView()
     private let releaseNotesText = NSTextView()

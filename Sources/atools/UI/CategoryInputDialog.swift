@@ -1,9 +1,11 @@
 import Foundation
 import AppKit
 
-public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
+public final class CategoryInputDialog: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
     private let titleLabel = NSTextField(labelWithString: "")
     private let promptLabel = NSTextField(labelWithString: "")
+    private let inputContainer = LiquidInputContainerView()
+    private let inputBackdrop = NativeLiquidSelectionBackdrop(cornerRadius: 17)
     private let textField = NSTextField()
     private let cancelButton = NSButton()
     private let confirmButton = NSButton()
@@ -48,14 +50,14 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
         dialog.finish(with: nil)
     }
 
-    private init(
+    public init(
         titleText: String,
         promptText: String,
         placeholder: String,
         initialValue: String,
         confirmTitle: String
     ) {
-        let contentRect = NSRect(x: 0, y: 0, width: 340, height: 160)
+        let contentRect = NSRect(x: 0, y: 0, width: 340, height: 172)
         let win = NSWindow(
             contentRect: contentRect,
             styleMask: [.titled, .fullSizeContentView],
@@ -111,15 +113,40 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
         promptLabel.textColor = .secondaryLabelColor
         container.addSubview(promptLabel)
 
-        // Text field
+        // 🌟 原生液态水滴输入框容器 (Native Liquid Capsule Container)
+        inputContainer.translatesAutoresizingMaskIntoConstraints = false
+        inputContainer.wantsLayer = true
+        inputContainer.layer?.masksToBounds = false
+        inputContainer.onMouseDown = { [weak self] in
+            guard let self = self, let win = self.window else { return }
+            win.makeFirstResponder(self.textField)
+        }
+        container.addSubview(inputContainer)
+
+        // 🌟 原生液态玻璃底层水滴透镜 (Apple .glassEffect + 顶部天光 + 360°发丝高光切边)
+        inputBackdrop.translatesAutoresizingMaskIntoConstraints = false
+        inputBackdrop.cornerRadius = 17
+        inputBackdrop.isSelected = true // 保持微晶莹通透水滴表面张力
+        inputContainer.addSubview(inputBackdrop)
+
+        // Text field (居中、无系统方框、无刺眼外框)
         textField.translatesAutoresizingMaskIntoConstraints = false
-        textField.placeholderString = placeholder
+        textField.isBordered = false
+        textField.drawsBackground = false
+        if let cell = textField.cell as? NSTextFieldCell {
+            cell.drawsBackground = false
+            cell.backgroundColor = .clear
+        }
+        textField.focusRingType = .none
+        textField.font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        textField.alignment = .center // 🌟 水平正中间对齐
         textField.stringValue = initialValue
-        textField.font = NSFont.systemFont(ofSize: 13)
-        textField.focusRingType = .exterior
         textField.target = self
         textField.action = #selector(confirmClicked)
-        container.addSubview(textField)
+        textField.delegate = self
+        inputContainer.addSubview(textField)
+
+        updateColors(placeholder: placeholder)
 
         // Cancel button
         cancelButton.translatesAutoresizingMaskIntoConstraints = false
@@ -154,10 +181,22 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
             promptLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             promptLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
-            textField.topAnchor.constraint(equalTo: promptLabel.bottomAnchor, constant: 12),
-            textField.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            textField.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            textField.heightAnchor.constraint(equalToConstant: 26),
+            // 液态胶囊输入框外框
+            inputContainer.topAnchor.constraint(equalTo: promptLabel.bottomAnchor, constant: 12),
+            inputContainer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            inputContainer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            inputContainer.heightAnchor.constraint(equalToConstant: 34),
+
+            // 液态底衬填满胶囊
+            inputBackdrop.leadingAnchor.constraint(equalTo: inputContainer.leadingAnchor),
+            inputBackdrop.trailingAnchor.constraint(equalTo: inputContainer.trailingAnchor),
+            inputBackdrop.topAnchor.constraint(equalTo: inputContainer.topAnchor),
+            inputBackdrop.bottomAnchor.constraint(equalTo: inputContainer.bottomAnchor),
+
+            // 输入框居中排列，留足左右 14pt 呼吸间距
+            textField.leadingAnchor.constraint(equalTo: inputContainer.leadingAnchor, constant: 14),
+            textField.trailingAnchor.constraint(equalTo: inputContainer.trailingAnchor, constant: -14),
+            textField.centerYAnchor.constraint(equalTo: inputContainer.centerYAnchor),
 
             confirmButton.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             confirmButton.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -169,6 +208,28 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
         ])
 
         window?.initialFirstResponder = textField
+    }
+
+    private func updateColors(placeholder: String) {
+        guard let win = window else { return }
+        let isDark = win.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        inputBackdrop.isDark = isDark
+        textField.textColor = GlassPalette.textPrimary(isDark: isDark)
+
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let attrs: [NSAttributedString.Key: Any] = [
+            .foregroundColor: GlassPalette.textTertiary(isDark: isDark),
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+            .paragraphStyle: paragraph
+        ]
+        textField.placeholderAttributedString = NSAttributedString(string: placeholder, attributes: attrs)
+    }
+
+    public func windowDidBecomeKey(_ notification: Notification) {
+        if let ph = textField.placeholderAttributedString?.string {
+            updateColors(placeholder: ph)
+        }
     }
 
     @objc private func cancelClicked() {
@@ -200,5 +261,20 @@ public final class CategoryInputDialog: NSWindowController, NSWindowDelegate {
 
         Self.activeDialogs.removeAll { $0 === self }
         completion(value)
+    }
+}
+
+/// 🌟 原生液态输入框点击穿透与自动对焦交互容器
+private final class LiquidInputContainerView: NSView {
+    var onMouseDown: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?()
+        super.mouseDown(with: event)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .iBeam)
     }
 }

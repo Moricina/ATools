@@ -875,8 +875,9 @@ public final class ConfigManager {
 
     @discardableResult
     public func addCategory(name: String, iconSymbol: String = "folder.fill") -> Category {
+        let safeName = CategorySanitizer.sanitize(name) ?? "新分类"
         let newCat = Category(
-            name: name,
+            name: safeName,
             iconSymbol: iconSymbol,
             sortWeight: self.config.categories.count,
             items: []
@@ -887,8 +888,9 @@ public final class ConfigManager {
     }
 
     public func renameCategory(id: UUID, newName: String, newIcon: String? = nil) {
+        guard let safeName = CategorySanitizer.sanitize(newName), !safeName.isEmpty else { return }
         if let idx = self.config.categories.firstIndex(where: { $0.id == id }) {
-            self.config.categories[idx].name = newName
+            self.config.categories[idx].name = safeName
             if let icon = newIcon {
                 self.config.categories[idx].iconSymbol = icon
             }

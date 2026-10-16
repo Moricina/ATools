@@ -506,6 +506,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func stopMouseExitMonitoring() {
+        categoryBar.commitActiveEditing()
         mouseExitPollTimer?.invalidate()
         mouseExitPollTimer = nil
         removeMouseMoveMonitors()
@@ -926,33 +927,22 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func categoryBarDidRequestAddCategory(_ bar: CategoryBarView) {
-        CategoryInputDialog.prompt(
-            title: "新建分类",
-            prompt: "请输入新分类的名称：",
-            placeholder: "例如：设计、多媒体、常用工具",
-            confirmTitle: "创建",
-            in: self.view.window
-        ) { [weak self] name in
-            guard let self = self, let name = name, !name.isEmpty else { return }
-            let newCat = ConfigManager.shared.addCategory(name: name)
-            self.selectedCategory = newCat
-            self.loadData()
-        }
+        bar.beginAddCategoryInline()
     }
 
     public func categoryBar(_ bar: CategoryBarView, didRequestRenameCategory category: Category) {
-        CategoryInputDialog.prompt(
-            title: "重命名分类",
-            prompt: "请输入「\(category.name)」的新名称：",
-            placeholder: "",
-            initialValue: category.name,
-            confirmTitle: "保存",
-            in: self.view.window
-        ) { [weak self] newName in
-            guard let self = self, let newName = newName, !newName.isEmpty else { return }
-            ConfigManager.shared.renameCategory(id: category.id, newName: newName)
-            self.loadData()
-        }
+        bar.beginRenameCategoryInline(for: category)
+    }
+
+    public func categoryBar(_ bar: CategoryBarView, didCreateCategoryWithName name: String) {
+        let newCat = ConfigManager.shared.addCategory(name: name)
+        self.selectedCategory = newCat
+        self.loadData()
+    }
+
+    public func categoryBar(_ bar: CategoryBarView, didRenameCategory category: Category, to newName: String) {
+        ConfigManager.shared.renameCategory(id: category.id, newName: newName)
+        self.loadData()
     }
 
     public func categoryBar(_ bar: CategoryBarView, didRequestDeleteCategory category: Category) {
