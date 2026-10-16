@@ -2878,3 +2878,45 @@
   - 执行 `./Scripts/package_app.sh` 编译 Release、代码签名与 DMG/ZIP 打包成功；
   - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启应用（PID: `88024`）运行稳定。
 
+---
+
+### 89. 彻底修复应用抽屉图标选中态/Hover乱飘与幽灵高亮缺陷 (2026-10-16, v1.3.23 build 48)
+
+- **背景与痛点**：
+  - 用户反馈在应用抽屉中，图标选中位置存在严重“乱飘”问题：光标在左侧第 1~2 列图标（如 `BaiduNetdisk` 与 `APaste`）之间的间隙移动时，第 5 列远处毫不相关的 `AuraPane` 却异常闪现或持续亮起深色高饱和度的 `isSelected` 选中高亮。
+  - 用户在滑动指针时，高亮框在当前光标与远处的历史图标之间来回穿梭、乱窜，造成严重视觉干扰与操作困惑。
+
+- **根因分析（子代理复核通过）**：
+  1. **`pinnedSelectionID` 的“借尸还魂”回退死穴**：
+     - 原 `ShelfGridView.swift` 在 `onHoverChanged` 中存在逻辑：当鼠标移开当前按钮进入间隙时，判定 `if self.keyboardSelectedID == btn.item.id`，竟然无条件回退为 `self.keyboardSelectedID = self.pinnedSelectionID`，并强行调用 `updateKeyboardSelectionVisual()`；
+     - 而用户只要在抽屉中点击启动过某个 App（如 `AuraPane`），`pinnedSelectionID` 就被永久固定为该 App 的 UUID；
+     - 导致只要鼠标在网格的任何空白间隙处划过，都会触发 `mouseExited` 并立即将远处的 `AuraPane` 再次重新涂上 `isSelected` 高亮，形成幽灵跳动。
+  2. **指针瞬态（Hover）与键盘导航（Focus）概念混淆**：
+     - 企图使用一套 `keyboardSelectedID` 变量混合管理鼠标悬停与键盘焦点，缺乏单向状态流。
+  3. **视图复用与切分类动画的状态污染**：
+     - `ShelfItemButton.resetInteractionState()` 遗漏了 `isSelected = false`；
+     - `reloadData` 在复用已有按钮池时未显式调用 `resetInteractionState()`；
+     - 切分类过渡动画前未清空交互焦点，导致 `NSTrackingArea` 在位移动画期间误触发。
+
+- **涉及文件列表及修改逻辑**：
+  1. [`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - **补齐交互重置**：在 `ShelfItemButton.resetInteractionState()` 中补齐 `isSelected = false`，杜绝孤岛选中态；
+     - **彻底拔除 `pinnedSelectionID` 幽灵机制**：全面移除 `pinnedSelectionID` 成员声明及其在 `clearKeyboardSelection`、`moveKeyboardSelection`、`selectFirstVisibleItem`、`itemClicked` 中的引用与赋值；
+     - **解耦 Hover 与 Keyboard Focus**：
+       * 重构 `makeButton` 的 `onHoverChanged`：当鼠标进入图标时，优雅调用 `clearKeyboardSelection()` 消隐旧键盘焦点环，切换至纯鼠标指针模态；
+       * 当鼠标移出图标进入间隙或空白处时，各按钮自然复位自身 `isHovered`，绝对不回滚任何历史选中态；
+     - **强化复用池清洗**：在 `reloadData` 复用已有按钮 `reusable[item.id]` 时，显式调用 `existing.resetInteractionState()`；
+     - **切分类动画防护**：在 `playCategoryPageTransition` 入口处主动执行 `resetInteractionStates()` 与 `clearKeyboardSelection()`，杜绝横向位移动画期间的 TrackingArea 误报；
+     - **简化点击事件**：在 `itemClicked` 中直接执行 `clearKeyboardSelection()` 并分发 `didLaunchItem`，不再将鼠标点击当成键盘选中锚点。
+
+- **兼容性与边界防护策略**：
+  - 鼠标点击启动：走标准 `sendAction`，移除了内部的 `pinnedSelectionID` 赋值，启动 100% 顺畅；
+  - 键盘方向键导航 + 回车启动：依然由 `moveKeyboardSelection` 自治维护 `keyboardSelectedID`，无鼠标干扰时体验更精准；
+  - 拖拽排序与实时让位、Alt 快速交换、右键菜单、触控板翻页：全部拥有独立状态机，零干扰。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译 Release、代码签名与 DMG/ZIP 打包成功；
+  - 成功同步部署并安装覆盖至 `/Applications/ATools.app`，重启应用（PID: `3932`）运行稳定，彻底解决抽屉图标乱飘与幽灵高亮问题。
+
+

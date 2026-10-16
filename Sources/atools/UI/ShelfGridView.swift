@@ -487,6 +487,7 @@ public final class ShelfItemButton: NSControl {
         isSwapTarget = false
         isPressed = false
         isHovered = false
+        isSelected = false
         mouseDownLocation = nil
     }
 
@@ -621,10 +622,6 @@ public final class ShelfGridView: NSView {
     internal var items: [LauncherItem] = []
     internal var itemButtons: [ShelfItemButton] = []
     private var keyboardSelectedID: UUID?
-    /// Selection pinned by explicit input (keyboard arrows / click / type-ahead).
-    /// A hover-derived highlight is temporary: it falls back to this when the
-    /// mouse leaves the icon, so no shadow lingers after the cursor moves away.
-    private var pinnedSelectionID: UUID?
     private var activeFilter = ""
     private var targetValidationGeneration: UInt64 = 0
 
@@ -758,8 +755,7 @@ public final class ShelfGridView: NSView {
                 if existing.superview !== contentView {
                     contentView.addSubview(existing)
                 }
-                existing.isDraggingSource = false
-                existing.isSwapTarget = false
+                existing.resetInteractionState()
                 existing.alphaValue = 1.0
                 if existing.scale != scale {
                     existing.scale = scale
@@ -789,9 +785,6 @@ public final class ShelfGridView: NSView {
         itemButtons = newButtons
         if let selectedID = keyboardSelectedID, !items.contains(where: { $0.id == selectedID }) {
             keyboardSelectedID = nil
-        }
-        if let pinnedID = pinnedSelectionID, !items.contains(where: { $0.id == pinnedID }) {
-            pinnedSelectionID = nil
         }
         applyFilter(activeFilter)
 
@@ -868,7 +861,6 @@ public final class ShelfGridView: NSView {
         }
         guard nextIndex != currentIndex else { return false }
         keyboardSelectedID = buttons[nextIndex].item.id
-        pinnedSelectionID = keyboardSelectedID
         updateKeyboardSelectionVisual()
         scrollToKeyboardSelection()
         return true
@@ -876,7 +868,6 @@ public final class ShelfGridView: NSView {
 
     public func selectFirstVisibleItem() {
         keyboardSelectedID = visibleButtons.first?.item.id
-        pinnedSelectionID = keyboardSelectedID
         updateKeyboardSelectionVisual()
         scrollToKeyboardSelection()
     }
@@ -898,7 +889,6 @@ public final class ShelfGridView: NSView {
     /// Drop any selection so the panel re-opens with no default highlight.
     public func clearKeyboardSelection() {
         keyboardSelectedID = nil
-        pinnedSelectionID = nil
         updateKeyboardSelectionVisual()
     }
 
@@ -926,19 +916,14 @@ public final class ShelfGridView: NSView {
         btn.target = self
         btn.action = #selector(itemClicked(_:))
         btn.onHoverChanged = { [weak self, weak btn] isHovered in
-            guard let self = self, let btn = btn else { return }
-            // Move keyboard selection to the hovered item so the highlight follows the mouse.
+            guard let self = self, let _ = btn else { return }
             if isHovered {
-                if self.keyboardSelectedID != btn.item.id {
-                    self.keyboardSelectedID = btn.item.id
-                    self.updateKeyboardSelectionVisual()
+                // 鼠标介入：消隐可能存在的旧键盘焦点环，切换为纯鼠标悬停模态
+                if self.keyboardSelectedID != nil {
+                    self.clearKeyboardSelection()
                 }
-            } else if self.keyboardSelectedID == btn.item.id {
-                // Mouse left the icon (or the panel): restore the pinned selection
-                // — nil for hover-only sessions, so the shadow disappears.
-                self.keyboardSelectedID = self.pinnedSelectionID
-                self.updateKeyboardSelectionVisual()
             }
+            // 鼠标移出按钮进入间隙或空白处时，绝不回退至旧焦点，空白处保持干净清爽
         }
         btn.onDragSessionWillBegin = { [weak self, weak btn] in
             guard let self = self, let btn = btn else { return }
@@ -1046,6 +1031,8 @@ public final class ShelfGridView: NSView {
     /// 分类切换时的柔和过渡微动画（自适应水平/垂直排版）
     public func playCategoryPageTransition(direction: Int, isVertical: Bool = false) {
         guard direction != 0, window?.isVisible == true else { return }
+        resetInteractionStates()
+        clearKeyboardSelection()
         let offset: CGFloat = direction > 0 ? 18.0 : -18.0
         let visibleRect = scrollView.documentVisibleRect
         let animatingButtons = itemButtons.filter { btn in
@@ -1181,9 +1168,7 @@ public final class ShelfGridView: NSView {
     }
 
     @objc private func itemClicked(_ sender: ShelfItemButton) {
-        keyboardSelectedID = sender.item.id
-        pinnedSelectionID = sender.item.id
-        updateKeyboardSelectionVisual()
+        clearKeyboardSelection()
         delegate?.shelfGrid(self, didLaunchItem: sender.item)
     }
 
