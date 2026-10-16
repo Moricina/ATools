@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.19}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-44}"
+VERSION="${ATOOLS_VERSION:-1.3.20}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-45}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -108,17 +108,27 @@ fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 
-### 🛠️ 核心修复与体验优化
-1. **严格保障「固定在桌面」最高优先级保护**：
-   - 当勾选「抽屉面板固定在桌面」时，应用抽屉完全不受「鼠标移出面板后自动关闭」、「点击启动应用后自动关闭」及外部失焦关闭的影响；
-   - 勾选固定瞬间立即取消排队中的自动关闭计时器，取消固定时若抽屉可见则热恢复移出检测。
-2. **彻底修复未固定时「鼠标移出面板后自动关闭」失效问题**：
-   - 将 \`NSTrackingArea\` 下沉至 \`ShelfRootView.updateTrackingAreas()\` 生命周期内，并在抽屉唤出到鼠标正下方时动态注入 \`.assumeInside\` 与 \`acceptsMouseMovedEvents = true\`；
-   - 新增全局/本地 \`NSEvent\` 鼠标事件监听与 \`0.10s\` \`.common\` 模式轮询双保险，彻底解决鼠标划过滚动视图与图标按钮子视图时漏发 \`mouseExited\` 的问题；
-   - 引入自愈式菜单状态锁 \`isEffectiveMenuOpen\`，防止状态栏或右键菜单触发模态弹窗后遗漏 \`NSMenu.didEndTrackingNotification\` 导致自动关闭被阻塞。
-3. **跨分类拖拽与右键菜单状态同步**：
-   - 修复跨分类拖拽图标经悬停切到其他分类后又拖回源分类胶囊松手时的分类状态同步；
-   - 在抽屉右键菜单切换「固定在桌面」时实时同步刷新偏好设置窗口开关状态。"
+### 🎨 界面与交互重构（滑动条与分类栏）
+1. **抽屉滑动条现代化液态胶囊交互**：
+   - 彻底剔除系统原生旧式白色槽体、轨道背景与边缘描边（消灭“外面一圈”）；
+   - 锁定 Overlay 悬浮样式，防止外接鼠标或系统设置强行退化至旧版 legacy 槽体模式；
+   - 自定义精致超薄圆角胶囊滑块（Knob），主题自适应半透明色，支持鼠标悬停（Hover）与拖拽（Dragging）微交互平滑提亮；
+   - 封装防挤压智能容器 \`ModernScrollView\`，强制保持 \`contentView.frame = bounds\`，永不因滚动条扣减视口尺寸，彻底消灭挤压留白。
+2. **分类栏防遮挡与零阻挡感**：
+   - 几何物理层隔离：药丸安全区间严格位于 \`y ∈ [2, 28]\`，横向滚动条位于 \`y ∈ [31, 36]\`，留有 3pt 物理安全净空，彻底解决文字遮挡与点击拦截；
+   - 空间严格守恒：水平 \`categoryBar\` 微调至 36pt，下方间距微调至 8pt，总顶部空间恒等 58pt，对下方应用网格布局 0 扰动。
+
+### 🚀 新增功能与体验增强
+3. **一键隐藏/显示桌面图标**：
+   - 应用抽屉右键菜单新增「隐藏桌面图标 / 显示桌面图标」快捷入口（基于 \`DesktopIconManager\`），随时还原干净桌面。
+4. **管理弹窗层级优化**：
+   - 将分类重命名/删除/添加面板及应用编辑面板设置为浮于抽屉面板之上，避免被主抽屉遮挡。
+
+### 🛡️ 稳定性与自动化自愈加固
+5. **休眠/唤醒触控设备竞态防崩**：
+   - 修复系统睡眠/唤醒时底座触控芯片电源断电重连竞态导致的崩溃，加入 \`willSleepNotification\` 安全停机与唤醒防抖。
+6. **关窗自动退出兜底自愈**：
+   - 解决系统沙盒应用（如「预览」Preview.app）在启动初期 PID 为 -1 导致的挂载失败问题，引入内核级 \`libproc\` 极速反查与全量自愈扫描。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
