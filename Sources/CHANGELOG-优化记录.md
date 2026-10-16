@@ -2742,3 +2742,16 @@
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
   - 物理内存占用稳定在 148.42 MB。
+
+### 84. 正式发布 v1.3.21 (Build 46) 客户端版本 (2026-10-16)
+
+- **发布背景与目标用户推送**：
+  - 将近期全盘搜索失焦自动收起修复、滑动条现代化液态胶囊交互重构、分类栏防遮挡、桌面图标一键隐藏、睡眠唤醒触控防崩及系统沙盒应用关窗自动退出自愈等全部核心成果正式编译归拢，推送发布至公网用户端；
+- **涉及配置及脚本**：
+  - [`package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)、[`release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：版本号升至 `1.3.21` (Build `46`)；
+  - [`BackupService.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/BackupService.swift)：备份元数据与清单默认版本号同步更新至 `1.3.21`；
+  - [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)：更新版本徽标与发布指引；
+  - [`UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift)：已上线用户端可通过在线检查更新直接一键获取该版本。
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断套件：**13 大项自动化测试 100% 全部 PASSED 通过**；
+  - 生产包经 Developer ID / "ATools Sign" 严格签名与 Ed25519 散列验签通过。
