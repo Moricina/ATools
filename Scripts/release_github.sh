@@ -128,7 +128,9 @@ NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 5. **休眠/唤醒触控设备竞态防崩**：
    - 修复系统睡眠/唤醒时底座触控芯片电源断电重连竞态导致的崩溃，加入 \`willSleepNotification\` 安全停机与唤醒防抖。
 6. **关窗自动退出兜底自愈**：
-   - 解决系统沙盒应用（如「预览」Preview.app）在启动初期 PID 为 -1 导致的挂载失败问题，引入内核级 \`libproc\` 极速反查与全量自愈扫描。"
+   - 解决系统沙盒应用（如「预览」Preview.app）在启动初期 PID 为 -1 导致的挂载失败问题，引入内核级 \`libproc\` 极速反查与全量自愈扫描。
+7. **全盘搜索失焦时自动关闭修复**：
+   - 彻底修复全盘搜索面板在点击屏幕外部空白处、桌面、其他应用窗口或切应用时未能自动关闭的问题；修正辅助工具判定算法，杜绝后台存活进程导致误判。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
