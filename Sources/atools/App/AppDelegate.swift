@@ -279,7 +279,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private static func traceRawEvent(_ event: NSEvent, source: String) {
         guard runtimeLogEnabled else { return }
         let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        let chars = event.characters ?? ""
+        let chars = (event.type == .keyDown || event.type == .keyUp) ? (event.characters ?? "") : ""
         runtimeLog("[RawKey] \(source) \(event.type.rawValue) code=\(event.keyCode) chars=\(chars.debugDescription) mods=\(mods.rawValue)")
     }
 

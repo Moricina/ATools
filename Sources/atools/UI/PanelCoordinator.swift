@@ -259,6 +259,11 @@ public final class PanelCoordinator {
             }
         }
 
+        // 统一失焦收起契约：当切换应用或应用失焦时，如果开启了失焦关闭，偏好设置亦遵循契约安全收起
+        if (reason == .appSwitched || reason == .appDeactivated) && ConfigManager.shared.config.autoCloseOnDeactivate {
+            SettingsWindowController.shared.closeSettingsWindow()
+        }
+
         // 如果全盘搜索可见：遵循失焦时自动关闭配置策略
         if searchPanelCreated && searchPanel.isVisible {
             let decision = PanelDismissPolicy.shouldDismiss(
@@ -306,6 +311,9 @@ public final class PanelCoordinator {
 
     public func showShelfPanel() {
         guard ConfigManager.shared.config.enableShelfPanel else { return }
+        // 关键防护：双向互斥保障，若偏好设置窗口处于打开态，呼出抽屉时自动收起偏好设置
+        SettingsWindowController.shared.closeSettingsWindow()
+
         panelPresentationGeneration &+= 1
         isRightClickMenuOpen = false
         menuTrackingBeganAt = nil
@@ -355,6 +363,9 @@ public final class PanelCoordinator {
 
     public func showSearchPanel() {
         guard ConfigManager.shared.config.enableSearchPanel else { return }
+        // 关键防护：双向互斥保障，若偏好设置窗口处于打开态，呼出搜索时自动收起偏好设置
+        SettingsWindowController.shared.closeSettingsWindow()
+
         panelPresentationGeneration &+= 1
         recordPreviousFrontmostAppIfNeeded()
 

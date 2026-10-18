@@ -196,6 +196,7 @@ public final class HotkeyRecorderControl: NSControl {
         }
         // Restore global hotkeys
         HotkeyManager.shared.resumeHotkeys()
+        HotkeyManager.shared.resetCandidateState()
     }
 
     override public func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -249,7 +250,9 @@ public final class HotkeyRecorderControl: NSControl {
                 )
                 currentBinding = binding
                 stopRecording()
-                onChange?(binding)
+                DispatchQueue.main.async { [weak self] in
+                    self?.onChange?(binding)
+                }
                 return true
             }
             lastActiveModifierMask = currentFlags
@@ -288,7 +291,9 @@ public final class HotkeyRecorderControl: NSControl {
         if (keyCode == 51 || keyCode == 117) && flags.isEmpty {
             currentBinding = nil
             stopRecording()
-            onClear?()
+            DispatchQueue.main.async { [weak self] in
+                self?.onClear?()
+            }
             return true
         }
 
@@ -321,7 +326,9 @@ public final class HotkeyRecorderControl: NSControl {
         let newBinding = HotkeyBinding(keyCode: keyCode, carbonModifiers: carbonMods, displayString: display)
         currentBinding = newBinding
         stopRecording()
-        onChange?(newBinding)
+        DispatchQueue.main.async { [weak self] in
+            self?.onChange?(newBinding)
+        }
         return true
     }
 

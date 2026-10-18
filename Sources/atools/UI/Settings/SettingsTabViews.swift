@@ -905,16 +905,17 @@ public final class ShelfTabView: NSView {
     private func handleShelfRecorded(_ newBinding: HotkeyBinding) {
         let currentSearch = ConfigManager.shared.config.searchHotkey
         if newBinding == currentSearch {
+            shelfRecorder?.currentBinding = ConfigManager.shared.config.shelfHotkey
             NSSound.beep()
             let alert = NSAlert()
             alert.messageText = "快捷键冲突"
             alert.informativeText = "该快捷键已被「全盘搜索中枢」占用。请录入其他组合键，或前往全盘搜索设置调整。"
             alert.runModalAboveFloatingWindows()
-            shelfRecorder?.currentBinding = ConfigManager.shared.config.shelfHotkey
             return
         }
         ConfigManager.shared.updateShelfHotkey(newBinding)
         HotkeyManager.shared.register(id: .shelf, binding: newBinding)
+        shelfRecorder?.currentBinding = newBinding
     }
 
     private func handleShelfCleared() {
@@ -2173,16 +2174,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
     private func handleSearchRecorded(_ newBinding: HotkeyBinding) {
         let currentShelf = ConfigManager.shared.config.shelfHotkey
         if newBinding == currentShelf {
+            searchRecorder?.currentBinding = ConfigManager.shared.config.searchHotkey
             NSSound.beep()
             let alert = NSAlert()
             alert.messageText = "快捷键冲突"
             alert.informativeText = "该快捷键已被「应用分类工作台」占用。请录入其他组合键，或前往应用抽屉设置调整。"
             alert.runModalAboveFloatingWindows()
-            searchRecorder?.currentBinding = ConfigManager.shared.config.searchHotkey
             return
         }
         ConfigManager.shared.updateSearchHotkey(newBinding)
         HotkeyManager.shared.register(id: .search, binding: newBinding)
+        searchRecorder?.currentBinding = newBinding
     }
 
     private func handleSearchCleared() {
@@ -2195,7 +2197,6 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let display = HotkeyDisplayFormatter.displayString(keyCode: 49, carbonModifiers: 256)
         let cmdSpace = HotkeyBinding(keyCode: 49, carbonModifiers: 256, displayString: display, specialTrigger: .none)
         handleSearchRecorded(cmdSpace)
-        searchRecorder?.currentBinding = cmdSpace
     }
 
     @objc private func openKeyboardSettings() {

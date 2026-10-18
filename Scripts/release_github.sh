@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.25}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-50}"
+VERSION="${ATOOLS_VERSION:-1.3.26}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-51}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -108,31 +108,24 @@ fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 
-### 🛡️ 全局搜索与全盘输入全链路安全加固 (Security Hardening)
-1. **全局搜索安全净化与防护引擎 (\`SearchInputSanitizer\`)**：
-   - **前置字形截断 (256 字符上限)**：铁律第一步快速执行截断，物理阻断恶意超长文本（50,000+ 字符）造成的 CPU/内存放大 DoS 与 ReDoS，同时完美覆盖深度本地文件绝对路径（零误伤）；
-   - **ANSI 逃逸码剔除**：彻底清除 \`\u{001B}[...\` 转义序列，防止查看终端日志时触发终端模拟器逃逸注入；
-   - **空字符与控制字符清洗**：剥离 \`\0\`（消除底层 C 字符串截断漏洞）及 C0/C1 控制字符；
-   - **Unicode 伪装与隐形字符过滤**：消除 BiDi 倒排覆写符（\`\u{202E}\` 等）与不可见零宽字符（\`\u{200B}\` 等），执行标准 NFC 规范化；
-   - **Spotlight 谓词与外链安全**：加固 \`MetadataFileSearchBackend\` 谓词转义；外链严格校验 \`https\`、\`http\` 与 \`dict\` 协议白名单。
+### 🛡️ 快捷键冲突模态弹窗与死态僵尸窗口根治
+1. **模态生命周期状态锁与清除僵尸窗口**：
+   - 在 \`NSAlert.runModalAboveFloatingWindows\` 与 \`NSWindow.runModalAboveFloatingWindows\` 中引入原子生命周期状态标志 \`ModalSessionState\`；
+   - 彻底切断模态循环退出时的 \`didUpdateNotification\` 自环复活判定，并在退出块中强制执行 \`orderOut(nil)\`，根治冲突警告弹窗点击“OK”按钮无法关闭的问题；
+2. **事件监听闭包异步解耦**：
+   - 将快捷键录制控件的 \`onChange\` / \`onClear\` 业务回调迁移至 \`DispatchQueue.main.async\` 异步派发，脱离底层 \`NSEvent.addLocalMonitorForEvents\` 监听栈，保障 Cocoa 事件调度管线纯净；
+3. **修饰键状态机与物理按键抬手防污染**：
+   - 增强 \`resetCandidateState()\`，重置时间戳并清空修饰键掩码，标记 \`isModifierTainted = true\`，防止录制修饰键松手时被误判为全局快捷键触发；
+4. **冲突状态即时回滚**：
+   - 快捷键发生冲突时立即优先恢复控件为原有效键位，再弹出冲突模态警告。
 
-### 🏷️ 应用抽屉分类就地内联编辑 (In-Place Inline Editing)
-1. **原生就地内联交互**：
-   - 点击新建分类直接在分类栏生成新药丸，光标在正中央闪烁等待输入；
-   - 双击或右键重命名分类直接进入就地编辑，光标精准定位在原有文字最末尾；
-   - 回车或点击面板任意其他位置自动安全落盘，按 Esc 自动取消回滚；
-2. **三层立体输入安全防护 (\`CategorySanitizer\`)**：
-   - 包含 32 字符截断、控制符/ANSI/BiDi/零宽字符清洗与路径敏感符阻断，多语言与 Emoji 100% 完美支持；
-3. **视觉舒适度与滚动体验优化**：
-   - **0-Pixel 基线绝对居中**：解除硬性高度约束，编辑态与展示态文字基线像素级对齐，彻底消除文字上移偏差；
-   - 去除“新分类”占位词，呈现纯净水滴胶囊与居中光标；
-   - **充满时平滑自动滚动防截断**：注入 12pt/16pt 安全呼吸边距，分类溢出视口时自动平滑滚动入内。
-
-### 🎨 界面视觉与细节统一
-1. **偏好设置液态灰色按钮统一**：
-   - 重构偏好设置中的重置与次要操作按钮，使其与其他原生液态按钮保持高度一致的高透材质感与交互反馈；
-2. **应用图标间距自定义滑块**：
-   - 支持自由调节应用抽屉图标选中底衬之间的间隙 (2 ~ 24 pt，默认 6 pt) 并自适应窗口吸附。"
+### 🪟 偏好设置与浮动面板（抽屉/搜索）双向互斥补全
+1. **双向互斥彻底闭环**：
+   - 在呼出应用抽屉 (\`showShelfPanel\`) 与全盘搜索 (\`showSearchPanel\`) 时，首行安全收起偏好设置窗口 (\`closeSettingsWindow\`)，杜绝因进程激活而将后台遗留的偏好设置窗口连带拉回屏幕前台；
+2. **失焦自动收起联动**：
+   - 在应用切换 (\`appSwitched\`) 或失焦时，偏好设置窗口联动遵循 \`autoCloseOnDeactivate\` 契约自动收起；
+3. **诊断日志异常闪退防御**：
+   - 修复按键追踪日志在收到 \`.flagsChanged\` 修饰键事件时访问 \`NSEvent.characters\` 抛出 ObjC 异常导致的闪退。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

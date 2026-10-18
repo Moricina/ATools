@@ -458,6 +458,7 @@ public final class HotkeyManager {
     }
 
     public func resumeHotkeys() {
+        resetCandidateState()
         registerDefaultHotkeys()
     }
 
@@ -467,7 +468,9 @@ public final class HotkeyManager {
         lastCGModifierReleaseTime.removeAll()
         lastModifierPressTime.removeAll()
         lastModifierReleaseTime.removeAll()
-        isModifierTainted = false
+        lastObservedCGModifiers = []
+        lastObservedModifierMask = []
+        isModifierTainted = true
     }
 
     /// Checks whether macOS native Spotlight shortcut (Cmd+Space) is currently enabled in system preferences

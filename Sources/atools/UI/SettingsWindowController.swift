@@ -14,6 +14,10 @@ public extension Notification.Name {
     static let atoolsShelfDataDidChange = Notification.Name("atoolsShelfDataDidChange")
 }
 
+private final class ModalSessionState: @unchecked Sendable {
+    var isActive: Bool = true
+}
+
 public extension NSAlert {
     /// The settings window and panels float at `.statusBar` or above. A plain `runModal()`
     /// alert opens at modal-panel level *behind* them, leaving an invisible modal loop that
@@ -25,34 +29,44 @@ public extension NSAlert {
     @discardableResult
     func runModalAboveFloatingWindows(targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)) -> NSApplication.ModalResponse {
         PanelCoordinator.shared.isModalDialogOpen = true
-        defer {
-            PanelCoordinator.shared.isModalDialogOpen = false
-        }
-
         let target = targetLevel
         let alertWin = self.window
         alertWin.level = target
 
-        let observer = NotificationCenter.default.addObserver(
+        let sessionState = ModalSessionState()
+        var observerToken: NSObjectProtocol?
+        var runLoopTimer: Timer?
+
+        defer {
+            sessionState.isActive = false
+            if let token = observerToken {
+                NotificationCenter.default.removeObserver(token)
+                observerToken = nil
+            }
+            runLoopTimer?.invalidate()
+            runLoopTimer = nil
+            alertWin.orderOut(nil)
+            PanelCoordinator.shared.isModalDialogOpen = false
+        }
+
+        observerToken = NotificationCenter.default.addObserver(
             forName: NSWindow.didUpdateNotification,
             object: alertWin,
             queue: nil
         ) { [weak alertWin] _ in
-            guard let alertWin = alertWin else { return }
+            guard sessionState.isActive, let alertWin = alertWin, alertWin.isVisible else { return }
             if alertWin.level.rawValue < target.rawValue {
                 alertWin.level = target
                 alertWin.orderFrontRegardless()
             }
         }
-        defer {
-            NotificationCenter.default.removeObserver(observer)
-        }
 
         let timer = Timer(timeInterval: 0.001, repeats: false) { [weak alertWin] _ in
-            guard let alertWin = alertWin else { return }
+            guard sessionState.isActive, let alertWin = alertWin, alertWin.isVisible else { return }
             alertWin.level = target
             alertWin.orderFrontRegardless()
         }
+        runLoopTimer = timer
         RunLoop.main.add(timer, forMode: .common)
         RunLoop.main.add(timer, forMode: RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode"))
 
@@ -71,33 +85,43 @@ public extension NSWindow {
     @discardableResult
     func runModalAboveFloatingWindows(targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)) -> NSApplication.ModalResponse {
         PanelCoordinator.shared.isModalDialogOpen = true
-        defer {
-            PanelCoordinator.shared.isModalDialogOpen = false
-        }
-
         let target = targetLevel
         self.level = target
 
-        let observer = NotificationCenter.default.addObserver(
+        let sessionState = ModalSessionState()
+        var observerToken: NSObjectProtocol?
+        var runLoopTimer: Timer?
+
+        defer {
+            sessionState.isActive = false
+            if let token = observerToken {
+                NotificationCenter.default.removeObserver(token)
+                observerToken = nil
+            }
+            runLoopTimer?.invalidate()
+            runLoopTimer = nil
+            self.orderOut(nil)
+            PanelCoordinator.shared.isModalDialogOpen = false
+        }
+
+        observerToken = NotificationCenter.default.addObserver(
             forName: NSWindow.didUpdateNotification,
             object: self,
             queue: nil
         ) { [weak self] _ in
-            guard let self = self else { return }
+            guard sessionState.isActive, let self = self, self.isVisible else { return }
             if self.level.rawValue < target.rawValue {
                 self.level = target
                 self.orderFrontRegardless()
             }
         }
-        defer {
-            NotificationCenter.default.removeObserver(observer)
-        }
 
         let timer = Timer(timeInterval: 0.001, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
+            guard sessionState.isActive, let self = self, self.isVisible else { return }
             self.level = target
             self.orderFrontRegardless()
         }
+        runLoopTimer = timer
         RunLoop.main.add(timer, forMode: .common)
         RunLoop.main.add(timer, forMode: RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode"))
 
@@ -193,6 +217,18 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public func selectTab(_ item: SettingsSidebarItem) {
         sidebarView.selectItem(item)
+    }
+
+    public func closeSettingsWindow() {
+        guard SettingsWindowController.sharedInstanceCreated, let win = window, win.isVisible else { return }
+        if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen {
+            return
+        }
+        win.performClose(nil)
+        if win.isVisible {
+            win.orderOut(nil)
+            windowWillClose(Notification(name: NSWindow.willCloseNotification, object: win))
+        }
     }
 
     override public func cancelOperation(_ sender: Any?) {

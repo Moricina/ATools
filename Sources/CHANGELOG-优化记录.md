@@ -3199,6 +3199,94 @@
   - 执行 `./Scripts/build.sh debug --test` 综合诊断：**14 大项自动化测试（含新增 [6.13]）100% 全部 PASSED 通过**；
   - 产物构建无警告无错误。
 
+---
 
+### 97. 快捷键冲突模态弹窗点击 OK 无响应与僵尸窗口根治、事件监听异步解耦与修饰键污染防御 (2026-10-18)
 
+- **背景与痛点**：
+  - 用户在偏好设置「应用抽屉」中尝试录入已被「全盘搜索中枢」占用的快捷键（例如双击修饰键 `2× ⌘ Command`）；
+  - 系统触发“快捷键冲突”警告弹窗，提示：“该快捷键已被「全盘搜索中枢」占用。请录入其他组合键，或前往全盘搜索设置调整。”；
+  - 弹窗底部虽然展示了蓝色“OK”胶囊按钮，但用户点击“OK”毫无任何反应，弹窗无法关闭，偏好设置窗口也被阻塞无法点击操作。
 
+- **根因深度分析**：
+  1. **层级提权与模态生命周期失步导致的死态僵尸窗口**：
+     - 在 [`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift) 中，为保证模态弹窗浮于 `statusBar + 2`（层级 103）之上，弹窗前调用了 `orderFrontRegardless()` 并挂载了 `NSWindow.didUpdateNotification` 监听器与安全保活 Timer；
+     - 原实现中缺乏模态活跃态生命周期锁，当用户点击“OK”触发模态循环退出时，窗口由于层级降级触发 `didUpdateNotification`，监听器误判其层级不足而立即重新执行 `orderFrontRegardless()` 将其拉起自环复活；
+     - 同时函数的 `defer` 块内完全缺少显式的 `orderOut(nil)`，当模态循环结束后，`NSApp.modalWindow` 变为 `nil`，但窗口图层孤悬在屏幕上成为僵尸窗口。后续点击按钮触发 `stopModalWithCode:` 变成空操作（no-op），造成弹窗永远无法关闭；
+  2. **事件监听闭包内同步调起模态循环打断 AppKit 分发管线**：
+     - 在 [`HotkeyRecorderControl.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/HotkeyRecorderControl.swift) 中，双击修饰键由 `NSEvent.addLocalMonitorForEvents` 捕获；
+     - 原逻辑在 `handleFlagsChanged` 内部同步调用 `onChange` -> 同步触发 `SettingsTabViews.handleShelfRecorded` -> 同步调用 `runModal()`；
+     - 导致模态事件循环直接在系统的底层事件监听器回调栈上被阻断式启动，当前修饰键事件尚未完成系统派发，打乱了 Cocoa 事件派发管线；
+  3. **修饰键候选状态未复位引发并发抢焦**：
+     - 用户在物理键盘上完成双击修饰键（如双击 Command）录制时，手指物理抬起时会产生最后一次 Key Up 事件；
+     - [`HotkeyRecorderControl.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/HotkeyRecorderControl.swift) 在退出录制时调用 `resumeHotkeys()` 但未清理候选状态，刚恢复的 `HotkeyManager` 将该抬手动作误判为全盘搜索触发事件，并发唤起全盘搜索并抢夺窗口焦点；
+  4. **冲突状态下卡片控件视觉回滚滞后**：
+     - [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift) 中，冲突检测后原配置回滚代码位于 `runModalAboveFloatingWindows()` 之后，导致弹窗显示期间卡片按钮依然显示冲突快捷键；此外 `setCommandSpaceHotkey()` 存在冗余赋值。
+
+- **代码级加固与修复方案**：
+  1. [`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)：
+     - 在 `NSAlert.runModalAboveFloatingWindows()` 与 `NSWindow.runModalAboveFloatingWindows()` 中引入 `isSessionActive` 原子生命周期状态标志；
+     - 在 `NSWindow.didUpdateNotification` 监听器与 Timer 回调中注入 `guard isSessionActive, ... isVisible` 双重前置卫语句，模态退出后彻底切断自环复活逻辑；
+     - 重构 `defer` 清理块：按序注销 Notification 监听、销毁 Timer、强制调用 `orderOut(nil)`（显式清除图层）、复位 `isModalDialogOpen = false` 并释放递归保护锁，从根本上杜绝僵尸窗口残留；
+  2. [`HotkeyRecorderControl.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/HotkeyRecorderControl.swift)：
+     - 在 `stopRecording()` 中显式调用 `HotkeyManager.shared.resetCandidateState()`；
+     - 将 `onChange` 与 `onClear` 回调全面迁移为 `DispatchQueue.main.async` 异步派发，彻底脱离底层 `NSEvent.addLocalMonitorForEvents` 监控栈，保证事件分发管线纯净；
+  3. [`HotkeyManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/HotkeyManager.swift)：
+     - 强化 `resetCandidateState()`：重置时间戳的同时，同步将 `lastObservedCGModifiers` 与 `lastObservedModifierMask` 清空，并显式标记 `isModifierTainted = true`，使录制完成后的任何残留按键/抬手动作被安全判定为污染事件丢弃；
+     - 在 `resumeHotkeys()` 内部自动调用 `resetCandidateState()`，收敛状态恢复逻辑；
+  4. [`SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift)：
+     - 在 `handleShelfRecorded` 与 `handleSearchRecorded` 发生快捷键冲突时，立即优先将 `recorder.currentBinding` 恢复为配置中的原绑定值，使 UI 瞬间回滚，再弹出冲突模态警报；
+     - 移除 `setCommandSpaceHotkey()` 中重复的冗余赋值。
+  5. [`AppDelegate.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/AppDelegate.swift)：
+     - 修复 `traceRawEvent` 在收到 `.flagsChanged` 事件（如双击 Command 等修饰键动作）时调用 `event.characters` 抛出 AppKit `NSInternalInconsistencyException` 导致的致命崩溃；
+     - 严格约束仅当 `event.type == .keyDown || event.type == .keyUp` 时才读取 `event.characters`，修饰键事件安全赋值为空串。
+
+- **兼容性与边界防护策略**：
+  - 递归与重复弹窗防护：通过静态 `isModalRunning` 互斥锁防止多个模态弹窗并发叠层；
+  - 跨层级浮动兼容：保持 `popUpMenu + 2`（103）超高层级浮动展示能力，无论抽屉或搜索面板处于何种呼出状态均能正常展示在最顶层，且关闭后平滑销毁不留痕；
+  - 快捷键监听无副作用：彻底隔离了事件监听器与模态 RunLoop，保证 AppKit 键盘/修饰键调度树稳定；
+  - 诊断日志零崩溃保障：消除任何非按键事件下访问字符属性带来的 ObjC 异常陷阱。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**13 大项自动化测试套件 100% 全部 PASSED 通过**；
+  - `./Scripts/package_app.sh` 编译打包与代码签名通过，零 Warning；
+  - 同步安装更新至 `/Applications/ATools.app`（PID `78861`）并平滑运行。
+
+---
+
+### 98. 偏好设置与浮动面板（抽屉/搜索）双向互斥补全、失焦自动收起闭环与快捷键激活防并发置顶 (2026-10-18)
+
+- **背景与痛点**：
+  - 用户反馈偶发在按下快捷键（如 `⌘空格` / `Command + Space`）呼出应用抽屉时，应用抽屉和偏好设置面板会一起出现在屏幕上；
+  - 经运行时日志 (`~/Library/Logs/ATools/runtime.log`) 完整时序审计与精确调用栈回溯确认：
+    1. 用户此前曾打开过“偏好设置...”面板，切换至其他外部应用（如浏览器/访达）工作时，偏好设置窗口在底层后台保持存活状态；
+    2. 用户按下 `⌘空格` 触发 `PanelCoordinator.shared.showShelfPanel()`；
+    3. `showShelfPanel()` 在置顶抽屉面板时调用了 AppKit 标准的 `NSApp.activate(ignoringOtherApps: true)`；
+    4. macOS WindowServer 在激活 ATools 进程时，默认将该进程所有属于当前层级且未隐藏的存活窗口（即遗留在后台的偏好设置窗口）一同拉回屏幕前台，导致抽屉与偏好设置面板并存。
+
+- **根因分析**：
+  1. **互斥状态机单向缺失**：
+     - 原设计在打开偏好设置时有调用 `PanelCoordinator.shared.hideAllPanels(restoreFocus: false)`（打开设置收起面板）；
+     - 但在用户呼出抽屉面板（`showShelfPanel`）或全盘搜索（`showSearchPanel`）时，完全缺少反向关闭/隐藏偏好设置窗口的逻辑，导致偏好设置窗口残留时必然被后续激活提升至前台；
+  2. **失焦自动收起策略未覆盖偏好设置**：
+     - `PanelCoordinator.handleAutomaticDismissal` 中对 `autoCloseOnDeactivate` 仅针对 `shelfPanel` 和 `searchPanel` 进行判断收起，偏好设置窗口在用户切换外部应用（`appSwitched` / `appDeactivated`）时未联动关闭，长期滞留内存与窗口树中。
+
+- **代码级加固与修复方案**：
+  1. [`SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)：
+     - 新增 `closeSettingsWindow()` 专有安全关闭入口；
+     - 注入模态防护检测：若当前存在活跃的模态弹窗或外部 Sheet（`isModalDialogOpen == true`），安全跳过关闭，防止模态打断；
+     - 正常场景下优先调用 `win.performClose(nil)` 触发标准的关闭代理与资源释放链，若未彻底隐藏则兜底调用 `orderOut(nil)` 并触发 `windowWillClose`。
+  2. [`PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：
+     - 在 `showShelfPanel()` 入口首行立即调用 `SettingsWindowController.shared.closeSettingsWindow()`，呼出应用抽屉时强制安全收起偏好设置；
+     - 在 `showSearchPanel()` 入口首行同样调用 `SettingsWindowController.shared.closeSettingsWindow()`，呼出全盘搜索时强制安全收起偏好设置；
+     - 在 `handleAutomaticDismissal` 中统一闭环：当用户切换应用或 ATools 整体失焦且配置开启了 `autoCloseOnDeactivate` 时，自动调用 `closeSettingsWindow()`，杜绝设置窗口在后台悬垂。
+
+- **兼容性与边界防护策略**：
+  - 双向互斥彻底闭环：抽屉、搜索与偏好设置窗口三者间形成完备的互斥契约，屏幕上永远不会同时出现设置窗口与浮动启动面板；
+  - 模态安全锁：当用户在设置面板中正处于弹窗录制或警报确认时，呼出事件不强制破坏正在交互的模态会话；
+  - 零内存泄露：关闭时自动触发完整的 `windowWillClose` 资源释放与 `MemoryGuardian` 垃圾回收。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**13 大项自动化测试套件 100% 全部 PASSED 通过**；
+  - `./Scripts/package_app.sh` 编译打包与代码签名通过，零 Warning；
+  - 同步安装更新至 `/Applications/ATools.app`（PID `80404`）平滑运行验证。
