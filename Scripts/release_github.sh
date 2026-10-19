@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.26}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-51}"
+VERSION="${ATOOLS_VERSION:-1.3.28}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-54}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -108,24 +108,24 @@ fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 
-### 🛡️ 快捷键冲突模态弹窗与死态僵尸窗口根治
-1. **模态生命周期状态锁与清除僵尸窗口**：
-   - 在 \`NSAlert.runModalAboveFloatingWindows\` 与 \`NSWindow.runModalAboveFloatingWindows\` 中引入原子生命周期状态标志 \`ModalSessionState\`；
-   - 彻底切断模态循环退出时的 \`didUpdateNotification\` 自环复活判定，并在退出块中强制执行 \`orderOut(nil)\`，根治冲突警告弹窗点击“OK”按钮无法关闭的问题；
-2. **事件监听闭包异步解耦**：
-   - 将快捷键录制控件的 \`onChange\` / \`onClear\` 业务回调迁移至 \`DispatchQueue.main.async\` 异步派发，脱离底层 \`NSEvent.addLocalMonitorForEvents\` 监听栈，保障 Cocoa 事件调度管线纯净；
-3. **修饰键状态机与物理按键抬手防污染**：
-   - 增强 \`resetCandidateState()\`，重置时间戳并清空修饰键掩码，标记 \`isModifierTainted = true\`，防止录制修饰键松手时被误判为全局快捷键触发；
-4. **冲突状态即时回滚**：
-   - 快捷键发生冲突时立即优先恢复控件为原有效键位，再弹出冲突模态警告。
+### 🛡️ 虚拟化平台与 Windows 子应用物理级永久豁免
+1. **全链路物理级豁免防护网**：
+   - 新增 \`isProtectedVirtualizationApp\` 物理级防火墙，针对 \`com.parallels.\` 前缀及包含 parallels 的所有进程（包括 Parallels Desktop 控制台、Windows 11 虚拟机主核心、Dock Helper、Coherence Helper 以及所有 Windows 映射应用 Stub）执行 100% 永久物理级豁免；
+   - 绝不纳管、不轮询、不终止虚拟机及其子应用，彻底终结切换应用时 Windows 虚拟机崩溃与未保存数据丢失风险；
+   - 同步硬排除 VMware Fusion (\`com.vmware.\`)、UTM (\`com.utmapp.\`)、VirtualBox (\`org.virtualbox.\`)、Docker Desktop (\`com.docker.\`) 与 Android 模拟器。
 
-### 🪟 偏好设置与浮动面板（抽屉/搜索）双向互斥补全
-1. **双向互斥彻底闭环**：
-   - 在呼出应用抽屉 (\`showShelfPanel\`) 与全盘搜索 (\`showSearchPanel\`) 时，首行安全收起偏好设置窗口 (\`closeSettingsWindow\`)，杜绝因进程激活而将后台遗留的偏好设置窗口连带拉回屏幕前台；
-2. **失焦自动收起联动**：
-   - 在应用切换 (\`appSwitched\`) 或失焦时，偏好设置窗口联动遵循 \`autoCloseOnDeactivate\` 契约自动收起；
-3. **诊断日志异常闪退防御**：
-   - 修复按键追踪日志在收到 \`.flagsChanged\` 修饰键事件时访问 \`NSEvent.characters\` 抛出 ObjC 异常导致的闪退。"
+### 🪟 跨虚拟桌面 (Spaces) / 全屏切换误杀彻底终结与三重防护网
+1. **彻底移除后台静默应用的无差别轮询**：
+   - 明确生命周期契约：AutoQuit 仅允许对“当前前台活跃应用（\`app.isActive\`）”或“最近 3 秒内接收到明确窗口关闭通知（\`recentlyHadCloseEvent\`）”的应用执行零窗求值；
+   - 处于后台静默运行的应用绝对不进行轮询扫描，从根源上杜绝后台定时器在全屏或多桌面下偷袭杀进程；
+2. **Space 切换重构**：
+   - 检测到虚拟桌面切换时，直接撤销已排队的退出任务，彻底移除旧有的 2.5 秒延时复查自杀机制；
+3. **\`executePendingQuit\` 终极防线兜底拦截**：
+   - 在 1 秒倒计时结束准备调用终止的瞬间：只要应用当前处于失焦/后台状态且最近 5 秒内从未发生过任何真实的窗口关闭通知，坚决撤销退出，保障 WPS Office、Chrome、微信等后台软件稳定常驻。
+
+### ⚡ 腾讯文档等 CEF/Electron 应用关窗退出精准适配
+1. **WindowServer 离屏底板精准过滤**：
+   - 精准过滤腾讯文档等 CEF 应用在关闭所有文档后残留的离屏无标题缓冲底板（1366x800），修复关闭文档后应用停留在 Dock 栏不退出的问题，恢复精准优雅退出。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

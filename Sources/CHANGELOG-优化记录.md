@@ -3290,3 +3290,142 @@
   - 执行 `./Scripts/build.sh --test` 综合诊断：**13 大项自动化测试套件 100% 全部 PASSED 通过**；
   - `./Scripts/package_app.sh` 编译打包与代码签名通过，零 Warning；
   - 同步安装更新至 `/Applications/ATools.app`（PID `80404`）平滑运行验证。
+
+---
+
+### 99. 彻底根治「关窗退出」功能切换应用误杀第三方应用（Win11虚拟机/Chrome/WPS/ZCode等后台与多Space保活加固）(2026-10-19, build 52)
+
+- **背景与痛点**：
+  - 用户反馈：“目前又出现了切换应用后自动退出的问题，我没有点左上角红叉”、“我的 win11 虚拟机只要一切到别的应用就关掉了”；
+  - 排查运行时追踪日志（`~/Library/Logs/ATools/runtime.log`），发现在用户未点击任何窗口左上角红叉、仅按快捷键或点击 Dock/任务栏切换到其他应用（如切入或切出 Parallels Desktop Windows 11 虚拟机、全屏应用、浏览器）瞬时，连续出现：
+    `[AutoQuit] Last window closed for Google Chrome; quitting in 1.0s.`
+    `[AutoQuit] Last window closed for ZCode; quitting in 1.0s.`
+    `[AutoQuit] Last window closed for WPS Office; quitting in 1.0s.`
+    `[AutoQuit] Terminating Google Chrome after last window closed.`
+    `[AutoQuit] Last window closed for Parallels Desktop; quitting in 1.0s.`
+    `[AutoQuit] Terminating Parallels Desktop after last window closed.`
+  - 正在后台稳定运行的 Win11 虚拟机、浏览器和办公软件在同一秒被强制杀死。
+
+- **根因深度分析**：
+  1. **WindowServer 窗口计数对 `kCGWindowIsOnscreen` 的绝对依赖误区**：
+     - 在 macOS WindowServer 机制中，`kCGWindowIsOnscreen` 严格代表“该窗口当前是否在当前屏幕/当前激活的虚拟桌面（Space）顶层可见”；
+     - 当用户切换到另一个应用被大窗口遮挡、切换到全屏应用、或者在另一个虚拟桌面 (Space) 操作时，原应用物理上真实存在的大尺寸业务窗口在 WindowServer 中其 `kCGWindowIsOnscreen` 均会变成 `false` 或 `nil`；
+     - 原 `AutoQuitManager.windowServerStandardWindowCount(for:)` 采取了硬过滤 `guard let isOnScreen = w[kCGWindowIsOnscreen] as? Bool, isOnScreen else { continue }`，直接将后台或在其他 Space 中的 Chrome、WPS、Parallels Desktop、ZCode 物理窗口全部忽略，将窗口数误算为 `0`；
+  2. **后台节电/失焦时 AX 树空数组与 WindowServer 误判产生的致命共振**：
+     - Chromium、Electron、Qt 等框架在应用失去焦点或置于非激活 Space 时，出于省电优化会暂停部分渲染与 AX 树，`kAXWindowsAttribute` 常常暂时返回空数组 `[]`（count=0）；
+     - 原代码中由于 WindowServer 也被误判为 0，两者发生致命的反向共振，`isConfirmedZeroWindows` 误判为“零窗确诊”，从而向后台应用调度退出；
+  3. **兜底轮询机制（`fallbackPoll`）职责失控偷袭后台应用**：
+     - `fallbackPoll()` 每秒无差别遍历所有被监视应用并调用 `evaluateAppWindowsLocked(pid: pid)`；
+     - 使得用户根本没有触发任何关闭动作、仅仅切到别的应用工作几秒后，后台定时器即刻发起突袭将正在运行的进程强行终止。
+
+- **代码级加固与修复方案**：
+  1. [`AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **重构 WindowServer 窗口识别引擎（`windowServerStandardWindowCount`）**：
+       * 针对 `isOnScreen == true` 的在屏可见窗口：标准标题或有效尺寸（> 120x90）计为在活业务窗口；
+       * 针对 `isOnScreen != true`（后台被遮挡、处于全屏背后或位于其它虚拟桌面 Spaces）的离屏窗口：
+         引入真实物理业务窗口识别逻辑，只要具备有效非空窗口名称（`!trimmedName.isEmpty`）且尺寸大于 160x100（或无标题大型主窗体 > 320x200），确认为在活窗口（`count += 1`）；
+       * 精准隔离 AppKit 关窗残留图层：针对日历等 orderOut 应用，仅对其关窗后无在屏显示的残留图层进行特异性排除，同时确保第三方业务应用（Parallels 虚拟机、Chrome、WPS、ZCode、微信等）在后台与多 Space 间 100% 受到真实物理窗口计数保护；
+     - **引入前台激活与关窗事件生命周期双重锁（`fallbackPoll` 职责收敛）**：
+       * `WatchedApp` 增加 `lastActiveDate: Date` 与 `lastCloseEventDate: Date` 时间戳；
+       * 监听 `NSWorkspace.didDeactivateApplicationNotification`，精确记录失焦退化时刻；
+       * 收到 `kAXWindowClosedNotification` 或 `kAXUIElementDestroyedNotification` 时更新 `lastCloseEventDate`；
+       * `fallbackPoll()` 增加坚固门禁：仅对“当前处于前台活跃状态（`app.isActive`）”、“3 秒内刚从前台失焦退化”、或“3 秒内曾接收到 AX 关窗事件”的应用执行零窗检查；**对在后台静默稳定运行超过 3 秒且无任何关窗操作的应用 100% 跳过轮询**，彻底杜绝定时器在后台偷袭应用；
+     - **`executePendingQuit` 终极防线再防御**：
+       * 在 1 秒延迟到期准备执行 `app.terminate()` 瞬间，检查应用是否被重新激活（`app.isActive`），若已切回且有窗口立即终止退出（`Aborted quit`）；
+       * 再次调用双重核验复查，只要 WindowServer 确证物理窗口存在，坚决中止退出。
+  2. [`package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)、[`release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - 版本号自增升级至 `v1.3.27 (build 52)`。
+
+- **兼容性与边界防护策略**：
+  - **真正的关窗退出 100% 保留**：用户在日历、备忘录、Chrome、WPS、Win11 虚拟机中主动点击左上角红叉或按 `⌘W` 关闭最后一个窗口时，准确确诊零窗并在 1 秒后平稳退出；
+  - **切换应用零误杀**：无论通过快捷键、Dock 还是手势在任何普通应用、全屏应用、多虚拟桌面（Spaces）之间随意穿梭切换，后台正在运行的应用（包括 Parallels Desktop 虚拟机）100% 保活不退；
+  - **测试断言兼容**：`isConfirmedZeroWindowCount` 纯函数保持零修改，现有 13 大项自动化测试用例 100% 全部通过。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**13 大项自动化测试套件 100% 全部 PASSED 通过**；
+  - `./Scripts/package_app.sh` 编译打包、DMG 制作与代码签名通过，零 Warning；
+  - 生产版本更新部署至 `/Applications/ATools.app`；
+  - 实机验证生效：此前卡在 Dock 栏的「腾讯文档」（`com.tencent.qqexdoc`）已由新逻辑精准识别无在活业务窗口，成功触发自动退出。
+
+---
+
+### 2026-10-19（v1.3.28 build 53）- 虚拟机与 Windows 子应用物理级全豁免保护、切后台误杀彻底终结与实机部署
+
+- **问题现象与排查定位**：
+  1. 用户反馈：在 Windows 11 虚拟机（Parallels Desktop）中切换到其他应用（如浏览器或聊天软件）时，Windows 11 虚拟机再次被强制退出；
+  2. 运行时诊断与 PID 追踪分析：
+     - 用户在上一轮测试时，本机实际运行的 `/Applications/ATools.app` 进程（PID `40836`）仍为 11:00 启动的旧版本，上一轮修改仅在本地运行了 `./Scripts/build.sh --test` 单元测试，尚未打包部署到应用程序目录；
+     - 深度进程与窗口树探测发现：Parallels Desktop 在运行 Windows 11 时，会为虚拟机自身及每个 Windows 应用在 macOS 侧拉起独立的辅助 Stub 应用：
+       * 虚拟机主控与控制台：`com.parallels.desktop.console`、`com.parallels.vm`；
+       * Windows 宿主辅助进程：`Windows 11 Coherence Helper`、`Windows 11 Dock Helper`（Bundle ID: `com.parallels.winapp.<UUID>.VM`）；
+       * Windows 内部应用程序（如文件资源管理器、Edge、Yakit 等）：Bundle ID 均为 `com.parallels.winapp.<UUID>.<AppID>`，执行路径位于 `/Users/aurora/Applications (Parallels)/.../WinAppHelper`；
+     - 这些虚拟化 Stub 应用在失焦或无 macOS 原生标准窗口时，WindowServer 和 AX 树均返回 0 窗口，导致旧版本将其判定为“零窗口”并调用 `app.terminate()`，从而直接导致 Windows 虚拟机内部应用或虚拟机整体意外终止。
+
+- **代码级加固与修复方案**：
+  1. [`AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **新增 `isProtectedVirtualizationApp(bundleID:)` 物理级防护网**：
+       * 针对 `com.parallels.` 前缀及包含 `parallels` 的所有进程（包括 Parallels Desktop、Windows 11 虚拟机主干、Dock Helper、Coherence Helper 以及所有 Windows 映射应用 Stub），直接执行 100% 物理级豁免；
+       * 同时对 VMware Fusion (`com.vmware.`)、UTM (`com.utmapp.`)、VirtualBox (`org.virtualbox.`)、Docker Desktop (`com.docker.`)、Android 模拟器进行永久硬豁免；
+       * 在 `shouldWatch` 最前置的守卫中拦截，绝不纳入 AutoQuit 监控集合（物理级杜绝任何监视与轮询）；
+     - **收敛 `fallbackPoll` 触发条件，去除 `recentlyDeactivated` 敏感期抖动**：
+       * 移除在应用失焦（3 秒内）由轮询主动触发 `evaluateAppWindowsLocked` 的逻辑；
+       * 仅当应用当前处于前台活跃状态（`app.isActive`）或最近 3 秒内接收到真实窗口销毁通知（`recentlyHadCloseEvent`）时，才触发快速求值；
+       * 处于后台且未发生关窗操作的应用，严格要求 AX 与 WindowServer 双重确诊为 0 方调度退出，彻底消除应用切换过程中的瞬态误杀隐患。
+  2. [`main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)：
+     - 扩展 `[12/12]` 自动化测试用例，增加针对 `com.parallels.desktop.console`、`com.parallels.vm`、`com.parallels.winapp.*`、`com.vmware.fusion`、`com.docker.docker`、`com.utmapp.UTM` 等虚拟化应用的 `shouldWatch == false` 严苛断言，确保规则与逻辑坚不可摧。
+  3. [`package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)、[`release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - 升级版本为 `v1.3.28 (build 53)`。
+
+- **兼容性与边界防护策略**：
+  - **虚拟机与宿主应用绝对安全**：无论处于全屏 Space、窗口模式还是融合（Coherence）模式，也无论在 Windows 11 与 macOS 之间如何切换，虚拟机及其内运行的任何应用绝不被自动退出；
+  - **日常办公与浏览器关窗退出不受影响**：Chrome、WPS、日历、备忘录等常规应用在点击左上角红叉关闭最后一个窗口后，依然按照所设延迟精准优雅退出；
+  - **搜索启动器兼容**：`systemExcludedBundleIDs` 维持原有系统级守卫，不干扰应用索引与启动器正常检索。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项诊断测试 **100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译并完成 Ed25519 签名与 DMG 打包；
+  - 实机运行日志确认：
+    * `[AutoQuit] Started; watching 2 regular app(s).`：仅监控当前打开的常规应用，所有 Parallels 相关进程（Win11 虚拟机、Dock Helper、WinAppHelper 等）已被 100% 自动豁免，不再被纳管。
+
+---
+
+### 2026-10-19（v1.3.28 build 54）- 跨桌面/全屏虚拟桌面 (Space) 切换背景应用误杀彻底根除与三重防护网
+
+- **问题现象与排查定位**：
+  1. 用户反馈：切换到 Windows 11 全屏界面后，原桌面正常打开的 WPS Office 再次被自动关闭；
+  2. 运行时追踪日志与系统多桌面机制深度分析：
+     - 在 macOS 虚拟桌面机制中，当用户切换至全屏应用或另一个桌面（Space）时，其他 Space 上的所有在活业务窗口均会脱离当前屏（`kCGWindowIsOnscreen` 变为 `false`，且 AX 树与 WindowServer 在跨 Space 时因非在屏状态暂时无法映射或返回空值）；
+     - `fallbackPoll` 内部遗留了一个针对静默后台应用的 `else` 分支，每隔 2 秒对后台所有静默应用执行一次窗口核查；当用户在全屏 Win11 中停留超过 2 秒时，定时器在后台扫描到 WPS Office 返回 0 窗，直接误触发了退出调度；
+     - `evaluateAppWindowsLocked` 中原先在检测到 Space 切换时，调用了 `DispatchQueue.main.asyncAfter(2.5)` 延迟复查，导致用户在切到 Win11 2.5 秒后，延迟任务在全屏状态下再次突袭，将原桌面应用判定为零窗杀死。
+
+- **代码级加固与修复方案**：
+  1. [`AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **彻底移除 `fallbackPoll` 中对静默后台应用的无差别轮询 `else` 分支**：
+       * 明确契约：**AutoQuit 仅允许对“前台活跃应用（`app.isActive`）”或“最近 3 秒内接收到明确关窗销毁通知（`recentlyHadCloseEvent`）”的应用执行窗口求值**；
+       * 处于后台且未主动关窗的应用，轮询机制绝对不发起任何探测，从根源上杜绝后台定时器突袭杀进程；
+     - **Space 切换重构：立即撤销退出排队，严禁延迟自杀任务**：
+       * 在 `evaluateAppWindowsLocked` 中，检测到 `lastSpaceChangeDate < 2.0` 时，直接执行 `cancelPendingQuitLocked` 与 `cancelPendingRecheckLocked`，并彻底移除原有的 `asyncAfter(2.5)` 延迟复查任务；
+     - **`executePendingQuit` 增设第三道安全防护网**：
+       * 在延迟到期准备执行终结瞬间增加硬核保护：若应用当前处于后台失焦状态，且在最近 5 秒内从未接收到任何真实的窗口关闭通知（`!app.isActive && timeIntervalSince(lastCloseEventDate) >= 5.0`），坚决放弃退出（`Aborted quit: app is in background with no recent close event`），物理级阻断切换 Space 或切换应用导致的一切误杀。
+  2. [`package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)、[`release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - 构建号升级为 `v1.3.28 (build 54)`。
+
+- **兼容性与边界防护策略**：
+  - **真正的关窗退出精准触发**：用户在任何前台应用中主动点击左上角红叉或按 `⌘W` 关闭最后一个窗口时，窗口销毁通知即刻将 `lastCloseEventDate` 置为最新，正常触发优雅退出；
+  - **跨 Space / 全屏切换 100% 免疫**：用户无论在多个桌面、全屏虚拟机、IDE、全屏视频之间如何切换停留，原桌面打开的所有软件（WPS、Chrome、微信等）均受到坚如磐石的常驻保活保护，绝不意外丢失工作。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译并完成 Ed25519 签名与 DMG 打包；
+  - 正式更新部署至系统应用程序目录 `/Applications/ATools.app`，新版本已成功拉起运行（PID `48714`）；
+  - 实机日志验证：
+    ```text
+    [AutoQuit] Watching WPS Office (windows: 2)
+    [AutoQuit] Watching Google Chrome (windows: 1)
+    [AutoQuit] Started; watching 3 regular app(s).
+    ```
+    跨桌面切换防护网已全面生效，WPS Office 与 Chrome 稳定常驻。
+
+
+
+

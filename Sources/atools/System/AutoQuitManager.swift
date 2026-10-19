@@ -40,6 +40,18 @@ public final class AutoQuitManager {
         "cc.atools.app.dev"
     ]
 
+    /// 虚拟机、模拟器与容器平台（常驻后台/全屏独立空间/无感融合模式/Windows子应用，物理级排除在自动退出之外，防范虚拟机崩溃及未保存数据丢失）
+    public static func isProtectedVirtualizationApp(bundleID: String) -> Bool {
+        let lower = bundleID.lowercased()
+        if lower.hasPrefix("com.parallels.") || lower.contains("parallels") { return true }
+        if lower.hasPrefix("com.vmware.") { return true }
+        if lower.hasPrefix("com.utmapp.") { return true }
+        if lower.hasPrefix("org.virtualbox.") { return true }
+        if lower.hasPrefix("com.docker.") { return true }
+        if lower.hasPrefix("com.google.android.simulator") || lower.hasPrefix("com.android.emulator") { return true }
+        return false
+    }
+
     private struct WatchedApp {
         let app: NSRunningApplication
         let axApp: AXUIElement
@@ -49,6 +61,10 @@ public final class AutoQuitManager {
         /// 最近一次确认时是否拥有窗口。零窗口应用（登录项、后台 utility）绝不直接
         /// 退出，只有从「有窗」跌落到「确认零窗」才调度退出。
         var hadWindows: Bool
+        /// 最近一次处于前台激活态的时间戳，用于防止失焦切后台时的瞬态误杀
+        var lastActiveDate: Date
+        /// 最近一次收到窗口关闭/销毁事件的时间戳
+        var lastCloseEventDate: Date
     }
 
     private var watched: [pid_t: WatchedApp] = [:]
@@ -101,6 +117,16 @@ public final class AutoQuitManager {
             guard let self = self, self.isRunning,
                   let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             self.handleAppActivated(app)
+        })
+        // 关键防御：监听应用失焦/切换应用，更新失焦时间戳，防止切后台过渡期误杀
+        workspaceObservers.append(workspaceCenter.addObserver(
+            forName: NSWorkspace.didDeactivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self = self, self.isRunning,
+                  let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self.handleAppDeactivated(app)
         })
         // 监听虚拟桌面 (Spaces) 切换：Space 切换时 WindowServer 与 AX 处于过渡态，设立保护宽限期防止误杀
         workspaceObservers.append(workspaceCenter.addObserver(
@@ -198,6 +224,7 @@ public final class AutoQuitManager {
         guard isFinishedLaunching else { return false }
         guard let bid = bundleID, !bid.isEmpty else { return false }
         guard !systemExcludedBundleIDs.contains(bid) else { return false }
+        guard !isProtectedVirtualizationApp(bundleID: bid) else { return false }
         switch mode {
         case .allApps: return !rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
         case .onlyListed: return rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
@@ -257,9 +284,6 @@ public final class AutoQuitManager {
                   let height = bounds["Height"] as? Double,
                   width > 40, height > 40 else { continue }
 
-            // 关键：必须是在屏（On-Screen）有效窗口！已关闭/orderedOut 隐藏的窗口 isOnScreen 为 false
-            guard let isOnScreen = w[kCGWindowIsOnscreen as String] as? Bool, isOnScreen else { continue }
-
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
             let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -272,27 +296,50 @@ public final class AutoQuitManager {
             // WPS Office 特定的常驻隐形弹窗底板/模板底板 (420x154)
             if abs(width - 420) < 15 && abs(height - 154) < 15 { continue }
 
-            if !trimmedName.isEmpty {
-                // 有标题的标准在屏窗口（Safari 页面、Chrome 标签页、终端窗口、钉钉主窗口、WPS 文档等）：
-                // 无论是否失焦、是否被遮挡，一律确认为有效业务窗口！
-                count += 1
-                continue
-            }
-
-            // 无标题窗口过滤（系统常驻残影、离屏缓冲、AppKit 占位层）
-            // 1. AppKit 500x500 占位层
-            if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
-            // 2. 菜单栏/工具栏横条 (height <= 48)
+            // 菜单栏/工具栏横条 (height <= 48)
             if height <= 48 { continue }
-            // 3. 小型代理/光标/状态图标
+
+            // AppKit 500x500 占位层
+            if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
+
+            // 小型代理/光标/状态图标
             if width <= 80 && height <= 60 { continue }
-            // 4. CEF 离屏缓冲画布 (640x508, 600x600)
+
+            // CEF 离屏缓冲画布 (640x508, 600x600)
             if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
             if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
 
-            // 具有合理尺寸的无标题真实在屏窗口（如部分 Electron/Flutter/Java 无标题主窗体）
-            if width > 120 && height > 90 {
-                count += 1
+            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
+
+            if isOnScreen {
+                // 当前屏幕可见的标准在屏窗口（无论是否失焦、是否被遮挡，一律确认为有效业务窗口）
+                if !trimmedName.isEmpty {
+                    count += 1
+                    continue
+                }
+                if width > 120 && height > 90 {
+                    count += 1
+                    continue
+                }
+            } else {
+                // 离屏/非当前Space/后台被遮挡窗口（kCGWindowIsOnscreen 为 false 或 nil）:
+                // 特殊排除：针对特定 AppKit 应用在关闭窗口时仅执行 orderOut: 移出屏幕、但窗口元数据残留的问题。
+                // 日历等应用在关窗后，其残留图层的名字等于应用自身的默认标题（如"日历"或"Calendar"），且不再在屏。
+                let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
+                let isPureAppTitleResidual = (trimmedName == ownerName) && (ownerName == "Calendar" || ownerName == "日历")
+                if isPureAppTitleResidual {
+                    continue
+                }
+
+                // 核心保活防御：对于 Win11 虚拟机 (Parallels Desktop)、Chrome、WPS、ZCode、微信等第三方业务应用，
+                // 当用户切换应用、全屏虚拟机、或者在另一个虚拟桌面 (Space) 工作时，
+                // 其真实主业务窗口在 WindowServer 中真实存在且具有明确的业务标题（!trimmedName.isEmpty）。
+                // 必须确认为有效在活窗口，绝不能因 isOnScreen 为 false 造成误杀！
+                // 注意：对于不在屏且无标题的离屏窗口（如腾讯文档关闭后的 1366x800 底板、CEF/AppKit 占位底板），绝对不能计入！
+                if !trimmedName.isEmpty && width > 160 && height > 100 {
+                    count += 1
+                    continue
+                }
             }
         }
         return count
@@ -407,6 +454,7 @@ public final class AutoQuitManager {
         if watched[pid] == nil {
             attachLocked(app)
         } else if var entry = watched[pid] {
+            entry.lastActiveDate = Date()
             let axCount = axWindows(of: entry.axApp)?.count
             let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
             if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
@@ -420,8 +468,18 @@ public final class AutoQuitManager {
                         }
                     }
                 }
-                watched[pid] = entry
             }
+            watched[pid] = entry
+        }
+    }
+
+    private func handleAppDeactivated(_ app: NSRunningApplication) {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        guard let pid = AutoQuitManager.resolveProcessIdentifier(for: app), pid > 0 else { return }
+        if var entry = watched[pid] {
+            entry.lastActiveDate = Date()
+            watched[pid] = entry
         }
     }
 
@@ -471,7 +529,9 @@ public final class AutoQuitManager {
             axApp: axApp,
             observer: obs,
             registeredWindowRefs: [],
-            hadWindows: false
+            hadWindows: false,
+            lastActiveDate: app.isActive ? Date() : .distantPast,
+            lastCloseEventDate: .distantPast
         )
         // 为现有窗口注册销毁通知；初始窗口数决定 hadWindows（零窗口应用绝不直接退出）
         let existing = axWindows(of: axApp)
@@ -517,13 +577,14 @@ public final class AutoQuitManager {
             }
         } else if notificationName == (kAXWindowClosedNotification as String)
                     || notificationName == (kAXUIElementDestroyedNotification as String) {
+            entry.lastCloseEventDate = Date()
             if !entry.hadWindows {
                 let isKnownWindow = entry.registeredWindowRefs.contains(where: { CFEqual($0, element) })
                 if notificationName == (kAXWindowClosedNotification as String) || isKnownWindow {
                     entry.hadWindows = true
-                    watched[pid] = entry
                 }
             }
+            watched[pid] = entry
             guard entry.hadWindows else { return }
             evaluateAppWindowsLocked(pid: pid)
         }
@@ -544,11 +605,10 @@ public final class AutoQuitManager {
         // 安全防护 1：用户使用 Cmd+H 隐藏的应用绝不能自动退出
         guard !app.isHidden else { return }
 
-        // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，延后复查
+        // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，撤销退出调度
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                self?.evaluateAppWindows(pid: pid)
-            }
+            cancelPendingQuitLocked(pid)
+            cancelPendingRecheckLocked(pid)
             return
         }
 
@@ -626,6 +686,7 @@ public final class AutoQuitManager {
             }
         }
         
+        let now = Date()
         let pids = Array(watched.keys)
         for pid in pids {
             guard var entry = watched[pid],
@@ -649,7 +710,15 @@ public final class AutoQuitManager {
                     watched[pid] = entry
                 }
             } else {
-                evaluateAppWindowsLocked(pid: pid)
+                // 核心生命周期防御：兜底轮询绝不能在后台对稳定运行、未发生关窗事件的应用进行“零窗误杀”！
+                // 只有当应用当前处于前台活跃状态（app.isActive）或者最近 3.0 秒内接收到过明确的关窗销毁事件时，才触发求值！
+                // 处于后台且无关窗操作的应用绝对不进行轮询扫描，彻底杜绝在全屏虚拟机或其它 Space 下偷袭后台应用
+                let isActive = entry.app.isActive
+                let recentlyHadCloseEvent = now.timeIntervalSince(entry.lastCloseEventDate) < 3.0
+
+                if isActive || recentlyHadCloseEvent {
+                    evaluateAppWindowsLocked(pid: pid)
+                }
             }
         }
     }
@@ -689,7 +758,17 @@ public final class AutoQuitManager {
         guard !app.isTerminated else { return }
         guard !app.isHidden else { return }
 
-        // 关键安全防御 1：检查是否有任何已最小化的窗口（Minimized in Dock），最小化绝不是关闭！
+        // 关键安全防御 1：若应用已重新变为活跃状态且拥有窗口，绝对不能退出
+        if app.isActive {
+            let axCount = axWindows(of: entry.axApp)?.count
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+            if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
+                runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is active and has window.")
+                return
+            }
+        }
+
+        // 关键安全防御 2：检查是否有任何已最小化的窗口（Minimized in Dock），最小化绝不是关闭！
         if let windows = axWindows(of: entry.axApp) {
             let hasMinimized = windows.contains { w in
                 var minVal: CFTypeRef?
@@ -704,6 +783,12 @@ public final class AutoQuitManager {
 
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
             runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): Space transition in progress.")
+            return
+        }
+
+        // 关键安全防御 3：若应用当前处于失焦/后台状态且最近 5 秒内从未收到过关窗事件，坚决放弃退出，杜绝切换 Space 或切换应用误杀
+        if !app.isActive && Date().timeIntervalSince(entry.lastCloseEventDate) >= 5.0 {
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is in background with no recent close event.")
             return
         }
         let cfg = ConfigManager.shared.config
