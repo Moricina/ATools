@@ -147,21 +147,24 @@ public final class TrackpadGestureManager {
             self?.stopListening()
         })
 
-        // 2. 系统从睡眠唤醒时：硬件 I2C/SPI 总线需完成电源恢复，防抖延迟 0.8s 后再重建监听
+        // 2. 系统从睡眠唤醒时：硬件 I2C/SPI 总线需完成电源恢复，防抖延迟 1.2s 后再重建监听
         sleepWakeObservers.append(center.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            guard let self = self else { return }
+            let config = ConfigManager.shared.config
+            guard config.enableShelfPanel && config.shelfTrackpadGesture != .none else { return }
             runtimeLog("[TrackpadGesture] System woke from sleep, scheduling stabilized touch reinitialization...")
-            self?.wakeReinitWorkItem?.cancel()
+            self.wakeReinitWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in
                 guard let self = self else { return }
                 runtimeLog("[TrackpadGesture] Hardware bus stabilized, re-listening devices...")
                 self.startListeningIfEnabled()
             }
-            self?.wakeReinitWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+            self.wakeReinitWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
         })
     }
 
@@ -281,7 +284,13 @@ public final class TrackpadGestureManager {
             }
         }
         activeDevices.removeAll()
-        // 关键时序防御 3：在设备完全停机且回调已解除之后，才释放 CFArray 设备列表
+        // 关键时序防御 3：在设备停机后延迟释放 CFArray，确保 MultitouchSupport 内部异步工作线程 (mt_ThreadedMTEntry)
+        // 有充足时间 (5s) 彻底关闭并退出，杜绝内核/框架工作线程访问已释放 MTDeviceRef 导致的 SIGSEGV 崩溃！
+        if let staleList = activeDeviceList {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5.0) {
+                _ = staleList
+            }
+        }
         activeDeviceList = nil
         isListening = false
         cycleState = TouchCycleState()

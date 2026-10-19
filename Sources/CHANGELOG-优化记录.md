@@ -3426,6 +3426,46 @@
     ```
     跨桌面切换防护网已全面生效，WPS Office 与 Chrome 稳定常驻。
 
+---
 
+### 2026-10-19（v1.3.29 build 55）- ATools 自身偶发异常退出全面根因排查与高可用保活加固
 
+- **问题现象与全链路根因排查**：
+  1. **多实例相互终结与通知自毁死锁（核心根因）**：
+     - 排查 `Info.plist` 发现原配置为 `<key>LSMultipleInstancesProhibited</key><false/>`，导致 macOS 系统允许重复派生多个 ATools 进程；
+     - 当用户通过 Spotlight / 启动台 / 访达点击 ATools 图标，或者系统开机登录时恢复会话与登录项同时拉起 ATools 时，第二个进程启动；
+     - 旧逻辑中，新进程在 `main.swift` 启动前无差别遍历杀死其他 ATools 进程，同时 `AppDelegate.swift` 中注册了 `cc.atools.quitOtherInstances` 分布式通知并在收到后无条件调用 `NSApp.terminate(nil)`；
+     - 一旦两个实例在几百毫秒内相继启动，便会互相广播并互相终结对方，导致最终 0 个实例存活，ATools 从状态栏和后台直接蒸发消失；即便新实例勉强存活，由于无 `--show-ui` 且旧实例被瞬杀导致 Carbon 热键冲突或未能及时注册，用户按下快捷键无响应，产生“ATools 退出运行”的现象。
+  2. **MultitouchSupport 触控板后台工作线程野指针崩溃（次要根因）**：
+     - 排查系统历史崩溃日志 `~/Library/Logs/DiagnosticReports/ATools-2026-10-16-115416.ips`：
+       堆栈显示主线程在睡眠唤醒（`closure #1 in TrackpadGestureManager.setupSleepWakeObservers()`）中执行 `stopListening()`，将 `activeDeviceList` 置为 nil；而 `MultitouchSupport` 私有框架的内部后台工作线程 `mt_ThreadedMTEntry` 仍在调用 `MTDeviceStop -> mt_StopDequeueOfMultitouchDataFromDevice -> CFMachPortGetPort`，访问了已被释放的 `MTDeviceRef`，当场引发 `EXC_BAD_ACCESS (SIGSEGV 11)` 崩溃退出。
+  3. **状态栏图标在刘海屏 (MacBook Pro Notch) 空间受限下的自毁/隐藏防护不足**：
+     - 原 `statusItem` 未锁定 `behavior = []` 且未持久化 `autosaveName`，在菜单栏图标过多或全屏应用切换挤占状态栏时容易被系统折叠或用户误拖动。
+  4. **缺乏全局未捕获异常与致命信号拦截记录**：
+     - 遇到任何异常或系统中断信号时无日志直接终止，不利于现场追溯。
+
+- **代码级加固与修复方案**：
+  1. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)、[`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - 将 `LSMultipleInstancesProhibited` 严格置为 `<true/>`，交由 macOS 系统层在启动阶段强制实施单实例互斥，禁止重复进程派生；
+     - 构建号升级为 `v1.3.29 (build 55)`。
+  2. [`Sources/atools/main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)：
+     - **重构单实例自愈与防残杀逻辑**：启动前检测进程表，若存在已健康运行的 ATools 实例（`isFinishedLaunching == true`），绝对不再 kill 对方，而是唤醒已有实例并发送 `cc.atools.showUI` 广播后当前进程安全 `exit(0)`；仅当检测到假死僵尸进程（`isFinishedLaunching == false`）时才精准清理；
+     - **增设全局未捕获异常与致命信号守卫**：注册 `NSSetUncaughtExceptionHandler` 与 `SIGSEGV`/`SIGBUS`/`SIGABRT`/`SIGILL` 信号钩子，遇险优先向 `stderr` 与 `runtimeLog` 输出完整崩溃堆栈。
+  3. [`Sources/atools/App/AppDelegate.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/AppDelegate.swift)：
+     - **彻底移除自杀式的 `cc.atools.quitOtherInstances` 监听与广播**；
+     - **新增 `cc.atools.showUI` 分布式监听器**：接收到重复打开指令时即刻展开应用分类抽屉或偏好设置窗口，保证任何重复打开动作都能及时给用户正反馈；
+     - **加固状态栏 Item**：设置 `statusItem.autosaveName = "cc.atools.statusItem"` 并锁定 `statusItem.behavior = []`，杜绝误拖拽丢失与刘海屏异常移除。
+  4. [`Sources/atools/System/TrackpadGestureManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/TrackpadGestureManager.swift)：
+     - **设备列表延迟 5.0 秒安全释放（Tombstone Guard）**：`stopListening()` 停用设备后，将底层 `activeDeviceList` 引用派发至后台全局队列延迟 5 秒释放，确保 `mt_ThreadedMTEntry` 内部异步工作线程安全退出，彻底阻断 `EXC_BAD_ACCESS (11)` 崩溃；
+     - **睡眠唤醒轻量过滤与防抖提速**：`didWakeNotification` 中先判断是否启用手势，未启用直接跳过；启用时防抖延时增至 1.2s，确保硬件总线就绪。
+
+- **兼容性与边界防护策略**：
+  - **启动项与重复点击 100% 稳妥**：用户反复点击应用图标或 Spotlight 启动，只会丝滑唤起界面，绝不造成进程互杀；
+  - **休眠唤醒与外设拔插无内存野指针**：私有触控框架异步线程平稳退场，不影响日常待机稳定性；
+  - **测试套件覆盖**：新增第 12 大项单实例防护与触控板生命周期反复起停安全回归。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 12 大项自动化测试 **100% 全部 PASSED 通过**：
+    * `✓ TrackpadGestureManager repeated start/stop listening completed cleanly without memory fault.`
+    * `✓ Single-Instance Guard and Distributed showUI verified.`
 

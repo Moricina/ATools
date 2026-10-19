@@ -75,29 +75,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("cc.atools.quitOtherInstances"),
+            forName: NSNotification.Name("cc.atools.showUI"),
             object: nil,
             queue: .main
-        ) { notif in
-            guard let senderPidStr = notif.object as? String,
-                  let senderPid = pid_t(senderPidStr),
-                  senderPid != getpid(),
-                  senderPid > 0 else { return }
-            // 严格验证发送者真实存在且必须为 ATools 自身 Bundle，防止被恶意伪造或非法空值误杀
-            if let senderApp = NSRunningApplication(processIdentifier: senderPid),
-               let bundleID = senderApp.bundleIdentifier,
-               bundleID.hasPrefix("cc.atools.app") {
-                runtimeLog("[AppDelegate] Verified another ATools instance (PID \(senderPid)) launched, exiting current instance cleanly.")
-                NSApp.terminate(nil)
+        ) { [weak self] _ in
+            guard self != nil else { return }
+            runtimeLog("[AppDelegate] Received cc.atools.showUI distributed notification, bringing up interface")
+            if ConfigManager.shared.config.enableShelfPanel {
+                PanelCoordinator.shared.showShelfPanel()
+            } else {
+                SettingsWindowController.shared.showSettingsWindow()
             }
         }
-
-        DistributedNotificationCenter.default().postNotificationName(
-            NSNotification.Name("cc.atools.quitOtherInstances"),
-            object: "\(getpid())",
-            userInfo: nil,
-            deliverImmediately: true
-        )
 
         if CommandLine.arguments.contains("--show-ui") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -147,6 +136,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem.autosaveName = "cc.atools.statusItem"
+        statusItem.behavior = []
         if let button = statusItem.button {
             button.image = ThumbnailPipeline.shared.symbolIcon(name: "magnifyingglass", pointSize: 16, weight: .medium)
             button.toolTip = "ATools - 快速启动与全盘搜索"

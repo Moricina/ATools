@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.28}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-54}"
+VERSION="${ATOOLS_VERSION:-1.3.29}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-55}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -51,7 +51,7 @@ if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; t
     <key>LSUIElement</key>
     <true/>
     <key>LSMultipleInstancesProhibited</key>
-    <false/>
+    <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>

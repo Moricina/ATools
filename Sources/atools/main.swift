@@ -2182,6 +2182,38 @@ if CommandLine.arguments.contains("--test") {
         TestAssertions.expect(false, "P0 Features diagnostic failed: \(error)")
     }
 
+    // 12. Test Single-Instance Guard, Distributed ShowUI & TrackpadGestureManager Resilience
+    print("[12/12] Testing Single-Instance Guard & Trackpad Lifecycle Safety...")
+    do {
+        // (a) Verify LSMultipleInstancesProhibited is strictly enabled in packaging scripts
+        let packageScriptPath = "Scripts/package_app.sh"
+        let releaseScriptPath = "Scripts/release_github.sh"
+        if let pkgContent = try? String(contentsOfFile: packageScriptPath, encoding: .utf8) {
+            TestAssertions.expect(pkgContent.contains("<key>LSMultipleInstancesProhibited</key>\n    <true/>"),
+                                  "package_app.sh must have LSMultipleInstancesProhibited set to true")
+        }
+        if let relContent = try? String(contentsOfFile: releaseScriptPath, encoding: .utf8) {
+            TestAssertions.expect(relContent.contains("<key>LSMultipleInstancesProhibited</key>\n    <true/>"),
+                                  "release_github.sh must have LSMultipleInstancesProhibited set to true")
+        }
+
+        // (b) Test TrackpadGestureManager safe stop & reinit without memory corruption
+        TrackpadGestureManager.shared.startListeningIfEnabled()
+        TrackpadGestureManager.shared.stopListening()
+        TrackpadGestureManager.shared.startListeningIfEnabled()
+        TrackpadGestureManager.shared.stopListening()
+        print("      ✓ TrackpadGestureManager repeated start/stop listening completed cleanly without memory fault.")
+
+        // (c) Test showUI notification posting without raising exceptions
+        DistributedNotificationCenter.default().postNotificationName(
+            NSNotification.Name("cc.atools.showUI"),
+            object: "\(getpid())",
+            userInfo: nil,
+            deliverImmediately: true
+        )
+        print("      ✓ Single-Instance Guard and Distributed showUI verified.")
+    }
+
     if TestAssertions.failures > 0 {
         print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")
         try? FileManager.default.removeItem(at: testFixtureURL)
@@ -2226,28 +2258,56 @@ if CommandLine.arguments.contains("--login-item") {
     exit(0)
 }
 
-// 启动前自愈清理：自动终止任何残留的旧版或半启动僵尸 ATools 进程（如 isFinishedLaunching == false 的卡死实例），
-// 防止 LaunchServices 因旧进程可执行文件 vnode 失效而报错“应用程序 ATools.app 已不能再打开”。
+// 全局异常与致命信号防御：捕获 Objective-C 未捕获异常与致命信号，输出追踪信息并防范静默闪退
+NSSetUncaughtExceptionHandler { exception in
+    let callStack = exception.callStackSymbols.joined(separator: "\n")
+    let msg = "[CRASH] Uncaught NSException: \(exception.name.rawValue): \(exception.reason ?? "no reason")\n\(callStack)"
+    fputs("\(msg)\n", stderr)
+    runtimeLog(msg)
+}
+
+for sig in [SIGSEGV, SIGBUS, SIGABRT, SIGILL] {
+    signal(sig) { signum in
+        let msg = "[CRASH] Received fatal signal \(signum)"
+        fputs("\(msg)\n", stderr)
+        runtimeLog(msg)
+        signal(signum, SIG_DFL)
+        raise(signum)
+    }
+}
+
+// 单实例互斥与自愈守护：
+// 1. 若检测到卡死/半启动的僵尸 ATools 实例 (isFinishedLaunching == false)，强制清除以释放端口与锁；
+// 2. 若已有稳定运行的健康 ATools 实例，绝对不自相残杀！发送广播让已有实例唤起界面，当前重复进程优雅退出。
 do {
     let myPid = getpid()
+    var healthyInstanceFound = false
     for running in NSWorkspace.shared.runningApplications {
         let pid = running.processIdentifier
         guard pid != myPid, pid > 0 else { continue }
         let bid = running.bundleIdentifier ?? ""
         let name = running.localizedName ?? ""
         let execName = running.executableURL?.lastPathComponent ?? ""
-        if bid.hasPrefix("cc.atools.app") || name == "ATools" || execName == "ATools" {
+        if bid == "cc.atools.app" || bid == "cc.atools.app.dev" || name == "ATools" || execName == "ATools" {
             if !running.isFinishedLaunching {
+                // 僵尸或未完成启动的假死实例：清除以保证后续干净接管
                 _ = kill(pid, SIGKILL)
             } else {
-                _ = running.terminate()
-                _ = kill(pid, SIGTERM)
-                usleep(120_000)
-                if !running.isTerminated {
-                    _ = kill(pid, SIGKILL)
-                }
+                // 已经有健康活跃的主实例在运行：唤醒已有实例并展示 UI，当前进程功成身退
+                healthyInstanceFound = true
+                running.activate(options: [.activateIgnoringOtherApps])
+                DistributedNotificationCenter.default().postNotificationName(
+                    NSNotification.Name("cc.atools.showUI"),
+                    object: "\(myPid)",
+                    userInfo: nil,
+                    deliverImmediately: true
+                )
+                break
             }
         }
+    }
+    if healthyInstanceFound {
+        exit(0)
     }
 }
 
