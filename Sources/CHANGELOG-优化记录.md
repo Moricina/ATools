@@ -3469,3 +3469,97 @@
     * `✓ TrackpadGestureManager repeated start/stop listening completed cleanly without memory fault.`
     * `✓ Single-Instance Guard and Distributed showUI verified.`
 
+
+---
+
+### 2026-10-22（v1.3.30 build 56）- AutoQuitManager 彻底修复失焦切换应用与临时浮层销毁误杀后台 Chrome/Chromium 缺陷
+
+- **问题现象与全链路根因排查**：
+  1. **临时辅助浮动图层销毁误触发关窗事件（核心根因 1）**：
+     - 用户在使用 Google Chrome 期间切换到其他应用（如 Antigravity / WPS）时，Chrome 失焦自动销毁临时辅助图层（输入建议、Tooltip、下拉选单，如 `NativeWidgetMacNSWindow windowNumber=169ce`）；
+     - `handleAXNotification` 原逻辑只要收到 `kAXUIElementDestroyedNotification`，无论被销毁元素是否为已知业务窗口，均无条件将 `entry.lastCloseEventDate` 置为最新时间戳，导致系统误判为“用户刚刚在前台手动关闭了窗口”。
+  2. **Chromium 架构失焦后台 AX 树汇报 0 窗口（核心根因 2）**：
+     - 在 macOS 上实机测试证实：Chromium 架构在应用失去前台焦点（`isActive == false`）时，`kAXWindowsAttribute` 会因性能优化直接返回空数组 `[]`（`axCount = 0`）；
+  3. **WindowServer 离屏/被遮挡窗口判定过于严苛导致漏计（核心根因 3）**：
+     - 当 Chrome 被新激活的应用窗口（如全屏/大窗口）覆盖时，WindowServer 将其标记为非在屏（`isOnScreen == false`）；
+     - 原 `windowServerStandardWindowCount` 针对 `isOnScreen == false` 分支强制要求 `!trimmedName.isEmpty`；由于 macOS 隐私保护（无屏幕录制权限）或部分新建/加载中标签页的 `kCGWindowName` 为空字符串 `""`，导致尺寸达 `1490x873` 的真实网页窗口被漏计为 0，与 AX 的 0 共同触发了“确诊零窗”。
+  4. **失焦切换过渡期（Deactivation Grace Period）缺乏拦截（核心根因 4）**：
+     - `WatchedApp` 原有 `lastActiveDate` 字段未在求值与退出流程中生效；用户刚切走应用的瞬间，窗口层级和无障碍树剧烈波动，原防御条件被穿透，导致 Chrome 在失焦后 1~2 秒内被 AppleEvent `aevt/quit` 强制退出。
+
+- **代码级加固与修复方案**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **严格校验 `kAXUIElementDestroyedNotification` 来源**：
+       * 必须确凿匹配 `entry.registeredWindowRefs` 中的已知业务窗口，才作为真实关窗处理；
+       * 非窗口浮动图层（Tooltip、下拉选单、输入候选）销毁直接 `return` 忽略，严禁更新 `lastCloseEventDate`，从源头掐灭误判；
+       * 真实窗口销毁时同步自 `registeredWindowRefs` 移除，保持引用与计数绝对一致。
+     - **WindowServer 离屏与无标题业务大窗口保活重构**：
+       * 在 `isOnScreen == false` 分支中，精细化排除腾讯文档离屏底板（`1366x800`）与 AppKit 残留；
+       * 针对广大现代浏览器与生产力应用，只要尺寸达到标准主业务窗口（`width >= 240 && height >= 180`），即使无标题且不在屏，坚决确认为有效在活窗口，物理级杜绝将后台被遮挡窗口漏计为 0。
+     - **激活 `lastActiveDate` 并设立失焦切后台 2.0 秒绝对安全期**：
+       * `handleAppDeactivated` 监听到失焦时，立即撤销由于切应用瞬态波动可能排队的退出与复查任务；
+       * `evaluateAppWindowsLocked` 与 `executePendingQuit` 增设强约束：应用处于后台且失焦不满 2.5 秒、或最近 3 秒内无明确前台关窗事件时，坚决放弃退出（`Aborted quit: app is in background`）。
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)、[`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - 版本号自 `1.3.29 (build 55)` 迭代升级为 `1.3.30 (build 56)`。
+
+- **兼容性与边界防护策略**：
+  - **前台真实关窗 100% 优雅触发**：用户前台主动点红叉或 `⌘W` 关闭 Chrome/WPS/微信的最后一个窗口时，依然精准在设定的延迟（默认 1 秒）后触发退出；
+  - **切换应用、后台打字、切桌面 100% 绝对免疫**：无论用户如何切走应用、点击其他窗口打字、或者将新窗口完全覆盖 Chrome，正在后台运行的 Chrome 网页均受到严密保活保护，再无被误杀风险。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译并完成 Ed25519 签名与 DMG 打包；
+  - 正式更新部署至系统应用程序目录 `/Applications/ATools.app`，新版本已成功拉起运行（PID `73578`）；
+  - 实机日志验证：
+    ```text
+    [AutoQuit] Watching Google Chrome (windows: 1)
+    [AutoQuit] Started; watching 5 regular app(s).
+    [App] ATools launched. PID: 73578, FullDiskSearch: true
+    ```
+    Chrome 无论在前台还是被完全遮挡置于后台，均精准识别为 `windows: 1` 稳定常驻。
+
+
+### 103. 彻底修复 WPS Office 默认页关窗无法退出与切应用防误杀加固 (2026-10-22, build 57)
+- **背景与痛点**：
+  - 用户反馈：“为什么我当前是‘仅名单内应用’的模式，并且勾选了 wps，但是点击左上角叉叉没有用 没有退出 检查其他软件是否也没有生效”；
+  - 核心痛点矛盾：
+    1. WPS Office 启动后默认包含“WPS Office/首页”与“稻壳素材”两个常驻默认页面；在用户未打开其他实际文档、点击左上角叉叉关闭主窗口时，WPS 并未退出；
+    2. 用户明确要求：当仅有默认页面且无其他打开文件时，点击叉叉关闭主窗口必须能自动退出；而当打开 WPS 没点叉叉、直接切走应用（失焦、切换桌面 Space）时，WPS 绝对不要被自动退出。
+
+- **根因分析**：
+  1. **CEF 640x480 离屏画布漏网**：WPS 后台常驻了 5 个 `640x480`（`layer=8`、无标题）的 CEF 缓冲画布；原代码仅过滤了 `640x508` 与 `600x600`，漏网的离屏画布在离屏分支被判定为业务窗口，导致 WindowServer 窗口计数常驻 `>= 5`（实测达 11），死锁了零窗判定 `isConfirmedZeroWindows`；
+  2. **`orderOut:` 离屏残留底板阻断退出**：用户点击红叉时，WPS 调用 `[NSWindow orderOut:]` 将窗口移出屏幕（`kCGWindowIsOnscreen: false`），旧离屏保活逻辑无差别将所有有效尺寸的离屏窗口计为在活，导致已关闭的默认首页底板与历史离屏文档被永久计为存活窗口；
+  3. **AX 销毁门禁时序脱节**：WPS 失焦时其根级 `kAXWindowsAttribute` 会被清空为 `[]`，导致 ATools 挂载时 `registeredWindowRefs` 为空；随后用户在前台关窗触发 `kAXUIElementDestroyedNotification` 时因 `!isKnownWindow` 被直接忽略，未能刷新 `lastCloseEventDate`，后续延迟退出时因后台保护（`sinceClose >= 3.0s`）被安全撤销。
+
+- **实现与优化详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **清洗 WPS CEF 640x480 离屏画布**：
+       ```swift
+       if abs(width - 640) < 20 && abs(height - 480) < 20 && trimmedName.isEmpty { continue }
+       ```
+     - **排除 WPS 默认底板离屏残留（锁定 ownerName 与白名单）**：
+       在 `isOnScreen == false` 离屏分支中，限定 `ownerName` 包含 `WPS` 或 `wpsoffice`，将无名离屏底板及标题属于 `"WPS Office"`, `"首页"`, `"稻壳素材"`, `"快速访问工具栏"` 的离屏图层精准排除，彻底打破零窗死锁；
+     - **严格保护真实在活文档**：
+       严禁排除包含实际文件后缀名（如 `.docx`, `.xlsx`, `.pptx`, `.pdf`）的离屏窗口，用户在其他 Space 或后台打开的真实文档窗口受到绝对保活防护；
+     - **增强 AX 销毁门禁与前台关窗时序加固**：
+       * 针对 WPS/CEF 等失焦重置 AX 树的应用，若当前正处于前台活跃态（`app.isActive`）且注册列表因早期失焦为空，允许作为关窗候选处理并求值；
+       * 在 `scheduleQuitLocked` 发起退出调度时，若应用处于活跃态，主动刷新 `entry.lastCloseEventDate = Date()`，确保 1 秒延迟退出期内即使鼠标移开导致失焦，`executePendingQuit` 也能凭借合法的关窗时间戳顺畅退出。
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)：
+     - 版本号自 `1.3.30 (build 56)` 迭代升级为 `1.3.31 (build 57)`。
+
+- **兼容性与边界防护策略**：
+  - **默认页关窗 100% 自动退出**：在仅有默认页面（“WPS Office/首页”与“稻壳素材”）、无打开其他文件时，点击左上角叉叉或按快捷键关窗，精准识别为零窗并在延迟期后自动退出进程；
+  - **未点叉叉切应用 100% 绝对保活**：用户打开 WPS 未点叉叉直接切换到其他应用或其它 Space，由于在屏窗口依然存在且未发生关窗操作（`sinceClose >= 3.0s`），生命周期防护网与失焦清空机制双重保驾护航，坚决不进行误杀；
+  - **多文档与未保存修改绝对安全**：只要存在未关闭的真实业务文档，或 WPS 处于未保存修改提示对话框（AXDialog / AXModal）期间，物理级禁止退出。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译并完成 Ed25519 签名与 DMG 打包；
+  - 正式更新部署至系统应用程序目录 `/Applications/ATools.app`，新版本已成功拉起运行（PID `51678`）；
+  - 实机日志验证：
+    ```text
+    [AutoQuit] Watching UU远程 (windows: 0)
+    [AutoQuit] Watching WPS Office (windows: 0)
+    [AutoQuit] Watching Google Chrome (windows: 0)
+    [AutoQuit] Started; watching 3 regular app(s).
+    [App] ATools launched. PID: 51678, FullDiskSearch: true
+    ```

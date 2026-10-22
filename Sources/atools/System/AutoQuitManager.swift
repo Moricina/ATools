@@ -305,9 +305,10 @@ public final class AutoQuitManager {
             // 小型代理/光标/状态图标
             if width <= 80 && height <= 60 { continue }
 
-            // CEF 离屏缓冲画布 (640x508, 600x600)
+            // CEF 离屏缓冲画布 (640x508, 600x600, 640x480)
             if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
             if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
+            if abs(width - 640) < 20 && abs(height - 480) < 20 && trimmedName.isEmpty { continue }
 
             let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
 
@@ -331,12 +332,33 @@ public final class AutoQuitManager {
                     continue
                 }
 
+                // 特殊排除：腾讯文档关闭后的特定离屏缓存底板 (1366x800)
+                let isTencentDocsResidual = (ownerName.contains("QQEXDOC") || ownerName.contains("TencentDocs"))
+                    && abs(width - 1366) < 20 && abs(height - 800) < 20
+                if isTencentDocsResidual {
+                    continue
+                }
+
+                // 特殊排除：WPS Office 在用户关闭窗口后，AppKit orderOut 机制移出屏幕的默认底板与无名离屏图层
+                let isWPS = ownerName.contains("WPS") || ownerName.contains("wpsoffice")
+                if isWPS {
+                    if trimmedName.isEmpty { continue }
+                    let defaultWpsTitles: Set<String> = [
+                        "WPS Office", "首页", "稻壳素材", "快速访问工具栏"
+                    ]
+                    if defaultWpsTitles.contains(trimmedName) { continue }
+                }
+
                 // 核心保活防御：对于 Win11 虚拟机 (Parallels Desktop)、Chrome、WPS、ZCode、微信等第三方业务应用，
-                // 当用户切换应用、全屏虚拟机、或者在另一个虚拟桌面 (Space) 工作时，
-                // 其真实主业务窗口在 WindowServer 中真实存在且具有明确的业务标题（!trimmedName.isEmpty）。
-                // 必须确认为有效在活窗口，绝不能因 isOnScreen 为 false 造成误杀！
-                // 注意：对于不在屏且无标题的离屏窗口（如腾讯文档关闭后的 1366x800 底板、CEF/AppKit 占位底板），绝对不能计入！
+                // 当用户切换应用、全屏虚拟机、或者在另一个虚拟桌面 (Space) 工作时：
+                // 1) 若拥有窗口标题且尺寸有效（!trimmedName.isEmpty && width > 160 && height > 100），确认为有效在活窗口；
+                // 2) 若在后台或因 macOS 权限/无痕/新建标签页导致 trimmedName 为空，但尺寸已达到标准主业务窗口（width >= 240 && height >= 180），
+                //    其真实实体窗口在 WindowServer 中客观存在，绝不能因 isOnScreen 为 false 造成误杀！
                 if !trimmedName.isEmpty && width > 160 && height > 100 {
+                    count += 1
+                    continue
+                }
+                if width >= 240 && height >= 180 {
                     count += 1
                     continue
                 }
@@ -480,6 +502,10 @@ public final class AutoQuitManager {
         if var entry = watched[pid] {
             entry.lastActiveDate = Date()
             watched[pid] = entry
+            // 关键安全防御：切走应用（失焦）说明用户正在切换应用/切换工作上下文，而不是主动关窗！
+            // 立即撤销失焦瞬间因瞬态波动可能发起的退出调度与复查任务！
+            cancelPendingQuitLocked(pid)
+            cancelPendingRecheckLocked(pid)
         }
     }
 
@@ -577,9 +603,21 @@ public final class AutoQuitManager {
             }
         } else if notificationName == (kAXWindowClosedNotification as String)
                     || notificationName == (kAXUIElementDestroyedNotification as String) {
+            let isKnownWindow = entry.registeredWindowRefs.contains(where: { CFEqual($0, element) })
+
+            // 关键安全防御：对于 kAXUIElementDestroyedNotification，通常必须属于已注册的标准业务窗口；
+            // 针对 WPS / CEF 等失焦重置 AX 树的应用，若当前正处于前台激活态（app.isActive）
+            // 且 registeredWindowRefs 因早期失焦为空，允许作为关窗候选处理并执行严谨求值
+            if notificationName == (kAXUIElementDestroyedNotification as String) && !isKnownWindow {
+                if !entry.app.isActive || !entry.registeredWindowRefs.isEmpty {
+                    return
+                }
+            }
+
+            // 确认为窗口销毁，从已注册窗口列表中移除该窗口引用
+            entry.registeredWindowRefs.removeAll(where: { CFEqual($0, element) })
             entry.lastCloseEventDate = Date()
             if !entry.hadWindows {
-                let isKnownWindow = entry.registeredWindowRefs.contains(where: { CFEqual($0, element) })
                 if notificationName == (kAXWindowClosedNotification as String) || isKnownWindow {
                     entry.hadWindows = true
                 }
@@ -607,6 +645,14 @@ public final class AutoQuitManager {
 
         // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，撤销退出调度
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
+            cancelPendingQuitLocked(pid)
+            cancelPendingRecheckLocked(pid)
+            return
+        }
+
+        // 安全防护 3：应用刚失焦切换到后台的过渡期（2.0 秒内）冻结零窗杀进程
+        // 切应用瞬间窗口层级与 AX 状态发生剧烈翻转，且可能伴随输入法/Tooltip 等微小辅助元素销毁，绝不能借机发起退出调度
+        if !app.isActive && Date().timeIntervalSince(entry.lastActiveDate) < 2.0 {
             cancelPendingQuitLocked(pid)
             cancelPendingRecheckLocked(pid)
             return
@@ -728,6 +774,12 @@ public final class AutoQuitManager {
         guard pendingQuits[pid] == nil else { return }
         guard !terminatingPids.contains(pid) else { return }
 
+        // 前台确诊零窗时的主动时序加固：刷新最后关窗时间戳，确保延迟退出期间即使失焦也能顺利终审
+        if app.isActive, var entry = watched[pid] {
+            entry.lastCloseEventDate = Date()
+            watched[pid] = entry
+        }
+
         let configuredDelay = max(0, min(10, ConfigManager.shared.config.autoQuitDelaySeconds))
         let delaySeconds = Double(configuredDelay)
 
@@ -786,10 +838,15 @@ public final class AutoQuitManager {
             return
         }
 
-        // 关键安全防御 3：若应用当前处于失焦/后台状态且最近 5 秒内从未收到过关窗事件，坚决放弃退出，杜绝切换 Space 或切换应用误杀
-        if !app.isActive && Date().timeIntervalSince(entry.lastCloseEventDate) >= 5.0 {
-            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is in background with no recent close event.")
-            return
+        // 关键安全防御 3：若应用当前处于失焦/后台状态，且失焦过渡期或近期无前台主动关窗，坚决放弃退出
+        if !app.isActive {
+            let sinceActive = Date().timeIntervalSince(entry.lastActiveDate)
+            let sinceClose = Date().timeIntervalSince(entry.lastCloseEventDate)
+            // 如果刚切到后台不久（< 2.5s），或者最近根本没有收到过明确的窗口销毁事件（>= 3.0s），坚决放弃
+            if sinceActive < 2.5 || sinceClose >= 3.0 {
+                runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is in background (sinceActive=\(String(format: "%.1f", sinceActive))s, sinceClose=\(String(format: "%.1f", sinceClose))s).")
+                return
+            }
         }
         let cfg = ConfigManager.shared.config
         guard cfg.enableAutoQuit else { return }

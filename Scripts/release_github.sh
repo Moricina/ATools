@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.29}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-55}"
+VERSION="${ATOOLS_VERSION:-1.3.31}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-57}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -108,24 +108,18 @@ fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 
-### 🛡️ 虚拟化平台与 Windows 子应用物理级永久豁免
-1. **全链路物理级豁免防护网**：
-   - 新增 \`isProtectedVirtualizationApp\` 物理级防火墙，针对 \`com.parallels.\` 前缀及包含 parallels 的所有进程（包括 Parallels Desktop 控制台、Windows 11 虚拟机主核心、Dock Helper、Coherence Helper 以及所有 Windows 映射应用 Stub）执行 100% 永久物理级豁免；
-   - 绝不纳管、不轮询、不终止虚拟机及其子应用，彻底终结切换应用时 Windows 虚拟机崩溃与未保存数据丢失风险；
-   - 同步硬排除 VMware Fusion (\`com.vmware.\`)、UTM (\`com.utmapp.\`)、VirtualBox (\`org.virtualbox.\`)、Docker Desktop (\`com.docker.\`) 与 Android 模拟器。
-
-### 🪟 跨虚拟桌面 (Spaces) / 全屏切换误杀彻底终结与三重防护网
-1. **彻底移除后台静默应用的无差别轮询**：
-   - 明确生命周期契约：AutoQuit 仅允许对“当前前台活跃应用（\`app.isActive\`）”或“最近 3 秒内接收到明确窗口关闭通知（\`recentlyHadCloseEvent\`）”的应用执行零窗求值；
-   - 处于后台静默运行的应用绝对不进行轮询扫描，从根源上杜绝后台定时器在全屏或多桌面下偷袭杀进程；
-2. **Space 切换重构**：
-   - 检测到虚拟桌面切换时，直接撤销已排队的退出任务，彻底移除旧有的 2.5 秒延时复查自杀机制；
-3. **\`executePendingQuit\` 终极防线兜底拦截**：
-   - 在 1 秒倒计时结束准备调用终止的瞬间：只要应用当前处于失焦/后台状态且最近 5 秒内从未发生过任何真实的窗口关闭通知，坚决撤销退出，保障 WPS Office、Chrome、微信等后台软件稳定常驻。
-
-### ⚡ 腾讯文档等 CEF/Electron 应用关窗退出精准适配
-1. **WindowServer 离屏底板精准过滤**：
-   - 精准过滤腾讯文档等 CEF 应用在关闭所有文档后残留的离屏无标题缓冲底板（1366x800），修复关闭文档后应用停留在 Dock 栏不退出的问题，恢复精准优雅退出。"
+### 📝 WPS Office 关窗自动退出与切应用防误杀全面加固
+1. **WPS 专属 CEF 离屏画布清洗**：
+   - 精准过滤 WPS Office 常驻后台的 5 个 \`640x480\`（\`layer=8\`、无标题）CEF 缓冲画布，彻底打破 WindowServer 窗口计数的零窗确诊死锁；
+2. **默认首页/稻壳素材底板精准识别**：
+   - 当用户前台点击左上角叉叉关闭 WPS 主窗口时，窗口调用 \`orderOut:\` 移出屏幕；
+   - 离屏分支精准排除无名离屏底板及标题属于 \`\"WPS Office\"\`, \`\"首页\"\`, \`\"稻壳素材\"\`, \`\"快速访问工具栏\"\` 的残留图层；在只有默认页面无其他文件时，关窗秒级自动平稳退出；
+3. **真实编辑文档绝对安全隔离**：
+   - 包含具体文件名后缀（如 \`.docx\`, \`.xlsx\`, \`.pptx\`, \`.pdf\` 等）的窗口受到物理级保活保护；未保存修改弹出的保存对话框均受模态拦截保护，绝不强杀未保存进程；
+4. **切应用/切桌面 100% 坚固保活**：
+   - 用户打开 WPS 但未点击叉叉直接切换到其他应用或桌面（Space）时，后台应用生命周期校验网与关窗时间戳机制（\`sinceClose >= 3.0s\`）立即生效，绝对不进行误杀，稳定常驻；
+5. **AX 销毁通知容错与前台时序加固**：
+   - 增强 AX 销毁门禁容错，避免 WPS 因失焦重置 AX 树导致关窗事件被丢弃；前台确诊零窗时主动刷新关窗时间戳，确保延迟期内即使失焦也能顺畅终审退出。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
