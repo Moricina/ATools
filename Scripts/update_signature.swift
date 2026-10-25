@@ -15,10 +15,10 @@ enum UpdateSignatureError: Error, CustomStringConvertible, LocalizedError {
             用法:
               update_signature.swift keygen <私钥文件>
               update_signature.swift public-key <私钥文件>
-              update_signature.swift sign <私钥文件> <安装包> [签名文件]
-              update_signature.swift verify <公钥 Base64> <安装包> <签名文件>
+              update_signature.swift sign <私钥文件> <安装包> [签名文件] [--version <ver>] [--asset-name <name>]
+              update_signature.swift verify <公钥 Base64> <安装包> <签名文件> [--version <ver>] [--asset-name <name>]
 
-            签名内容为安装包 SHA-256 摘要的 Ed25519 签名，签名文件使用 Base64 文本。
+            签名内容默认支持 Canonical 绑定（版本+文件名+文件摘要）与原始 SHA-256 双模兼容。
             """
         case .invalidKey(let message):
             return "密钥无效: \(message)"
@@ -28,6 +28,12 @@ enum UpdateSignatureError: Error, CustomStringConvertible, LocalizedError {
     }
 
     var errorDescription: String? { description }
+}
+
+func canonicalPayload(version: String, assetName: String, fileDigest: Data) -> Data {
+    let hexDigest = fileDigest.map { String(format: "%02x", $0) }.joined()
+    let canonicalString = "ATools-Update:\(version):\(assetName):\(hexDigest)"
+    return Data(SHA256.hash(data: Data(canonicalString.utf8)))
 }
 
 func readBase64Line(at path: String) throws -> Data {
@@ -111,20 +117,76 @@ func run() throws {
         print(try privateKey(at: arguments[1]).publicKey.rawRepresentation.base64EncodedString())
 
     case "sign":
-        guard arguments.count == 3 || arguments.count == 4 else { throw UpdateSignatureError.usage }
-        let key = try privateKey(at: arguments[1])
-        let digest = try sha256(ofFileAt: arguments[2])
+        var positional: [String] = []
+        var version: String?
+        var assetName: String?
+        var i = 1
+        while i < arguments.count {
+            let arg = arguments[i]
+            if arg == "--version" && i + 1 < arguments.count {
+                version = arguments[i + 1]
+                i += 2
+            } else if arg == "--asset-name" && i + 1 < arguments.count {
+                assetName = arguments[i + 1]
+                i += 2
+            } else {
+                positional.append(arg)
+                i += 1
+            }
+        }
+        guard positional.count == 2 || positional.count == 3 else { throw UpdateSignatureError.usage }
+        let key = try privateKey(at: positional[0])
+        let filePath = positional[1]
+        let rawDigest = try sha256(ofFileAt: filePath)
+        let resolvedAssetName = assetName ?? URL(fileURLWithPath: filePath).lastPathComponent
+        let digest: Data
+        if let ver = version, !ver.isEmpty {
+            digest = canonicalPayload(version: ver, assetName: resolvedAssetName, fileDigest: rawDigest)
+        } else {
+            digest = rawDigest
+        }
         let signature = try key.signature(for: digest)
-        let output = arguments.count == 4 ? arguments[3] : arguments[2] + ".sig"
+        let output = positional.count == 3 ? positional[2] : filePath + ".sig"
         try writeBase64(signature, to: output)
         print(output)
 
     case "verify":
-        guard arguments.count == 4 else { throw UpdateSignatureError.usage }
-        let key = try publicKey(from: arguments[1])
-        let digest = try sha256(ofFileAt: arguments[2])
-        let signature = try readBase64Line(at: arguments[3])
-        guard key.isValidSignature(signature, for: digest) else {
+        var positional: [String] = []
+        var version: String?
+        var assetName: String?
+        var i = 1
+        while i < arguments.count {
+            let arg = arguments[i]
+            if arg == "--version" && i + 1 < arguments.count {
+                version = arguments[i + 1]
+                i += 2
+            } else if arg == "--asset-name" && i + 1 < arguments.count {
+                assetName = arguments[i + 1]
+                i += 2
+            } else {
+                positional.append(arg)
+                i += 1
+            }
+        }
+        guard positional.count == 3 else { throw UpdateSignatureError.usage }
+        let key = try publicKey(from: positional[0])
+        let filePath = positional[1]
+        let rawDigest = try sha256(ofFileAt: filePath)
+        let signature = try readBase64Line(at: positional[2])
+        let resolvedAssetName = assetName ?? URL(fileURLWithPath: filePath).lastPathComponent
+
+        // 双模验证：若提供了 version，先验 Canonical 摘要，回退验 rawDigest
+        var verified = false
+        if let ver = version, !ver.isEmpty {
+            let canon = canonicalPayload(version: ver, assetName: resolvedAssetName, fileDigest: rawDigest)
+            if key.isValidSignature(signature, for: canon) {
+                verified = true
+            }
+        }
+        if !verified && key.isValidSignature(signature, for: rawDigest) {
+            verified = true
+        }
+        guard verified else {
             throw UpdateSignatureError.invalidKey("安装包签名校验失败")
         }
         print("OK")

@@ -374,15 +374,28 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return nil
     }
 
-    /// Ed25519 更新签名公钥列表（支持多密钥过渡迁移）
-    /// - 第一个为主密钥（当前活跃），后续为历史密钥（兼容旧版签名）
-    /// - 迁移完成后可移除旧密钥
+    /// 自该版本起，更新包强制执行 Canonical 结构化签名校验（绑定版本号、文件名与文件摘要），彻底移除并拒绝裸摘要回退
+    public static let canonicalEnforcementVersion = "1.3.32"
+
+    /// Ed25519 更新签名公钥列表
+    /// - 移除了历史已废弃旧公钥（HbGQoLgp...），当前保留活跃主公钥（2026-10-06 启用）
     static let updateSigningPublicKeys: [String] = [
-        "V+7AgVQr03TBI8wWe9OUB0wrypIj6CrsfLK8xPuNUxU=",  // 2026-10-06 新密钥
-        "HbGQoLgpZ8MVghAQOJIR79JC7YvkRQmzimfO2OuFE34=",  // 旧密钥（v1.2.8 及之前）
+        "V+7AgVQr03TBI8wWe9OUB0wrypIj6CrsfLK8xPuNUxU=",  // 2026-10-06 活跃主公钥
     ]
 
-    static func verifyUpdateSignature(assetURL: URL, signatureURL: URL) throws {
+    /// 计算更新包 Canonical 绑定摘要：绑定版本、文件名与文件 SHA-256，防范重放与降级
+    static func canonicalPayload(version: String, assetName: String, fileDigest: Data) -> Data {
+        let hexDigest = fileDigest.map { String(format: "%02x", $0) }.joined()
+        let canonicalString = "ATools-Update:\(version):\(assetName):\(hexDigest)"
+        return Data(SHA256.hash(data: Data(canonicalString.utf8)))
+    }
+
+    static func verifyUpdateSignature(
+        assetURL: URL,
+        signatureURL: URL,
+        expectedVersion: String? = nil,
+        assetName: String? = nil
+    ) throws {
         let signatureData = try Data(contentsOf: signatureURL)
         guard let signatureText = String(data: signatureData, encoding: .utf8) else {
             throw NSError(
@@ -400,16 +413,38 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             )
         }
 
-        let digest = try UpdateManager.sha256(ofFileAt: assetURL)
+        let rawDigest = try UpdateManager.sha256(ofFileAt: assetURL)
 
-        // 遍历所有公钥，任一通过即为合法
+        // 构造候选验签摘要（版本分水岭拦截策略）：
+        // 若目标版本 >= canonicalEnforcementVersion，强制要求 Canonical 结构化绑定验签，彻底拒绝裸文件摘要回退；
+        // 仅对历史归档包（< 1.3.32）或未指定版本的目标保留裸摘要回退。
+        var candidateDigests: [Data] = []
+        let isCanonicalEnforced: Bool
+        if let ver = expectedVersion, !ver.isEmpty {
+            isCanonicalEnforced = UpdateManager.isVersion(ver, greaterThan: canonicalEnforcementVersion)
+                || ver == canonicalEnforcementVersion
+        } else {
+            isCanonicalEnforced = false
+        }
+
+        if let ver = expectedVersion, !ver.isEmpty, let name = assetName, !name.isEmpty {
+            candidateDigests.append(canonicalPayload(version: ver, assetName: name, fileDigest: rawDigest))
+        }
+
+        if !isCanonicalEnforced {
+            candidateDigests.append(rawDigest)
+        }
+
+        // 遍历所有公钥与候选摘要，任一通过即为合法
         for publicKeyBase64 in updateSigningPublicKeys {
             guard let rawPublicKey = Data(base64Encoded: publicKeyBase64),
                   let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: rawPublicKey) else {
                 continue
             }
-            if publicKey.isValidSignature(signature, for: digest) {
-                return  // 签名校验通过
+            for digest in candidateDigests {
+                if publicKey.isValidSignature(signature, for: digest) {
+                    return  // 签名校验通过
+                }
             }
         }
 
@@ -542,7 +577,9 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             }
             try UpdateManager.verifyUpdateSignature(
                 assetURL: preparedUpdate.assetURL,
-                signatureURL: signatureURL
+                signatureURL: signatureURL,
+                expectedVersion: expectedVersion,
+                assetName: targetRelease?.assetName
             )
 
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
@@ -643,12 +680,17 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
         let currentVer = currentAppVersion
 
-        // 校验：更新包版本只要高于当前运行版本，或者与目标发布版本一致，即为合法有效更新
+        // 校验：更新包版本必须严格高于当前运行版本（防降级与同版本防重放），且必须与发布目标版本一致
         let isNewerThanCurrent = UpdateManager.isVersion(packagedVersion, greaterThan: currentVer)
         let matchesExpected = !expectedVersion.isEmpty && UpdateManager.normalizedVersion(packagedVersion) == UpdateManager.normalizedVersion(expectedVersion)
 
-        guard isNewerThanCurrent || matchesExpected else {
-            throw NSError(domain: "UpdateManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "更新包版本 (v\(packagedVersion)) 未高于当前运行版本 (v\(currentVer))"])
+        guard isNewerThanCurrent else {
+            throw NSError(domain: "UpdateManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "更新包版本 (v\(packagedVersion)) 未高于当前运行版本 (v\(currentVer))，已拦截降级安装"])
+        }
+        if !expectedVersion.isEmpty {
+            guard matchesExpected else {
+                throw NSError(domain: "UpdateManager", code: 6, userInfo: [NSLocalizedDescriptionKey: "更新包版本 (v\(packagedVersion)) 与发布目标版本 (v\(expectedVersion)) 不一致"])
+            }
         }
 
         let verifyProcess = Process()

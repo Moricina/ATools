@@ -224,7 +224,11 @@ public final class BackupService {
 
     // MARK: - 2. 恢复前内存干跑预校验 (Dry-Run Pre-Validation)
 
-    public func validateBackup(at sourceURL: URL, currentHomeOverride: String? = nil) -> Result<BackupValidationResult, BackupError> {
+    public func validateBackup(
+        at sourceURL: URL,
+        currentHomeOverride: String? = nil,
+        currentIconsDirOverride: URL? = nil
+    ) -> Result<BackupValidationResult, BackupError> {
         let standardizedURL = sourceURL.standardizedFileURL
         var isDir: ObjCBool = false
         guard fileManager.fileExists(atPath: standardizedURL.path, isDirectory: &isDir) else {
@@ -354,7 +358,7 @@ public final class BackupService {
 
         // 4. 在内存中干跑跨机图标路径与家目录路径自愈计算
         let currentHome = currentHomeOverride ?? NSHomeDirectory()
-        let currentIconsDir = ConfigManager.shared.iconsDirectoryURL
+        let currentIconsDir = currentIconsDirOverride ?? ConfigManager.shared.iconsDirectoryURL
         let (healedConfig, healedIconsCount, healedPathsCount) = Self.healPaths(
             in: decodedConfig,
             sourceHomePath: parsedManifest?.sourceUserHomePath,
@@ -518,8 +522,8 @@ public final class BackupService {
     }
 
     /// 列出所有可用的恢复前自动快照（按创建时间倒序排列，最新在前）
-    public func listPreRestoreSnapshots() -> [URL] {
-        let backupsDir = ConfigManager.shared.backupsDirectoryURL
+    public func listPreRestoreSnapshots(in customBackupsDir: URL? = nil) -> [URL] {
+        let backupsDir = customBackupsDir ?? ConfigManager.shared.backupsDirectoryURL
         guard let urls = try? fileManager.contentsOfDirectory(
             at: backupsDir,
             includingPropertiesForKeys: [.creationDateKey],

@@ -78,34 +78,86 @@ public final class ConfigManager {
         SearchExclusionEngine.shared.recompile(config: self.config)
     }
 
-    private static func loadOrCreateDefault(from url: URL) -> AtoolsConfig {
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode(AtoolsConfig.self, from: data) {
-            var cfg = decoded
-            var needsSave = false
-            // Migration for existing configs: if sidebarWidth is old wide default/dragged value (>= 88.0), migrate to new compact 84.0
-            if cfg.sidebarWidth >= 88.0 {
-                cfg.sidebarWidth = 84.0
-                needsSave = true
-            }
-            // 确保如果配置为未启用常用，不留存常用分类数据
-            if !cfg.enableFavoritesCategory && cfg.categories.contains(where: { $0.isFavorites }) {
-                cfg.categories.removeAll(where: { $0.isFavorites })
-                for i in 0..<cfg.categories.count {
-                    cfg.categories[i].sortWeight = i
+    static func loadOrCreateDefault(from url: URL) -> AtoolsConfig {
+        let storageDir = url.deletingLastPathComponent()
+        let iconsDir = storageDir.appendingPathComponent("icons", isDirectory: true)
+        let backupsDir = storageDir.appendingPathComponent("backups", isDirectory: true)
+
+        if let data = try? Data(contentsOf: url) {
+            do {
+                let decoded = try JSONDecoder().decode(AtoolsConfig.self, from: data)
+                var cfg = decoded
+                var needsSave = false
+                // Migration for existing configs: if sidebarWidth is old wide default/dragged value (>= 88.0), migrate to new compact 84.0
+                if cfg.sidebarWidth >= 88.0 {
+                    cfg.sidebarWidth = 84.0
+                    needsSave = true
                 }
-                needsSave = true
-            }
-            if needsSave {
-                if let encoded = try? JSONEncoder().encode(cfg) {
-                    try? encoded.write(to: url, options: .atomic)
+                // 确保如果配置为未启用常用，不留存常用分类数据
+                if !cfg.enableFavoritesCategory && cfg.categories.contains(where: { $0.isFavorites }) {
+                    cfg.categories.removeAll(where: { $0.isFavorites })
+                    for i in 0..<cfg.categories.count {
+                        cfg.categories[i].sortWeight = i
+                    }
+                    needsSave = true
                 }
+                if needsSave {
+                    do {
+                        let encoded = try JSONEncoder().encode(cfg)
+                        try encoded.write(to: url, options: .atomic)
+                    } catch {
+                        runtimeLog("[ConfigManager] Failed to write migrated config: \(error)")
+                    }
+                }
+                return cfg
+            } catch {
+                // 现场保全（绝对禁止直接覆写损坏的原始文件！）
+                let fmt = DateFormatter()
+                fmt.locale = Locale(identifier: "en_US_POSIX")
+                fmt.dateFormat = "yyyyMMdd-HHmmss"
+                let timestamp = fmt.string(from: Date())
+                let corruptedURL = storageDir.appendingPathComponent("config.corrupted.\(timestamp).json")
+                do {
+                    try data.write(to: corruptedURL, options: .atomic)
+                } catch {
+                    runtimeLog("[ConfigManager] Failed to preserve corrupted config: \(error)")
+                }
+                runtimeLog("[ConfigManager] CRITICAL: config.json exists but decode failed: \(error.localizedDescription). Preserved corrupted data to: \(corruptedURL.lastPathComponent)")
+
+                // 尝试从 BackupService 历史快照（pre-restore-* 与 ATools-Backup-*）中自动自愈恢复
+                let snapshots = BackupService.shared.listPreRestoreSnapshots(in: backupsDir)
+                for snapshotURL in snapshots {
+                    if case .success(let validation) = BackupService.shared.validateBackup(
+                        at: snapshotURL,
+                        currentIconsDirOverride: iconsDir
+                    ) {
+                        let healedConfig = validation.healedConfig
+                        do {
+                            let encoded = try JSONEncoder().encode(healedConfig)
+                            try encoded.write(to: url, options: .atomic)
+                        } catch {
+                            runtimeLog("[ConfigManager] Failed to write auto-healed config: \(error)")
+                        }
+                        // 还原图标
+                        for (fileName, src) in validation.iconSourceFiles {
+                            let dst = iconsDir.appendingPathComponent(fileName)
+                            if let iconData = try? Data(contentsOf: src) {
+                                try? iconData.write(to: dst, options: .atomic)
+                            }
+                        }
+                        runtimeLog("[ConfigManager] Successfully auto-healed config and custom icons from snapshot: \(snapshotURL.lastPathComponent)")
+                        return healedConfig
+                    }
+                }
+                runtimeLog("[ConfigManager] WARNING: No valid backup snapshot found for auto-healing. Falling back to default config.")
             }
-            return cfg
         }
         let defaultConfig = createDefaultConfig()
-        if let encoded = try? JSONEncoder().encode(defaultConfig) {
-            try? encoded.write(to: url, options: .atomic)
+        do {
+            let encoded = try JSONEncoder().encode(defaultConfig)
+            try encoded.write(to: url, options: .atomic)
+        } catch {
+            runtimeLog("[ConfigManager] Failed to write default config: \(error)")
         }
         return defaultConfig
     }
@@ -188,7 +240,9 @@ public final class ConfigManager {
             let data = try encoder.encode(self.config)
             try data.write(to: self.configURL, options: .atomic)
         } catch {
-            print("[ConfigManager] Failed to save config: \(error)")
+            let msg = "[ConfigManager] Failed to save config: \(error)"
+            print(msg)
+            runtimeLog(msg)
         }
     }
 

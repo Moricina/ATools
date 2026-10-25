@@ -273,7 +273,17 @@ public final class AutoQuitManager {
             "ConvTabListView", "ConvTabTopBar", "MainMenuPanelView", "Form"
         ]
 
+        let hasScreenCapture: Bool
+        if #available(macOS 11.0, *) {
+            hasScreenCapture = CGPreflightScreenCaptureAccess()
+        } else {
+            hasScreenCapture = false
+        }
+        let app = NSRunningApplication(processIdentifier: pid)
+        let isActive = app?.isActive ?? false
+
         var count = 0
+        var candidateOffscreenLargeWindows = 0
         for w in list {
             guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
             // 限制在标准业务窗体层级（Layer 0 普通窗口，Layer 3/8 浮动面板与模态对话框；排除 Layer 20 程序坞、Layer 24 状态栏及 Layer 100+ 桌面悬浮球/挂件）
@@ -349,20 +359,30 @@ public final class AutoQuitManager {
                     if defaultWpsTitles.contains(trimmedName) { continue }
                 }
 
-                // 核心保活防御：对于 Win11 虚拟机 (Parallels Desktop)、Chrome、WPS、ZCode、微信等第三方业务应用，
-                // 当用户切换应用、全屏虚拟机、或者在另一个虚拟桌面 (Space) 工作时：
-                // 1) 若拥有窗口标题且尺寸有效（!trimmedName.isEmpty && width > 160 && height > 100），确认为有效在活窗口；
-                // 2) 若在后台或因 macOS 权限/无痕/新建标签页导致 trimmedName 为空，但尺寸已达到标准主业务窗口（width >= 240 && height >= 180），
-                //    其真实实体窗口在 WindowServer 中客观存在，绝不能因 isOnScreen 为 false 造成误杀！
+                // 核心保活与无名离屏底板精细判定：
+                // 1) 若拥有明确的业务窗口标题且尺寸有效（!trimmedName.isEmpty && width > 160 && height > 100），确认为跨 Space 在活业务窗口；
+                // 2) 若标题为空（未授予屏幕录制权限，或属于 AppKit orderOut 机制隐藏的离屏底板）：
+                //    - 若应用处于后台/非激活态（!isActive）：在宿主未获屏幕录制权限时，系统对所有第三方窗口标题致盲，必须依托业务尺寸保活（width >= 240 && height >= 180），杜绝跨 Space 误退；
+                //    - 若应用处于前台活跃态（isActive）：
+                //      * 若检测到 >= 2 个离屏大窗口（width >= 240 && height >= 180），确认为跨多 Space 多文档/多网页存活，绝非单窗口应用的残留底板，必须累加计数保活；
+                //      * 若仅存在 1 个离屏大窗口：AuraPane 类单窗口应用在关窗时仅残留 1 个 orderOut 底板（AX 树恒为 0）。此时先不强行累加，将最终确诊交由 AX 双重权威校验（若另一个 Space 真实有窗口，AX 会报告 axCount >= 1 或在 AX 超时 nil 时保守拦截），杜绝单窗口与跨 Space 的误退冲突。
                 if !trimmedName.isEmpty && width > 160 && height > 100 {
                     count += 1
                     continue
                 }
-                if width >= 240 && height >= 180 {
-                    count += 1
-                    continue
+                if !hasScreenCapture && width >= 240 && height >= 180 {
+                    if !isActive {
+                        count += 1
+                        continue
+                    } else {
+                        // 前台候选大窗口计数，稍后统一求值
+                        candidateOffscreenLargeWindows += 1
+                    }
                 }
             }
+        }
+        if candidateOffscreenLargeWindows >= 2 {
+            count += candidateOffscreenLargeWindows
         }
         return count
     }
