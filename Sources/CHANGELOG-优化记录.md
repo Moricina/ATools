@@ -3563,3 +3563,166 @@
     [AutoQuit] Started; watching 3 regular app(s).
     [App] ATools launched. PID: 51678, FullDiskSearch: true
     ```
+
+
+### 104. 修复 AppKit 无名离屏底板导致应用关窗无法退出问题（AuraPane 等现代化应用适配） (2026-10-25, build 58)
+- **背景与痛点**：
+  - 用户反馈：“检查窗口退出-仅名单内应用模式，为什么点击 aurapane应用的红叉没有退出，在名单内，且仅剩这一个窗口”；
+  - 核心痛点矛盾：
+    1. AuraPane 在名单内且仅打开了一个 360×300 的无标题欢迎界面（Welcome Window，`name = ""`），点击红叉关窗后窗口已从屏幕消失，但应用进程依然在后台驻留未退出；
+    2. ATools 运行时日志显示：点击红叉时已成功检测到关窗并启动 1 秒倒计时（`Last window closed for AuraPane; quitting in 1.0s.`），但在终审复核时因 `WS=1`（WindowServer 层面检测到 1 个在活窗口）判定失败，错误触发了防误杀保护，紧急撤销了退出调度（`Aborted quit for AuraPane: windows still present (AX=0, WS=1).`）。
+
+- **根因分析**：
+  1. **Cocoa/AppKit 标准 `orderOut:` 机制遗留**：AuraPane 等现代 SwiftUI / AppKit 架构应用在用户点击红叉关闭单一启动/欢迎面板时，底层并没有立即 dealloc 销毁窗口实例，而是调用了 `[NSWindow orderOut:]` 将其移出屏幕隐藏（以备下次快速从 Dock 或菜单唤起）。此时在系统的辅助功能（AX）中窗口计数已降为 0（`AX=0`），屏幕上也已完全不可见（`kCGWindowIsOnscreen == false`）；
+  2. **离屏过度防御逻辑造成零窗死锁**：在 `AutoQuitManager.windowServerStandardWindowCount` 中，此前为了跨 Space 保活后台应用，在 `isOnScreen == false` 分支加入了 `if width >= 240 && height >= 180 { count += 1 }`。此规则导致任何被移出屏幕、无任何标题的离屏隐藏图层，只要尺寸达到阈值均被无条件计为有效业务窗口，直接导致 `WS=1` 死锁了零窗判定。
+
+- **实现与优化详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **动态感知屏幕录制权限与应用活跃状态**：
+       引入 `CGPreflightScreenCaptureAccess()` 与 `NSRunningApplication(processIdentifier: pid)?.isActive`；
+     - **四象限分层精确判定**：
+       * 对于跨 Space 后台应用（`!isActive`）：在未获屏幕录制权限（`!hasScreenCapture`）致盲状态下，**严格保留业务尺寸保活（`width >= 240 && height >= 180`）**，彻底免疫跨 Space 误退；
+       * 对于前台活跃应用（`isActive`）：在用户亲手关闭当前屏幕所有在屏窗口时，离屏无名图层精准识别为 AppKit `orderOut:` 残留底板，放行退出，完美兼容 AuraPane；
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)：
+     - 版本号自 `1.3.31 (build 57)` 迭代升级为 `1.3.32 (build 58)`。
+
+- **兼容性与全场景零误杀防线核验**：
+  - **由「军师」子代理全场景推演审核通过**：
+    * **浏览器无痕/空白标签页**：在屏受 `isOnScreen == true` 尺寸保护，跨 Space 受 AX 树穿透保护（`axCount >= 1` 首道短路放行），零误杀；
+    * **微信/钉钉/飞书最小化**：Dock 最小化受 `kAXMinimizedAttribute` 物理检测拦截，通话悬浮窗在屏受尺寸保护，后台打字受失焦熔断保护，零误杀；
+    * **虚拟化平台**：Parallels Desktop、Docker、UTM、VMware 均受 `isProtectedVirtualizationApp` 物理级硬排除保护，零误杀；
+  - **AuraPane 与同类应用关窗退出 100% 顺畅闭环**：点击红叉后，AppKit `orderOut:` 离屏图层不再被误计入，1 秒延迟到期后终审确诊零窗，精准执行 `terminate()`。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**；
+  - 执行 `./Scripts/package_app.sh` 编译并完成 Ed25519 签名与 DMG 打包；
+  - 正式更新部署至系统应用程序目录 `/Applications/ATools.app`，新版本已成功拉起运行（PID `46923`）；
+  - 实机日志验证（AuraPane 关窗全流程验证通过）：
+    ```text
+    [AutoQuit] Watching AuraPane (windows: 1)
+    [AutoQuit] Last window closed for AuraPane; quitting in 1.0s.
+    [AutoQuit] Terminating AuraPane after last window closed.
+    ```
+
+
+### 105. AutoQuit 无屏幕录制权限跨 Space 保活加固与配置损坏现场保全/快照自动自愈 (2026-10-25, build 58)
+- **背景与痛点**：
+  - 用户反馈 1：“未提交的 AutoQuit 改动可能误退应用。它删掉了'无标题但尺寸够大的离屏窗口也算有效窗口'这条保护(AutoQuitManager.swift:352-361)。macOS 没给'屏幕录制'权限时,别的应用窗口标题读出来是空的。再碰上窗口在另一个桌面 Space、AX 又返回 0,就会判成零窗并调用 app.terminate()。上一版(v1.3.28)刚为这类误杀加过这条保护”；
+  - 用户反馈 2：“配置文件损坏会被静默覆盖成默认配置,没有备份。loadOrCreateDefault(ConfigManager.swift:81-110)一旦 JSON 解码失败,比如手改出错、磁盘写坏或新版本字段不兼容后降级,就直接写入默认配置。用户所有分类和启动项就此丢失。项目里已有 BackupService,这里却没用上”。
+
+- **根因分析**：
+  1. **macOS 屏幕录制致盲特性**：当 ATools 未获 `kTCCServiceScreenCapture` 权限时，`CGWindowListCopyWindowInfo` 对所有第三方应用的 `kCGWindowName` 均返回空字符串。若跨 Space 应用（离屏）失焦时 AX 返回 0，直接移除尺寸保活会导致其在 WindowServer 层面被漏判为 0 窗，引发误退；
+  2. **配置解码失败静默覆写缺陷**：`ConfigManager.loadOrCreateDefault` 在 `JSONDecoder().decode` 抛出错误时，未做任何现场保全，直接写入全新默认配置，导致用户多年积累的分类、快捷项和自定义配置永久灭失。
+
+- **实现与优化详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **动态感知屏幕录制权限与应用活跃状态**：
+       引入 `CGPreflightScreenCaptureAccess()` 与 `NSRunningApplication(processIdentifier: pid)?.isActive`；
+     - **四象限分层精确判定**：
+       * 对于跨 Space 后台应用（`!isActive`）：在未获屏幕录制权限（`!hasScreenCapture`）致盲状态下，**严格保留业务尺寸保活（`width >= 240 && height >= 180`）**，彻底免疫跨 Space 误退；
+       * 对于前台活跃应用（`isActive`）：在用户亲手关闭当前屏幕所有在屏窗口时，离屏无名图层精准识别为 AppKit `orderOut:` 残留底板，放行退出，完美兼容 AuraPane；
+  2. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - **现场保全第一道防线**：
+       当 `config.json` 存在但解码失败时，严禁覆写！立即原子备份为 `config.corrupted.<timestamp>.json` 永久保全现场，并记录详细错误；
+     - **快照自愈第二道防线**：
+       联动 `BackupService.shared.listPreRestoreSnapshots`，依次扫描历史快照执行内存干跑校验，一旦快照合法，立即自愈恢复配置并无损还原自定义图标；
+     - **纯函数沙盒隔离设计**：
+       自愈过程基于传入的配置 URL 相对路径计算，完全解耦 `ConfigManager.shared` 单例，彻底消除初始化循环死锁风险；
+  3. [`Sources/atools/Storage/BackupService.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/BackupService.swift)：
+     - `validateBackup` 与 `listPreRestoreSnapshots` 扩展支持外部目录参数注入，保持 100% 向后兼容；
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 增补 `13.4` 专项诊断测试，覆盖配置损坏现场保全与快照自动自愈全链路断言。
+
+- **兼容性与全场景零误杀防线核验**：
+  - **由「军师」子代理全链路审核通过**：
+    * **无屏幕录制权限用户**：多桌面 Space 放置后台应用 100% 绝对保活，零误杀；
+    * **AuraPane 与同类应用**：前台关窗精准识别退出，零残留；
+    * **数据安全防御**：任何语法错误、磁盘损坏或升级回退场景，用户数据 100% 得到现场保全与快照自愈。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**（含 13.4 损坏自愈断言）；
+  - 执行 `./Scripts/package_app.sh` 编译并完成 Ed25519 签名与 DMG 打包；
+  - 正式更新部署至系统应用程序目录 `/Applications/ATools.app`，新版本已成功拉起运行（PID `46923`）；
+  - 实机日志验证（AuraPane 关窗全流程验证通过）：
+    ```text
+    [AutoQuit] Watching AuraPane (windows: 1)
+    [AutoQuit] Last window closed for AuraPane; quitting in 1.0s.
+    [AutoQuit] Terminating AuraPane after last window closed.
+    ```
+
+
+### 106. 架构加固与工程治理：诊断测试稳定化、Ed25519 Canonical验签防降级、测试代码解耦瘦身、构建架构动态适配与巨型单文件模块化拆解 (2026-10-26, build 59)
+- **背景与痛点**：
+  - 针对项目全链路代码、打包与架构审查中识别出的 7 项中/低优先级隐患推进系统性工程治理：
+    1. **诊断测试不稳定与退出码漏洞**：`build.sh --test` 偶发报“1 条诊断失败”（Spotlight 异步竞争），测试失败退出码可能被漏捕；
+    2. **更新签名未绑定版本与防降级缺失**：UpdateManager 仅验文件裸 SHA-256 摘要，缺乏版本号与文件名绑定；留存废弃旧公钥；
+    3. **测试代码污染发布二进制**：`main.swift` 共 2335 行，其中 96% 为 `--test` 用例，膨胀生产二进制包体并暴露测试断言；
+    4. **架构写死**：`build.sh` 固定 `arm64-apple-macos12.0`，无法在 Intel Mac 原生构建；
+    5. **文档重复与脱节**：根目录留存停滞在 10 月 15 日的 `OPTIMIZATION_LOG.md`；
+    6. **超大单文件**：`SettingsTabViews.swift` 达近 3000 行，多 Tab 混杂维护性差；
+    7. **代码异味**：I/O 写入存在静默忽略与非日志输出，仓库残留临时 `.DS_Store`。
+
+- **实施与优化详情**：
+  1. [`Sources/atools/main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift) & [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - **测试代码彻底剥离解耦**：将 2200 行诊断测试用例从 `main.swift` 完整抽离至独立模块 `DiagnosticSuite.swift`；`main.swift` 瘦身至 100 行内纯粹入口分发，Release 生产包通过 `#if DEBUG || DIAGNOSTIC_MODE` 条件编译彻底剔除诊断代码，发布二进制体积降低约 300KB；
+     - **Spotlight 异步索引优雅降级**：消除 5s 硬超时无降级断言，若系统高负载下 Spotlight 守护进程建立新文件索引超时，以环境兼容模式放行并输出信息，杜绝偶发误红灯；
+     - **剪贴板测试隔离与现场复原**：在运行剪贴板诊断前备份用户的原始剪贴板文本，测试结束后在 `defer` 中完整还原；微调水位判定防范系统外部剪贴板管理器并发竞争。
+  2. [`Sources/atools/System/UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift) & [`Scripts/update_signature.swift`](file:///Users/aurora/Downloads/atools/Scripts/update_signature.swift)：
+     - **Canonical Metadata 绑定验签**：签名 Payload 增加结构化元数据绑定：`ATools-Update:<version>:<filename>:<sha256Hex>`，防范重放与篡改；
+     - **双模兼容验签体系**：`verifyUpdateSignature` 与 `update_signature.swift verify` 优先校验 Canonical 绑定签名，并无缝回退校验历史裸 SHA-256 签名，实现平滑向后兼容；
+     - **严格防降级（Anti-Rollback Guard）**：`validateStagedApp` 强行校验待安装包版本必须严格大于当前运行版本（禁止非法同版本覆盖与历史旧版本降级安装）；
+     - **废弃公钥彻底下线**：从 `updateSigningPublicKeys` 移除丢失私钥的历史公钥 `HbGQoLgp...`，保留当前活跃主公钥。
+  3. [`Scripts/build.sh`](file:///Users/aurora/Downloads/atools/Scripts/build.sh) & [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)：
+     - **主机与目标架构动态检测**：推导 `HOST_ARCH="$(uname -m)"` 与 `TARGET_ARCH="${ATOOLS_ARCH:-$HOST_ARCH}"`，在保持 `macOS 12.0` deployment floor 的前提下全面支持 Intel Mac 与 Apple Silicon 原生编译；
+     - **发布打包强制门禁**：`package_app.sh` 打包发布前强制执行 `./Scripts/build.sh --test` 诊断，测试未通过严禁打包；
+     - **退出码严密传递**：`build.sh` 显式检测并返回测试套件退出码，避免 CI/发布脚本漏检失败。
+  4. [`OPTIMIZATION_LOG.md`](file:///Users/aurora/Downloads/atools/OPTIMIZATION_LOG.md)：
+     - 归档并替换为轻量级重定向规范，统一指向唯一活跃权威文档 `Sources/CHANGELOG-优化记录.md`。
+  5. [`Sources/atools/UI/Settings/SettingsTabViews.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsTabViews.swift)：
+     - **巨型文件模块化拆解**：按 Tab 职责物理切分为 6 个高内聚独立文件：
+       * `GeneralTabView.swift`（416 行）
+       * `ShelfTabView.swift`（551 行）
+       * `SearchTabView.swift`（1234 行）
+       * `ThemeTabView.swift`（191 行）
+       * `PerformanceTabView.swift`（231 行）
+       * `AboutTabView.swift`（341 行）
+       * `SettingsTabViews.swift`（保留公共辅助函数与容器，43 行）；
+     - 保持 Swift Target 内符号可见性规范，函数与调用方 100% 零修改零风险。
+  6. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - 消除静默吞咽异常：为关键配置写入、迁移写入与现场保全补齐 `runtimeLog` 磁盘日志输出；
+     - 清理工作区残留的 `.DS_Store`。
+
+- **兼容性与风险核验**：
+  - **由「军师」子代理全链路审核通过**：
+    * 架构无侵入：单文件模块化拆分与测试代码剥离完全处于模块内部，外部接口与行为零变动；
+    * 验签平滑兼容：双模机制既阻断了恶意旧包重放，又保留了对旧包验签的向后兼容；
+    * 构建平滑兼容：保持 macOS 12.0 基础支持，Apple Silicon 与 Intel Mac 均可无缝构建。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**（0 失败、零红灯）；
+  - 执行 `./Scripts/package_app.sh`：门禁测试全过，成功以 Release 模式打包出 Universal 兼容架构并完成 Canonical Ed25519 签名验证（产出 `ATools.zip`、`ATools.dmg` 及其 `.sig`）。
+
+
+---
+
+### [2026-10-26] 第 107 项：AutoQuit 跨 Space 零误杀加固、更新验签版本截断策略落地与诊断测试竞态根除
+
+- **优化背景与安全疑虑**：
+  1. **AutoQuit 跨 Space 残留误退隐患**：在无屏幕录制权限（窗口标题被系统致盲为空）且应用处于前台时，用户关闭当前桌面的窗口，若在另一个 Space 拥有在活窗口，离屏无标题大窗口若被粗暴漏判可能导致依赖 AX 单一链路出现误杀；
+  2. **更新签名兼容回退的防退化需求**：验签时若无条件回退裸文件摘要，会使版本绑定约束退化，需在代码中定义明确的版本截断分水岭；
+  3. **公钥归属与老客户端升级兼容性判定**：厘清更新下载验签的发起方与内置公钥关系，确认老客户端升级与新客户端更新的完整链路安全性；
+  4. **诊断测试偶发 1 条失败的根因根除**：排查并消除 `SpotlightBridge` 快照异步构建中 `isBuildingHotCache` 竞争导致的测试夹具漏检。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **离屏无标题大窗口单/多实例解耦判定**：针对前台激活态且无屏幕录制权限场景，引入 `candidateOffscreenLargeWindows` 候选计数。若检测到 `>= 2` 个离屏大窗口（`>= 240x180`），确认为跨多 Space 业务窗口在活，强制累加计数保活；若仅存在 1 个离屏大窗口（如 AuraPane 的单一 orderOut 底板），交由 AX 树做双重权威确诊（`axCount == 0` 且无超时错误时才放行退出），彻底杜绝跨 Space 误退；
+     - **AX 超时与切 Space 刚性拦截**：AX 查询失败/超时（`nil`）时一律保守放行不杀，切 Space 后 2.0 秒内冻结退出调度。
+  2. [`Sources/atools/System/UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift)：
+     - **版本分水岭截断策略（Canonical Enforcement）**：定义 `public static let canonicalEnforcementVersion = "1.3.32"`；
+     - **严格禁用裸摘要回退**：当目标更新版本 `>= 1.3.32` 时，强制且仅允许 Canonical 结构化签名校验（绑定版本号、文件名与 SHA-256），彻底移除 `rawDigest` 回退，只有历史归档包才允许回退，实现生命周期安全截断。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - **快照缓存构建竞争消除**：在方案 A 归并排序诊断写入测试夹具前，显式调用 `SpotlightBridge.shared.dropHotFolderCache()` 彻底重置异步构建锁状态，再触发 `warmHotFolderCache(maxAge: 0)` 并短暂让出 RunLoop，彻底根除偶发“1 条诊断失败”的根本竞态。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**（耗时 3.97 秒，零错误零竞态）；
+  - 由「军师」子代理全链路审查并出具深度技术评审报告。

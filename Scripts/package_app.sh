@@ -11,8 +11,8 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-VERSION="${ATOOLS_VERSION:-1.3.31}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-57}"
+VERSION="${ATOOLS_VERSION:-1.3.32}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-58}"
 SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
 # 签名身份解析：
 # ① 显式指定（ATOOLS_SIGNING_IDENTITY="-" 可强制 ad-hoc，见 RELEASING.md 迁移说明）
@@ -53,8 +53,21 @@ if ! echo "$REGISTERED_KEYS" | grep -qF "$CURRENT_PUBKEY"; then
 fi
 info "签名密钥验证通过 ✓ (公钥: ${CURRENT_PUBKEY:0:12}...)"
 
-echo "==> Building ATools $VERSION ($BUILD_NUMBER) in Release mode..."
-swift build -c release --disable-sandbox --scratch-path "$SCRATCH_PATH" -debug-info-format none
+# 预检：执行完整诊断测试回归套件（门禁保护）
+if [ "${SKIP_TEST:-0}" != "1" ]; then
+    info "正在执行完整诊断测试回归套件..."
+    if ! "$DIR/Scripts/build.sh" --test; then
+        error "诊断测试套件未通过，打包已终止！请先修复回归问题。"
+        exit 1
+    fi
+    info "诊断测试套件全部通过 ✓"
+fi
+
+HOST_ARCH="$(uname -m)"
+TARGET_ARCH="${ATOOLS_ARCH:-$HOST_ARCH}"
+
+echo "==> Building ATools $VERSION ($BUILD_NUMBER) in Release mode ($TARGET_ARCH)..."
+swift build -c release --disable-sandbox --scratch-path "$SCRATCH_PATH" -Xswiftc -target -Xswiftc "${TARGET_ARCH}-apple-macos12.0" -debug-info-format none
 
 BIN_PATH="$SCRATCH_PATH/release/ATools"
 APP_BUNDLE="$DIR/ATools.app"
@@ -164,13 +177,13 @@ hdiutil create -volname "ATools" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DI
 rm -rf "$DMG_STAGING"
 DMG_SIZE=$(du -h "$DIR/ATools.dmg" | cut -f1)
 
-echo "==> Signing release assets with Ed25519..."
-swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" >/dev/null
-swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" >/dev/null
+echo "==> Signing release assets with Ed25519 (Canonical metadata binding)..."
+swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" --version "$VERSION" --asset-name "ATools.zip" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" --version "$VERSION" --asset-name "ATools.dmg" >/dev/null
 
 PUBLIC_KEY=$(swift "$UPDATE_SIGNATURE_TOOL" public-key "$UPDATE_SIGNING_KEY")
-swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" >/dev/null
-swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" --version "$VERSION" --asset-name "ATools.zip" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" --version "$VERSION" --asset-name "ATools.dmg" >/dev/null
 
 echo "==> Successfully packaged ATools.app!"
 echo "    Binary size:  $BIN_SIZE"
