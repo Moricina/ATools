@@ -3726,3 +3726,25 @@
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test`：全套 13 大项自动化测试 **100% 全部 PASSED 通过**（耗时 3.97 秒，零错误零竞态）；
   - 由「军师」子代理全链路审查并出具深度技术评审报告。
+
+
+---
+
+### [2026-10-27] 第 108 项：紧急修复老版本客户端（v1.3.31 及更早）自动更新验签失败问题
+
+- **故障背景与根因定位**：
+  - **用户反馈**：v1.3.31 客户端在尝试自动升级到 v1.3.32 时报错：“更新替换失败：Ed25519 更新签名校验失败，安装包可能已被篡改”；
+  - **根因确认**：存量老客户端（v1.3.31 及更早版本）本地编译的可执行文件仅包含对安装包**原始 SHA-256 裸摘要**的校验逻辑（`UpdateManager.sha256(ofFileAt:)`），无法识别 v1.3.32 引入的 `canonicalPayload` 结构化签名。此前打包脚本对 `.sig` 资产签署了 Canonical 绑定 Payload，导致老版本客户端在解压前校验失败并拒绝安装。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift)：
+     - **双模自适应双向兼容**：更新验签逻辑保持无条件包含裸摘要 `candidateDigests.append(rawDigest)`，新客户端既能校验未来的 Canonical 签名包，亦能平滑验证裸摘要签名包；
+     - **防降级安全保障**：版本防降级（Anti-Rollback）统一收敛至 `validateStagedApp`，安装前严格拦截低于或等于当前版本的任何安装包。
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)：
+     - **签名策略自适应适配**：打包脚本调整为生成兼顾全量存量老客户端的 Ed25519 签名（标准裸 SHA-256 摘要）。
+  3. **GitHub Releases 资产热修复**：
+     - 已重新生成并在 GitHub Release `v1.3.32` 上热覆盖了 `ATools.dmg.sig` 与 `ATools.zip.sig`。
+
+- **验证与测试结果**：
+  - **老客户端升级链路验证**：使用老版本验签逻辑直接校验从 GitHub Releases 实时拉取的 `ATools.dmg.sig`，验签输出 `OK`，彻底修复；
+  - **单元诊断测试**：执行 `./Scripts/build.sh --test`，全套 13 大项自动化测试 100% 全部 PASSED 通过。

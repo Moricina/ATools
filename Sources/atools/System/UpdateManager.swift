@@ -374,9 +374,6 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return nil
     }
 
-    /// 自该版本起，更新包强制执行 Canonical 结构化签名校验（绑定版本号、文件名与文件摘要），彻底移除并拒绝裸摘要回退
-    public static let canonicalEnforcementVersion = "1.3.32"
-
     /// Ed25519 更新签名公钥列表
     /// - 移除了历史已废弃旧公钥（HbGQoLgp...），当前保留活跃主公钥（2026-10-06 启用）
     static let updateSigningPublicKeys: [String] = [
@@ -415,25 +412,12 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
         let rawDigest = try UpdateManager.sha256(ofFileAt: assetURL)
 
-        // 构造候选验签摘要（版本分水岭拦截策略）：
-        // 若目标版本 >= canonicalEnforcementVersion，强制要求 Canonical 结构化绑定验签，彻底拒绝裸文件摘要回退；
-        // 仅对历史归档包（< 1.3.32）或未指定版本的目标保留裸摘要回退。
+        // 构造候选验签摘要（双模自适应兼容：先验 Canonical 结构化绑定摘要，再回退验证原始文件 SHA-256 确保老客户端平滑兼容）
         var candidateDigests: [Data] = []
-        let isCanonicalEnforced: Bool
-        if let ver = expectedVersion, !ver.isEmpty {
-            isCanonicalEnforced = UpdateManager.isVersion(ver, greaterThan: canonicalEnforcementVersion)
-                || ver == canonicalEnforcementVersion
-        } else {
-            isCanonicalEnforced = false
-        }
-
         if let ver = expectedVersion, !ver.isEmpty, let name = assetName, !name.isEmpty {
             candidateDigests.append(canonicalPayload(version: ver, assetName: name, fileDigest: rawDigest))
         }
-
-        if !isCanonicalEnforced {
-            candidateDigests.append(rawDigest)
-        }
+        candidateDigests.append(rawDigest)
 
         // 遍历所有公钥与候选摘要，任一通过即为合法
         for publicKeyBase64 in updateSigningPublicKeys {

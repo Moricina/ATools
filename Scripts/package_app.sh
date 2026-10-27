@@ -177,13 +177,13 @@ hdiutil create -volname "ATools" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DI
 rm -rf "$DMG_STAGING"
 DMG_SIZE=$(du -h "$DIR/ATools.dmg" | cut -f1)
 
-echo "==> Signing release assets with Ed25519 (Canonical metadata binding)..."
-swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" --version "$VERSION" --asset-name "ATools.zip" >/dev/null
-swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" --version "$VERSION" --asset-name "ATools.dmg" >/dev/null
+echo "==> Signing release assets with Ed25519 (Raw SHA-256 for backward compatibility with v1.2.9-v1.3.31)..."
+swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" >/dev/null
 
 PUBLIC_KEY=$(swift "$UPDATE_SIGNATURE_TOOL" public-key "$UPDATE_SIGNING_KEY")
-swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" --version "$VERSION" --asset-name "ATools.zip" >/dev/null
-swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" --version "$VERSION" --asset-name "ATools.dmg" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" >/dev/null
 
 echo "==> Successfully packaged ATools.app!"
 echo "    Binary size:  $BIN_SIZE"
