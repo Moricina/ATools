@@ -493,6 +493,13 @@ public final class CategoryPillView: NSView {
         }
         menu.addItem(deleteItem)
 
+        if !category.isFavorites {
+            let sortItem = NSMenuItem(title: "按使用频次重新排序", action: #selector(contextSortByFrequency), keyEquivalent: "")
+            sortItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
+            sortItem.target = self
+            menu.addItem(sortItem)
+        }
+
         menu.addItem(NSMenuItem.separator())
 
         let addItem = NSMenuItem(title: "新建分类...", action: #selector(contextAdd), keyEquivalent: "")
@@ -545,6 +552,11 @@ public final class CategoryPillView: NSView {
 
     @objc private func contextDelete() {
         delegate?.categoryPillDidRequestDelete(self)
+    }
+
+    @objc private func contextSortByFrequency() {
+        ConfigManager.shared.sortItemsByFrequency(in: category.id)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }
 
     @objc private func contextAdd() {

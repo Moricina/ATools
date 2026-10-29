@@ -2357,8 +2357,18 @@ public enum DiagnosticSuite {
     let frequent = ConfigManager.shared.frequentItems(limit: 5)
     TestAssertions.expect(!frequent.isEmpty && frequent.first?.id == qItem.id, "frequentItems 智能推荐应当优先排频次最高的项")
 
+    // (e) Test sortItemsByFrequency
+    let lowFreqItem = LauncherItem(name: "低频项", itemType: .application, target: "/Applications/LowFreq.app")
+    _ = ConfigManager.shared.addItem(lowFreqItem, to: targetCat.id)
+    ConfigManager.shared.sortItemsByFrequency(in: targetCat.id)
+    let sortedCatItems = ConfigManager.shared.config.categories.first(where: { $0.id == targetCat.id })?.items ?? []
+    let qIdx = sortedCatItems.firstIndex(where: { $0.id == qItem.id }) ?? -1
+    let lowIdx = sortedCatItems.firstIndex(where: { $0.id == lowFreqItem.id }) ?? -1
+    TestAssertions.expect(qIdx != -1 && lowIdx != -1 && qIdx < lowIdx, "sortItemsByFrequency 应当将高频启动项排在低频项之前")
+
     // 清理测试临时 item
     ConfigManager.shared.removeItem(id: qItem.id, from: targetCat.id)
+    ConfigManager.shared.removeItem(id: lowFreqItem.id, from: targetCat.id)
 
     print("      ✓ Auto App Discovery, Tombstone, Folder Nesting, Hotkeys, Quick Slots & Usage Frequency verified.")
 

@@ -4016,3 +4016,19 @@
      - **加固**：在 `AutoQuitQuirks` 注册 `oppo_connect` 规则（匹配 370x313 托盘层与 1252x710 主窗口离屏层），确立 WindowServer 仅核验当前屏幕物理在屏窗口（`isOnScreen == true`），跨 Space 判定完全交由 AX 树（权威）与 Space 切换宽限期，彻底根治 Electron 类软件点击红叉不退出问题。
   - **版本发布与签名**：版本号正式自增至 `v1.3.35 (build 61)`，完成 Ed25519 签名与 GitHub Release 全平台发布。
 
+
+---
+
+### [2026-10-29] 补充优化：抽屉与分类胶囊右键“按使用频次重新排序”菜单项落地
+
+- **背景说明**：
+  - 启动项频次追踪（`launchCount` 与 `lastLaunchedAt`）与智能推荐算法已在底层闭环，但此前抽屉网格空白处、分类条与分类胶囊的上下文右键菜单中尚未暴露「按使用频次重新排序」的操作入口。
+- **实施与加固详情**：
+  1. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：新增 `sortItemsByFrequency(in:)`，按启动次数（高者居前）、最近启动时间戳（新者居前）及字母表稳定归并重排当前分类根项与文件夹子项，自动存盘并广播变更；
+  2. [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) 与 [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：抽屉网格空白处右键菜单新增「按使用频次重新排序」（图标 `arrow.up.arrow.down`），代理回调即刻重排并刷新视图，附带触觉反馈；
+  3. [`Sources/atools/UI/CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift) 与 [`Sources/atools/UI/CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)：右键任意分类胶囊或分类条空白处同样挂载「按使用频次重新排序」菜单项；
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：测试 `[14]` 增设 `sortItemsByFrequency` 高低频次先后排序断言测试。
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项诊断 **100% PASSED 全部通过**。
+
+

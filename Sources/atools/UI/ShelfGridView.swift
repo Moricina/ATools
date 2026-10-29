@@ -11,6 +11,7 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem)
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView)
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView)
+    func shelfGridDidRequestSortByFrequency(_ grid: ShelfGridView)
     func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String])
     func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int)
     func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int)
@@ -30,6 +31,7 @@ public extension ShelfGridDelegate {
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem) {}
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView) {}
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {}
+    func shelfGridDidRequestSortByFrequency(_ grid: ShelfGridView) {}
     func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int) {}
     func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {}
     func shelfGridDidBeginDrag(_ grid: ShelfGridView) {}
@@ -1484,6 +1486,11 @@ public final class ShelfGridView: NSView {
         createItem.target = self
         menu.addItem(createItem)
 
+        let sortItem = NSMenuItem(title: "按使用频次重新排序", action: #selector(contextSortByFrequency), keyEquivalent: "")
+        sortItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
+        sortItem.target = self
+        menu.addItem(sortItem)
+
         let missingCount = ConfigManager.shared.scanMissingItems().count
         let cleanTitle = missingCount > 0 ? "一键清理失效项 (\(missingCount))" : "一键清理失效项"
         let cleanItem = NSMenuItem(title: cleanTitle, action: #selector(contextCleanMissingItems), keyEquivalent: "")
@@ -1532,6 +1539,10 @@ public final class ShelfGridView: NSView {
 
     @objc private func contextCleanMissingItems() {
         delegate?.shelfGridDidRequestCleanMissingItems(self)
+    }
+
+    @objc private func contextSortByFrequency() {
+        delegate?.shelfGridDidRequestSortByFrequency(self)
     }
 
     @objc private func contextTogglePin() {

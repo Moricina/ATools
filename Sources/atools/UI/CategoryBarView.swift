@@ -402,6 +402,15 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         addItem.target = self
         menu.addItem(addItem)
 
+        if let currentCatId = selectedCategoryId,
+           let currentCat = categories.first(where: { $0.id == currentCatId }),
+           !currentCat.isFavorites {
+            let sortItem = NSMenuItem(title: "当前分类按使用频次重新排序", action: #selector(contextSortCurrentCategoryByFrequency), keyEquivalent: "")
+            sortItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
+            sortItem.target = self
+            menu.addItem(sortItem)
+        }
+
         if let jumpSubmenuItem = makeJumpToCategoryMenuItem() {
             menu.addItem(jumpSubmenuItem)
         }
@@ -442,6 +451,12 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     @objc private func contextAddCategory() {
         delegate?.categoryBarDidRequestAddCategory(self)
+    }
+
+    @objc private func contextSortCurrentCategoryByFrequency() {
+        guard let currentCatId = selectedCategoryId else { return }
+        ConfigManager.shared.sortItemsByFrequency(in: currentCatId)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }
 
     @objc private func contextTogglePin() {

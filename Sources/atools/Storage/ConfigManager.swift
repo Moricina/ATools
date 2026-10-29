@@ -929,6 +929,57 @@ public final class ConfigManager {
         return Array(sorted.prefix(limit))
     }
 
+    /// 按启动频次（launchCount 降序，相同按 lastLaunchedAt 降序）重新排序指定分类内的项目
+    public func sortItemsByFrequency(in categoryId: UUID) {
+        guard let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return }
+        guard !self.config.categories[idx].isFavorites else { return }
+
+        let items = self.config.categories[idx].items
+        guard items.count > 1 else { return }
+
+        func effectiveScore(of item: LauncherItem) -> (count: Int, lastTime: Double) {
+            if item.isVirtualGroup {
+                let children = items.filter { $0.parentId == item.id }
+                let totalCount = children.reduce(0) { $0 + $1.launchCount }
+                let latestTime = children.compactMap { $0.lastLaunchedAt }.max() ?? 0
+                return (totalCount, latestTime)
+            } else {
+                return (item.launchCount, item.lastLaunchedAt ?? 0)
+            }
+        }
+
+        let rootItems = items.filter { $0.parentId == nil }
+        let sortedRoots = rootItems.sorted { a, b in
+            let scoreA = effectiveScore(of: a)
+            let scoreB = effectiveScore(of: b)
+            if scoreA.count != scoreB.count {
+                return scoreA.count > scoreB.count
+            }
+            if scoreA.lastTime != scoreB.lastTime {
+                return scoreA.lastTime > scoreB.lastTime
+            }
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        }
+
+        var newOrderedItems: [LauncherItem] = []
+        for root in sortedRoots {
+            newOrderedItems.append(root)
+            if root.isVirtualGroup {
+                let children = items.filter { $0.parentId == root.id }.sorted { a, b in
+                    if a.launchCount != b.launchCount {
+                        return a.launchCount > b.launchCount
+                    }
+                    return (a.lastLaunchedAt ?? 0) > (b.lastLaunchedAt ?? 0)
+                }
+                newOrderedItems.append(contentsOf: children)
+            }
+        }
+
+        self.config.categories[idx].items = newOrderedItems
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
     // MARK: - 新安装应用自动入库 (Auto App Discovery & Onboarding)
 
     public func handleAppIndexUpdated(apps: [IndexedApp]) {

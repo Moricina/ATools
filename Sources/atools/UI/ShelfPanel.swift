@@ -1089,6 +1089,13 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         }
     }
 
+    public func shelfGridDidRequestSortByFrequency(_ grid: ShelfGridView) {
+        guard let cat = selectedCategory else { return }
+        ConfigManager.shared.sortItemsByFrequency(in: cat.id)
+        loadData()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
     public func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {
         PanelCoordinator.shared.isModalDialogOpen = true
         defer { PanelCoordinator.shared.isModalDialogOpen = false }
