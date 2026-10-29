@@ -359,6 +359,17 @@ public final class AutoQuitManager {
                     if defaultWpsTitles.contains(trimmedName) { continue }
                 }
 
+                // 特殊排除：夸克网盘（Quark）常驻离屏预加载的弹窗底板（如 "分享链接" 等）及无名离屏 CEF 背景底板
+                let isQuark = ownerName.contains("夸克") || ownerName.lowercased().contains("quark")
+                if isQuark {
+                    let defaultQuarkOffscreenTitles: Set<String> = [
+                        "分享链接"
+                    ]
+                    if defaultQuarkOffscreenTitles.contains(trimmedName) || trimmedName.isEmpty {
+                        continue
+                    }
+                }
+
                 // 核心保活与无名离屏底板精细判定：
                 // 1) 若拥有明确的业务窗口标题且尺寸有效（!trimmedName.isEmpty && width > 160 && height > 100），确认为跨 Space 在活业务窗口；
                 // 2) 若标题为空（未授予屏幕录制权限，或属于 AppKit orderOut 机制隐藏的离屏底板）：

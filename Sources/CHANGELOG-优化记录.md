@@ -3748,3 +3748,31 @@
 - **验证与测试结果**：
   - **老客户端升级链路验证**：使用老版本验签逻辑直接校验从 GitHub Releases 实时拉取的 `ATools.dmg.sig`，验签输出 `OK`，彻底修复；
   - **单元诊断测试**：执行 `./Scripts/build.sh --test`，全套 13 大项自动化测试 100% 全部 PASSED 通过。
+
+
+
+---
+
+### [2026-10-29] 第 109 项：修复夸克网盘离屏预加载窗口（900x620 分享链接等）阻碍 AutoQuit 自动退出缺陷
+
+- **故障背景与根因定位**：
+  - **用户反馈**：“排查夸克为什么没有关窗退出”；
+  - **现场数据抓取与根因确诊**：
+    1. **AX 辅助功能树层面**：夸克主窗口关闭后，AX 树仅剩 1 个 40x40 桌面快捷悬浮球（`subrole: AXSystemDialog`），已被此前第 33 项逻辑（物理尺寸底线 $\ge 160 \times 90$）精准过滤，$\text{axCount} = 0$ 已确诊；
+    2. **WindowServer 离屏预加载图层死锁**：夸克网盘（基于 Electron / Chromium 架构）启动后，在 WindowServer 中常驻了 1 个移出屏幕的离屏隐藏窗口（`wid: 147, layer: 0, bounds: 900x620, isOnScreen: false`），该离屏窗口带有真实标题 **`"分享链接"`**；同时还常驻了两个 Layer 3 的离屏无名底板（930x660, 930x702）；
+    3. **双重权威防线触发超时撤销**：在 `windowServerStandardWindowCount` 中，针对离屏窗口原本用于跨 Space 保护的规则 `if !trimmedName.isEmpty && width > 160 && height > 100 { count += 1 }` 误将夸克的 900x620 `"分享链接"` 计入业务窗口，导致 $\text{wsCount} = 1$。系统判定处于淡出关闭动画并重试 5 次（600ms），超时后因 WindowServer 始终坚称有窗而直接撤销了退出调度，致使夸克进程永久常驻 Dock。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **夸克专属离屏预加载底板精细排除**：在 `windowServerStandardWindowCount` 的离屏分支（`isOnScreen == false`）中，加入夸克网盘（`ownerName.contains("夸克") || ownerName.lowercased().contains("quark")`）专属过滤规则；
+     - **全态覆盖（屏录授权与致盲双安全）**：排除夸克已知的预置离屏标题（如 `"分享链接"`）以及离屏状态下的无名底板（`trimmedName.isEmpty`），阻断其流入致盲尺寸保活分支，彻底根除双重确诊死锁；
+     - **跨 Space 保活零破损**：夸克在其它 Space 打开的真实主业务窗口在 AX 树上全局可见，由 AX 首道检查（`axCount >= 1`）毫秒级放行保活，绝无误杀。
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh)：
+     - 版本号自增至 `v1.3.33 (build 59)`。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：执行 `./Scripts/build.sh --test`，全套 13 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **WindowServer 计数实测验证**：
+    * 修复前：`wsCount = 1`（有录屏权限时命中有标题离屏）/ `wsCount = 3`（致盲模式时命中无标题离屏大底板），导致退出失败；
+    * 修复后：`wsCount = 0`，与 `axCount = 0` 达成双向确诊零窗，即刻触发毫秒级安全延迟退出；
+  - **现场构建与热加载部署**：已通过 `./Scripts/package_app.sh` 编译并签名 `ATools.app (v1.3.33 build 59)`，完成单例平滑重载。

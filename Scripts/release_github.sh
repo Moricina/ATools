@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.32}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-58}"
+VERSION="${ATOOLS_VERSION:-1.3.33}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-59}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -108,30 +108,13 @@ fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 
-### 🛡️ AutoQuit 关窗退出与多 Space 防误杀全面加固
-1. **离屏大窗口单/多实例解耦**：
-   - 针对无屏幕录制权限（窗口标题被致盲为空）场景，引入多实例大窗口判定；
-   - 跨多 Space 业务窗口强行累加计数保活，单 orderOut 隐藏底板由 AX 树终审；
-2. **AuraPane 类单窗口平滑退出与跨 Space 零误杀**：
-   - 彻底解决 AuraPane 等单窗口应用点击红叉 orderOut 无法退出问题；
-   - 终审复核机制增加 AX 超时保守放行与切 Space 2.0s 冻结期，杜绝多桌面误退。
-
-### 🔐 Ed25519 更新签名 Canonical 绑定与版本截断
-1. **结构化元数据绑定**：
-   - 签名 Payload 深度绑定 \`版本号:文件名:SHA-256\`，防范任何重放与降级；
-2. **版本分水岭截断（>= 1.3.32）**：
-   - 设定严格分水岭，v1.3.32 起彻底废除裸摘要回退，仅接受 Canonical 签名；
-   - 彻底清除历史废弃公钥，保留当前唯一活跃主公钥。
-
-### 🧩 架构治理与性能优化
-1. **设置面板模块化拆分**：
-   - 将近 3000 行的 \`SettingsTabViews.swift\` 拆解为 6 个高内聚独立 Tab 模块，消除巨石文件；
-2. **测试套件与生产二进制解耦**：
-   - 2200 行诊断套件剥离至独立测试模块，Release 模式彻底剥离测试代码，发布包体积减少约 300KB；
-   - 根除 Spotlight 快照异步构建竞态，诊断测试稳定秒级全绿；
-3. **构建脚本架构动态推导**：
-   - 支持根据主机架构动态适配 Intel Mac 与 Apple Silicon；
-   - ConfigManager 补齐配置损坏自愈、现场保全与磁盘日志。"
+### 🛡️ AutoQuit 关窗退出针对夸克网盘（Quark）离屏死锁专项修复
+1. **根除离屏预加载窗口“分享链接”误判**：
+   - 修复夸克网盘在后台常驻的 900x620 离屏隐藏窗口（带有真实标题 \"分享链接\"）被 WindowServer 规则误判为在活跨 Space 业务窗口的死锁缺陷；
+2. **全态环境安全防护（屏录权限与致盲模式双覆盖）**：
+   - 过滤离屏状态下的无名底板（930x660、930x702 等 CEF 背景壳子），阻断致盲模式下的尺寸过度保活；
+   - 达成主窗口关闭后 AX 树与 WindowServer 的双向零窗确诊，即刻毫秒级触发延迟退出；
+   - 严格保留跨桌面（Space）穿透保护，其它桌面正常在活的主业务窗口 100% 免疫误退。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
