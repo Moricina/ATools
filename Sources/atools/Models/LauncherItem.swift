@@ -170,6 +170,7 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
 
     /// 检测目标路径是否已失效（对标 GlassDesk IsTargetMissing）
     public func checkTargetMissing() -> Bool {
+        if isVirtualGroup { return false }
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
         switch itemType {

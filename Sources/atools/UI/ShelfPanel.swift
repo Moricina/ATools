@@ -1267,7 +1267,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             var updated = cat.items[idx]
             updated.name = newName
             ConfigManager.shared.updateItem(updated, in: cat.id)
-            reloadGridForSelectedCategory()
+            loadData()
         }
     }
 
@@ -1285,7 +1285,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             } else {
                 overlay.reloadSubItems(remaining)
             }
-            reloadGridForSelectedCategory()
+            loadData()
         }
     }
 
@@ -1331,21 +1331,28 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             updatedSrc.parentId = targetItem.id
             ConfigManager.shared.updateItem(updatedSrc, in: cat.id)
         } else {
-            let folder = LauncherItem(
-                name: "新建文件夹",
-                itemType: .application,
-                target: "",
-                isVirtualGroup: true
-            )
-            ConfigManager.shared.addItem(folder, to: cat.id)
-            var updatedSrc = srcItem
-            updatedSrc.parentId = folder.id
-            var updatedTarget = targetItem
-            updatedTarget.parentId = folder.id
-            ConfigManager.shared.updateItem(updatedSrc, in: cat.id)
-            ConfigManager.shared.updateItem(updatedTarget, in: cat.id)
+            _ = ConfigManager.shared.createFolderWithItems(itemIds: [sourceId, targetId], inCategoryId: cat.id, folderName: "新建文件夹")
         }
-        reloadGridForSelectedCategory()
+        loadData()
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didUngroupFolder folderId: UUID) {
+        guard let cat = selectedCategory else { return }
+        ConfigManager.shared.ungroupFolder(id: folderId, in: cat.id)
+        loadData()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didRenameFolder folderId: UUID, to newName: String) {
+        guard let cat = selectedCategory else { return }
+        if let idx = cat.items.firstIndex(where: { $0.id == folderId }) {
+            var updated = cat.items[idx]
+            updated.name = newName
+            ConfigManager.shared.updateItem(updated, in: cat.id)
+            loadData()
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+        }
     }
 }
 

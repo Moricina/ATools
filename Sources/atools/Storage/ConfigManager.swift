@@ -730,39 +730,54 @@ public final class ConfigManager {
         save()
     }
 
+    /// Returns visible root items and their children as stable movable blocks.
+    private func rootItemBlocks(_ items: [LauncherItem]) -> [[LauncherItem]] {
+        let folderIds = Set(items.filter(\.isVirtualGroup).map(\.id))
+        var normalizedItems = items
+        for itemIndex in normalizedItems.indices {
+            if let parentId = normalizedItems[itemIndex].parentId, !folderIds.contains(parentId) {
+                normalizedItems[itemIndex].parentId = nil
+            }
+        }
+        let roots = normalizedItems.filter { $0.parentId == nil }
+        return roots.map { root in
+            guard root.isVirtualGroup else { return [root] }
+            return [root] + normalizedItems.filter { $0.parentId == root.id }
+        }
+    }
+
+    /// Root indices are measured against the visible top-level shelf, not the backing array.
     public func moveItem(from sourceIndex: Int, to destinationIndex: Int, in categoryId: UUID) {
         guard let catIdx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return }
-        var items = self.config.categories[catIdx].items
+        var blocks = rootItemBlocks(self.config.categories[catIdx].items)
         guard sourceIndex != destinationIndex,
-              items.indices.contains(sourceIndex),
-              destinationIndex >= 0, destinationIndex <= items.count else { return }
-        let movedItem = items.remove(at: sourceIndex)
-        let insertIndex = min(destinationIndex, items.count)
-        items.insert(movedItem, at: insertIndex)
-        self.config.categories[catIdx].items = items
+              blocks.indices.contains(sourceIndex),
+              destinationIndex >= 0, destinationIndex <= blocks.count else { return }
+        let movedBlock = blocks.remove(at: sourceIndex)
+        blocks.insert(movedBlock, at: min(destinationIndex, blocks.count))
+        self.config.categories[catIdx].items = blocks.flatMap { $0 }
         if self.config.shelfSortPolicy != .manual {
             self.config.shelfSortPolicy = .manual
         }
         save()
     }
 
-    /// Alt/Option 快速交换模式：直接交换同一分类下两个索引位置的启动项，其余项目位置保持不变。
+    /// Alt/Option 快速交换模式：按可见根节点直接交换两个项目块，其余项目位置保持不变。
     public func swapItems(at indexA: Int, and indexB: Int, in categoryId: UUID) {
         guard let catIdx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return }
-        var items = self.config.categories[catIdx].items
+        var blocks = rootItemBlocks(self.config.categories[catIdx].items)
         guard indexA != indexB,
-              items.indices.contains(indexA),
-              items.indices.contains(indexB) else { return }
-        items.swapAt(indexA, indexB)
-        self.config.categories[catIdx].items = items
+              blocks.indices.contains(indexA),
+              blocks.indices.contains(indexB) else { return }
+        blocks.swapAt(indexA, indexB)
+        self.config.categories[catIdx].items = blocks.flatMap { $0 }
         if self.config.shelfSortPolicy != .manual {
             self.config.shelfSortPolicy = .manual
         }
         save()
     }
 
-    /// Moves a launcher item between categories by its stable id, atomically removing it
-    /// from the source category and inserting it into the destination category at the specified index (or appending if nil).
+    /// Moves an item or virtual-folder block between categories. destinationIndex is a visible root slot.
     @discardableResult
     public func moveItem(id: UUID, toCategoryId destinationId: UUID, at destinationIndex: Int? = nil) -> Bool {
         guard let sourceIdx = self.config.categories.firstIndex(where: { category in
@@ -780,13 +795,23 @@ public final class ConfigManager {
             return false
         }
 
-        let item = self.config.categories[sourceIdx].items.remove(at: itemIndex)
-        if let targetIdx = destinationIndex {
-            let clamped = max(0, min(targetIdx, self.config.categories[destinationIdx].items.count))
-            self.config.categories[destinationIdx].items.insert(item, at: clamped)
-        } else {
-            self.config.categories[destinationIdx].items.append(item)
+        let sourceItems = self.config.categories[sourceIdx].items
+        let item = sourceItems[itemIndex]
+        let movingIds: Set<UUID> = item.isVirtualGroup
+            ? Set([item.id] + sourceItems.filter { $0.parentId == item.id }.map(\.id))
+            : [item.id]
+        var movingBlock = item.isVirtualGroup
+            ? [item] + sourceItems.filter { $0.parentId == item.id }
+            : [item]
+        if !item.isVirtualGroup {
+            movingBlock[0].parentId = nil
         }
+        self.config.categories[sourceIdx].items.removeAll { movingIds.contains($0.id) }
+
+        var destinationBlocks = rootItemBlocks(self.config.categories[destinationIdx].items)
+        let slot = max(0, min(destinationIndex ?? destinationBlocks.count, destinationBlocks.count))
+        destinationBlocks.insert(movingBlock, at: slot)
+        self.config.categories[destinationIdx].items = destinationBlocks.flatMap { $0 }
         save()
         return true
     }
@@ -896,6 +921,23 @@ public final class ConfigManager {
         save()
         NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         return folder
+    }
+
+    /// 解散指定文件夹，将其内部所有子项还原为当前分类的根节点项目，并移除该虚拟文件夹
+    @discardableResult
+    public func ungroupFolder(id: UUID, in categoryId: UUID) -> Bool {
+        guard let catIdx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return false }
+        guard let folderIdx = self.config.categories[catIdx].items.firstIndex(where: { $0.id == id && $0.isVirtualGroup }) else { return false }
+
+        for i in 0..<self.config.categories[catIdx].items.count {
+            if self.config.categories[catIdx].items[i].parentId == id {
+                self.config.categories[catIdx].items[i].parentId = nil
+            }
+        }
+        self.config.categories[catIdx].items.remove(at: folderIdx)
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+        return true
     }
 
     // MARK: - 启动频次统计、智能常用推荐与多策略重排序
@@ -1023,17 +1065,26 @@ public final class ConfigManager {
             }
         }
 
-        let rootItems = items.filter { $0.parentId == nil }
+        let folderIds = Set(items.filter(\.isVirtualGroup).map(\.id))
+        var normalizedItems = items
+        for itemIndex in normalizedItems.indices {
+            if let parentId = normalizedItems[itemIndex].parentId, !folderIds.contains(parentId) {
+                // Preserve orphaned records by healing them into visible top-level items.
+                normalizedItems[itemIndex].parentId = nil
+            }
+        }
+        let rootItems = normalizedItems.filter { $0.parentId == nil }
         let sortedRoots = rootItems.sorted(by: comparator)
 
         var newOrderedItems: [LauncherItem] = []
         for root in sortedRoots {
             newOrderedItems.append(root)
             if root.isVirtualGroup {
-                let children = items.filter { $0.parentId == root.id }.sorted(by: comparator)
+                let children = normalizedItems.filter { $0.parentId == root.id }.sorted(by: comparator)
                 newOrderedItems.append(contentsOf: children)
             }
         }
+
 
         self.config.categories[idx].items = newOrderedItems
         if shouldSaveAndNotify {

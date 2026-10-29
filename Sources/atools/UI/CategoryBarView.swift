@@ -179,6 +179,20 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     private var fallbackSelectedCategoryId: UUID?
     private var clickOutsideMonitor: Any?
 
+    /// Folder overlays suspend the category controls without removing their
+    /// tracking areas, so hover resumes naturally after the overlay closes.
+    public var isInteractionSuspended: Bool = false {
+        didSet {
+            guard oldValue != isInteractionSuspended else { return }
+            springLoadWorkItem?.cancel()
+            springLoadWorkItem = nil
+            springLoadPillId = nil
+            for pill in allPills {
+                pill.isInteractionSuspended = isInteractionSuspended
+            }
+        }
+    }
+
     override public var isFlipped: Bool { return true }
 
     deinit {
@@ -327,6 +341,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
         for cat in categories {
             let pill = CategoryPillView(category: cat, isSelected: cat.id == self.selectedCategoryId, isVertical: orientation == .vertical)
+            pill.isInteractionSuspended = isInteractionSuspended
             pill.delegate = self
             stackView.addArrangedSubview(pill)
             if orientation == .vertical {
@@ -396,6 +411,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     // MARK: - Right Click on CategoryBarView (Blank Area)
     override public func rightMouseDown(with event: NSEvent) {
+        guard !isInteractionSuspended else { return }
         let menu = NSMenu(title: "CategoryBarMenu")
         let addItem = NSMenuItem(title: "新建分类...", action: #selector(contextAddCategory), keyEquivalent: "")
         addItem.image = ThumbnailPipeline.shared.symbolIcon(name: "plus", pointSize: 13)
@@ -533,6 +549,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     // MARK: - CategoryPillDelegate
     public func categoryPillDidClick(_ pill: CategoryPillView) {
+        guard !isInteractionSuspended else { return }
         if let editing = activeEditingPill, editing !== pill {
             commitActiveEditing()
         }
@@ -553,6 +570,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     /// Move the keyboard selection by one pill in the current orientation.
     @discardableResult
     public func moveSelection(by offset: Int) -> Bool {
+        guard !isInteractionSuspended else { return false }
         let pills = stackView.arrangedSubviews.compactMap { $0 as? CategoryPillView }
         guard !pills.isEmpty else { return false }
         let currentIndex = pills.firstIndex(where: { $0 === selectedPill }) ?? pills.firstIndex(where: { $0.isSelected }) ?? 0
@@ -604,6 +622,7 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
     }
 
     public func categoryPillDidRequestRename(_ pill: CategoryPillView) {
+        guard !isInteractionSuspended else { return }
         delegate?.categoryBar(self, didRequestRenameCategory: pill.category)
     }
 

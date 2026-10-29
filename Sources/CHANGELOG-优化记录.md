@@ -4071,4 +4071,70 @@
   - **版本发布与签名**：版本号正式自增至 `v1.3.36 (build 62)`，完成 Ed25519 签名与 GitHub Release 正式发布。
 
 
+---
+
+### [2026-10-29] 第 118 项：多应用拖拽合并文件夹灵敏度加固、右键解散文件夹与液态毛玻璃浮层体验闭环
+
+- **问题背景与病灶定位**：
+  - 用户反馈“多应用拖拽合并文件夹与液态毛玻璃浮层 (Folder Nesting)”在实际操作中极难触发、甚至误以为未实现；
+  - 经深入代码审计，发现三大关键病灶：
+    1. **拖拽合并判定过于严苛且易滑走**：原热区设定为 `f.insetBy(dx: f.width * 0.30, dy: f.height * 0.30)`（中心 40% 面积仅剩下 16%），必须悬停死等 0.45 秒定时器；若在 0.44 秒松手或晃出 1 像素，立刻落入边缘“推挤换位”分支，图标瞬间被推开；
+    2. **合并后视图遗漏底层数据重载**：`ShelfPanel.swift` 中的 `didMergeItemsIntoFolder` 在写入底层配置后，仅调用了局部 `reloadGridForSelectedCategory()`，未调用 `loadData()`。由于 `selectedCategory` 是值拷贝缓存，内部 items 未同步更新，新文件夹未能立刻渲染到屏幕上；
+    3. **虚拟文件夹缺乏专属右键管理体系**：右键文件夹时弹出了普通单项的菜单（如无意义的“在访达中显示”），且缺少零门槛“一键解散文件夹”的能力。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - 新增 `ungroupFolder(id:in:)`：解散文件夹并原子性将其内部所有子项还原为当前分类的根节点（`parentId = nil`），随后移除虚拟文件夹，存盘并发送广播通知。
+  2. [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - **热区与灵敏度全面提升**：核心热区由 `0.30` 放宽至 `0.15`（覆盖 70% 图标主体宽度与高度），悬停判定时间由 0.45s 缩短为 0.20s，大幅提升合并意图捕捉率并展示高光反馈；
+     - **拖拽松手容错兜底**：在 `performDragOperation` 中，松手时只要落在目标图标 `inner` 范围内（且未按住 Option 键），100% 认定为合并意图，彻底杜绝滑走与让位推挤；
+     - **虚拟文件夹专属右键菜单**：为文件夹量身打造右键菜单（打开文件夹、解散文件夹 (移出所有应用)、删除文件夹及包含项），并在 `ShelfGridDelegate` 补充 `didUngroupFolder` 回调。
+  3. [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - `didMergeItemsIntoFolder` 改为调用原子方法 `ConfigManager.shared.createFolderWithItems`，且合并后**显式调用 `loadData()`**，彻底打通数据与 UI 渲染链路；
+     - 接入 `didUngroupFolder` 代理回调并联动 `loadData()` 刷新界面。
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在测试 `[15]` 中补充 `ungroupFolder` 解散文件夹、子项 `parentId` 还原为 `nil`、级联清理与文件夹移除的端到端断言。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **149.83 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过。
+
+
+---
+
+### [2026-10-29] 第 119 项：修复虚拟文件夹被误判失效项（黄色感叹号角标）及改名后微缩图被空白文档图标覆盖问题
+
+- **问题背景与病灶定位**：
+  - 用户反馈两大严重 UI 异常（附图 1 与图 2）：
+    1. **虚拟文件夹被识别为失效项（图 2）**：新建文件夹图标右上角常驻黄色感叹号警告角标，且图标半透明灰度化；
+    2. **重命名文件夹后丢失微缩图变成空白文档（图 1）**：在浮层内双击将文件夹改名（如改为 `codex`）后，图标由原本的 2×2 多应用微缩图退化为 macOS 默认的折角空白文本文件图标。
+  - 经底层调用链审查，精确定位到两大核心病灶：
+    1. **失效项检测屏障缺失**：[`LauncherItem.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/LauncherItem.swift) 的 `checkTargetMissing()` 针对 `target.trimmingCharacters` 校验，若为空则直接返回 `true`。虚拟文件夹 `isVirtualGroup == true` 本身不依赖外部物理文件路径（`target == ""`），导致其被无差别判为失效项，触发 `missingBadgeView` 挂载与灰阶滤镜；
+    2. **异步缩略图回写覆盖**：[`ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) 的 `ShelfItemButton` 在初始化时无条件调用 `ThumbnailPipeline.shared.icon(forItem:)`。对于虚拟文件夹，`ThumbnailPipeline` 会向系统请求空路径 `""` 的图标，即 macOS 默认空白文档图标。当该异步回调返回（或命中本地缓存）时，触发 `applyIconAndMissingState()`，直接将 `makeButton` 同步绘制好的 2×2 四宫格微缩图暴力覆盖为空白文档；
+    3. **重命名后局部重载未更新内存分类结构体**：[`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift) 在 `folderOverlay(didRenameFolder:to:)` 处理重命名时，仅调用了局部 `reloadGridForSelectedCategory()`，未触发 `loadData()`。因 `selectedCategory` 是值拷贝 struct，未拉取最新名称，导致后续重绘状态不一致。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/Models/LauncherItem.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/LauncherItem.swift)：
+     - 在 `checkTargetMissing()` 首行建立绝对安全屏障：`if isVirtualGroup { return false }`，虚拟文件夹容器在逻辑层面永远不会被判为失效，彻底杜绝黄色感叹号角标；
+  2. [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - **拦截无效缩略图请求**：`ShelfItemButton.setupViews()` 明确判断 `item.isVirtualGroup`，除非用户显式配置了自定义图标，否则严禁向 `ThumbnailPipeline` 请求空路径 `""`，杜绝系统默认文档图标注入；
+     - **持久化微缩图保存**：新增 `setFolderCompositeIcon(_ image: NSImage)`，将 2×2 微缩图同步保存在 `rawIconImage` 与 `iconImageView.image` 中，并在 `applyIconAndMissingState()` 中对虚拟文件夹提供独立分支保护；
+     - **复用与重命名保护**：在 `reloadData` 的按键复用（reusable）与新建分支中，均强制调用 `setFolderCompositeIcon(Self.renderFolderCompositeIcon(for: children))`，使文件夹在任何子项变动或改名时均维持 100% 鲜活的微缩图；
+     - **异步失效检测过滤**：在 `validateItemTargetsAsynchronously` 遍历中强制将 `isVirtualGroup` 标记为 `false`；
+     - **文件夹右键直接重命名**：在文件夹右键菜单中补充「重命名文件夹...」菜单项及弹窗，并增加 `ShelfGridDelegate.shelfGrid(_:didRenameFolder:to:)` 回调；
+     - **自定义图标子项兼容**：优化 `renderFolderCompositeIcon` 算法，优先读取子项自定义图标。
+  3. [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - 在 `folderOverlay(_:didRenameFolder:to:)`、`folderOverlay(_:didRemoveItemFromFolder:folderId:)` 及 `shelfGrid(_:didRenameFolder:to:)` 回调中，全部统一调用 `loadData()`，保证 `CategoryBar`、当前选中分类缓存与网格全链路数据一致性。
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 测试 `[15]` 中补充 `checkTargetMissing()` 针对文件夹创建、改名（如 `codex`）等状态下的永不失效断言。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **160.42 MB**，无显存泄漏；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，本地进程已热重启生效。
+
+
+
+
 

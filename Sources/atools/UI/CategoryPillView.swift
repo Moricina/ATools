@@ -68,6 +68,21 @@ public final class CategoryPillView: NSView {
         }
     }
 
+    /// Folder overlays suspend only the shelf's background controls; tracking
+    /// areas remain installed so normal hover resumes on the next show.
+    public var isInteractionSuspended: Bool = false {
+        didSet {
+            guard oldValue != isInteractionSuspended else { return }
+            if isInteractionSuspended {
+                isHovered = false
+                isDropTarget = false
+                isSpringLoadingHovered = false
+                mouseDownLocation = nil
+            }
+            updateAppearanceStyles()
+        }
+    }
+
     internal var isDropTarget: Bool = false {
         didSet {
             if oldValue != isDropTarget {
@@ -175,6 +190,7 @@ public final class CategoryPillView: NSView {
 
     internal func updateAppearanceStyles() {
         let isDark = pillIsDark
+        let interactionActive = !isInteractionSuspended
 
         layer?.shadowOffset = CGSize(width: 0, height: 3)
         layer?.shadowRadius = 8
@@ -195,7 +211,7 @@ public final class CategoryPillView: NSView {
         let secondaryTextColor = isDark ? NSColor(white: 1.0, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.78)
 
         let px = physicalOnePixel
-        if isSpringLoadingHovered {
+        if interactionActive && isSpringLoadingHovered {
             layer?.borderWidth = px * 1.5
             let highlightBorder = isDark ? NSColor.white.withAlphaComponent(0.65) : NSColor.black.withAlphaComponent(0.40)
             layer?.borderColor = highlightBorder.cgColor
@@ -204,7 +220,7 @@ public final class CategoryPillView: NSView {
             layer?.shadowOpacity = isDark ? 0.35 : 0.20
             layer?.shadowRadius = 10
             titleLabel.textColor = primaryTextColor
-        } else if isDropTarget {
+        } else if interactionActive && isDropTarget {
             layer?.borderWidth = px
             layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
             layer?.backgroundColor = GlassPalette.dropTargetFill(isDark: isDark).cgColor
@@ -220,7 +236,7 @@ public final class CategoryPillView: NSView {
             layer?.shadowOpacity = 0.0
             titleLabel.textColor = primaryTextColor
         } else {
-            if isHovered {
+            if interactionActive && isHovered {
                 layer?.borderWidth = px
                 layer?.backgroundColor = GlassPalette.controlHoverFill(isDark: isDark).cgColor
                 layer?.borderColor = GlassPalette.panelBorder(isDark: isDark).cgColor
@@ -405,33 +421,36 @@ public final class CategoryPillView: NSView {
 
     override public func resetCursorRects() {
         super.resetCursorRects()
-        if !isEditing {
+        if !isEditing && !isInteractionSuspended {
             addCursorRect(bounds, cursor: .pointingHand)
         }
     }
 
     override public func mouseEntered(with event: NSEvent) {
-        if isEditing { return }
+        if isEditing || isInteractionSuspended { return }
         isHovered = true
     }
 
     override public func mouseExited(with event: NSEvent) {
+        if isInteractionSuspended { return }
         isHovered = false
     }
 
     override public func cursorUpdate(with event: NSEvent) {
-        if !isEditing {
+        if !isEditing && !isInteractionSuspended {
             NSCursor.pointingHand.set()
+        } else if isInteractionSuspended {
+            NSCursor.arrow.set()
         }
     }
 
     override public func mouseDown(with event: NSEvent) {
-        if isEditing { return }
+        if isEditing || isInteractionSuspended { return }
         mouseDownLocation = event.locationInWindow
     }
 
     override public func mouseDragged(with event: NSEvent) {
-        if isEditing { return }
+        if isEditing || isInteractionSuspended { return }
         guard let startPoint = mouseDownLocation else { return }
         let currentPoint = event.locationInWindow
         let dist = hypot(currentPoint.x - startPoint.x, currentPoint.y - startPoint.y)
@@ -442,7 +461,7 @@ public final class CategoryPillView: NSView {
     }
 
     override public func mouseUp(with event: NSEvent) {
-        if isEditing { return }
+        if isEditing || isInteractionSuspended { return }
         if mouseDownLocation != nil {
             mouseDownLocation = nil
             if event.clickCount == 2 {

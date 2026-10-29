@@ -236,6 +236,77 @@ public enum DiagnosticSuite {
         print("      ✓ Batch addition, item reordering and deletion verified.")
     }
 
+    // Folder integrity, orphan preservation, and visible-root index regression.
+    do {
+        let source = ConfigManager.shared.addCategory(name: "文件夹完整性源")
+        let destination = ConfigManager.shared.addCategory(name: "文件夹完整性目标")
+        defer {
+            ConfigManager.shared.deleteCategory(id: source.id)
+            ConfigManager.shared.deleteCategory(id: destination.id)
+        }
+
+        let rootA = LauncherItem(name: "根 A", itemType: .webURL, target: "https://a.example")
+        let childA = LauncherItem(name: "子 A", itemType: .webURL, target: "https://child-a.example")
+        let childB = LauncherItem(name: "子 B", itemType: .webURL, target: "https://child-b.example")
+        let rootB = LauncherItem(name: "根 B", itemType: .webURL, target: "https://b.example")
+        _ = ConfigManager.shared.addItems([rootA, childA, childB, rootB], to: source.id)
+        guard let folder = ConfigManager.shared.createFolderWithItems(
+            itemIds: [childA.id, childB.id], inCategoryId: source.id, folderName: "跨分类文件夹"
+        ) else {
+            TestAssertions.expect(false, "完整性回归夹具必须创建虚拟文件夹")
+            return
+        }
+
+        // Backing order has children between visible roots; root indices must ignore them.
+        ConfigManager.shared.moveItem(from: 0, to: 2, in: source.id)
+        var sourceItems = ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items
+        var sourceRoots = sourceItems.filter { $0.parentId == nil }
+        TestAssertions.expect(sourceRoots.map(\.id) == [folder.id, rootB.id, rootA.id],
+                              "含文件夹时 moveItem 必须按可见 root index 移动整个文件夹块")
+        ConfigManager.shared.swapItems(at: 0, and: 2, in: source.id)
+        sourceItems = ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items
+        sourceRoots = sourceItems.filter { $0.parentId == nil }
+        TestAssertions.expect(sourceRoots.map(\.id) == [rootA.id, rootB.id, folder.id],
+                              "含文件夹时 swapItems 必须交换 root 块而不拆散 children")
+        TestAssertions.expect(sourceItems.filter { $0.parentId == folder.id }.count == 2,
+                              "root 移动与交换不得改变文件夹 children 归属")
+
+        let orphan = LauncherItem(parentId: UUID(), name: "孤儿保留项", itemType: .webURL, target: "https://orphan.example")
+        _ = ConfigManager.shared.addItem(orphan, to: source.id)
+        ConfigManager.shared.sortItems(in: source.id, by: .nameAscending)
+        sourceItems = ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items
+        let healedOrphan = sourceItems.first(where: { $0.id == orphan.id })
+        TestAssertions.expect(healedOrphan != nil && healedOrphan?.parentId == nil,
+                              "排序必须保留孤儿并安全修复为可见顶层项")
+        TestAssertions.expect(Set(sourceItems.map(\.id)).count == 6,
+                              "排序后文件夹、children、根项和孤儿不得丢失")
+
+        let destA = LauncherItem(name: "目标 A", itemType: .webURL, target: "https://dest-a.example")
+        let destChildA = LauncherItem(name: "目标子 A", itemType: .webURL, target: "https://dest-child-a.example")
+        let destChildB = LauncherItem(name: "目标子 B", itemType: .webURL, target: "https://dest-child-b.example")
+        let destB = LauncherItem(name: "目标 B", itemType: .webURL, target: "https://dest-b.example")
+        _ = ConfigManager.shared.addItems([destA, destChildA, destChildB, destB], to: destination.id)
+        guard let destFolder = ConfigManager.shared.createFolderWithItems(
+            itemIds: [destChildA.id, destChildB.id], inCategoryId: destination.id, folderName: "目标已有文件夹"
+        ) else {
+            TestAssertions.expect(false, "目标分类文件夹夹具必须创建")
+            return
+        }
+        TestAssertions.expect(ConfigManager.shared.moveItem(id: folder.id, toCategoryId: destination.id, at: 2),
+                              "跨分类移动文件夹必须成功")
+        sourceItems = ConfigManager.shared.config.categories.first(where: { $0.id == source.id })!.items
+        let destinationItems = ConfigManager.shared.config.categories.first(where: { $0.id == destination.id })!.items
+        let destinationRoots = destinationItems.filter { $0.parentId == nil }
+        TestAssertions.expect(!sourceItems.contains(where: { $0.id == folder.id || $0.id == childA.id || $0.id == childB.id }),
+                              "文件夹跨分类后源分类必须同时移除 folder 与所有直接 children")
+        TestAssertions.expect(destinationRoots.map(\.id) == [destA.id, destFolder.id, folder.id, destB.id],
+                              "跨分类 root 插槽必须忽略目标分类 children 并插在正确可见位置")
+        TestAssertions.expect(destinationItems.filter { $0.parentId == folder.id }.map(\.id).count == 2,
+                              "跨分类后 children 必须继续指向同一文件夹")
+        TestAssertions.expect(destinationItems.filter { $0.parentId == destFolder.id }.count == 2,
+                              "插入其他文件夹块时不得打散目标分类既有 children")
+    }
+
     // Test Category Reordering & Orientation
     let catsCount = ConfigManager.shared.config.categories.count
     if catsCount >= 2 {
@@ -2418,6 +2489,7 @@ public enum DiagnosticSuite {
     // (a) Test batch folder creation
     let batchFolder = ConfigManager.shared.createFolderWithItems(itemIds: [b1.id, b2.id], inCategoryId: testCat.id, folderName: "测试批量组合")
     TestAssertions.expect(batchFolder != nil, "createFolderWithItems 应当成功创建虚拟组文件夹")
+    TestAssertions.expect(batchFolder?.checkTargetMissing() == false, "虚拟文件夹绝不可被判定为失效项 (checkTargetMissing 必须为 false)")
     let catAfterFolder = ConfigManager.shared.config.categories.first(where: { $0.id == testCat.id })!
     let sub1 = catAfterFolder.items.first(where: { $0.id == b1.id })
     let sub2 = catAfterFolder.items.first(where: { $0.id == b2.id })
@@ -2428,6 +2500,24 @@ public enum DiagnosticSuite {
         let nestedAttempt = ConfigManager.shared.createFolderWithItems(itemIds: [f.id, b3.id], inCategoryId: testCat.id)
         TestAssertions.expect(nestedAttempt == nil, "createFolderWithItems 必须严格拦截包含文件夹的再次嵌套操作")
     }
+
+    // (b2) Test folder ungrouping (解散文件夹)
+    let ungroupSuccess = ConfigManager.shared.ungroupFolder(id: batchFolder!.id, in: testCat.id)
+    TestAssertions.expect(ungroupSuccess, "ungroupFolder 应当返回 true")
+    let catAfterUngroup = ConfigManager.shared.config.categories.first(where: { $0.id == testCat.id })!
+    TestAssertions.expect(!catAfterUngroup.items.contains(where: { $0.id == batchFolder!.id }), "解散后文件夹本身应当被移除")
+    let un1 = catAfterUngroup.items.first(where: { $0.id == b1.id })
+    let un2 = catAfterUngroup.items.first(where: { $0.id == b2.id })
+    TestAssertions.expect(un1 != nil && un1?.parentId == nil, "解散后原子项 1 的 parentId 应当重置为 nil")
+    TestAssertions.expect(un2 != nil && un2?.parentId == nil, "解散后原子项 2 的 parentId 应当重置为 nil")
+
+    // 重新创建文件夹以供后续批量操作测试
+    let reFolder = ConfigManager.shared.createFolderWithItems(itemIds: [b1.id, b2.id], inCategoryId: testCat.id, folderName: "测试重新组合")
+    TestAssertions.expect(reFolder != nil, "重新创建文件夹供测试应成功")
+    TestAssertions.expect(reFolder?.checkTargetMissing() == false, "重新创建的文件夹 checkTargetMissing 必须为 false")
+    var renamedTestFolder = reFolder!
+    renamedTestFolder.name = "codex"
+    TestAssertions.expect(renamedTestFolder.checkTargetMissing() == false, "重命名为 codex 后的文件夹 checkTargetMissing 必须为 false")
 
     // (c) Test batch move between categories (if another non-favorites category exists)
     let otherCats = ConfigManager.shared.config.categories.filter { !$0.isFavorites && $0.id != testCat.id }
@@ -2442,10 +2532,10 @@ public enum DiagnosticSuite {
     }
 
     // (d) Test batch removal with cascading cleanup and Tombstone registration
-    let idsToRemove: Set<UUID> = [batchFolder!.id, b3.id]
+    let idsToRemove: Set<UUID> = [reFolder!.id, b3.id]
     ConfigManager.shared.removeItems(ids: idsToRemove, from: testCat.id)
     let catAfterRemove = ConfigManager.shared.config.categories.first(where: { $0.id == testCat.id })!
-    TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == batchFolder!.id }), "已批量移除的文件夹不应存在")
+    TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == reFolder!.id }), "已批量移除的文件夹不应存在")
     TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == b1.id }), "已移除文件夹的子项必须被级联清理")
     TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == b2.id }), "已移除文件夹的子项必须被级联清理")
     TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == b3.id }), "已批量移除的项目不应存在")
