@@ -206,6 +206,16 @@ public final class AutoQuitQuirks: @unchecked Sendable {
                 GhostWindowSize(w: 370, h: 313, tolerance: 25),
                 GhostWindowSize(w: 1252, h: 710, tolerance: 30)
             ]
+        ),
+        AppQuirkRule(
+            id: "gemini",
+            name: "Google Gemini",
+            bundleIDPrefixes: ["com.google.GeminiMacOS"],
+            ownerNameKeywords: ["gemini"],
+            offscreenTitles: ["gemini"],
+            ghostSizes: [
+                GhostWindowSize(w: 500, h: 500, tolerance: 25)
+            ]
         )
     ]
 

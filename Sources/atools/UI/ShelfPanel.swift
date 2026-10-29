@@ -120,16 +120,34 @@ public final class SidebarSplitterView: NSView {
         trackingArea = area
     }
 
+    public var isInteractionSuspended: Bool = false {
+        didSet {
+            guard oldValue != isInteractionSuspended else { return }
+            if isInteractionSuspended {
+                isHovered = false
+                isDragging = false
+            }
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
+    }
+
     override public func resetCursorRects() {
         super.resetCursorRects()
+        guard !isInteractionSuspended else { return }
         addCursorRect(bounds, cursor: .resizeLeftRight)
     }
 
     override public func cursorUpdate(with event: NSEvent) {
+        guard !isInteractionSuspended else {
+            NSCursor.arrow.set()
+            return
+        }
         NSCursor.resizeLeftRight.set()
     }
 
     override public func mouseEntered(with event: NSEvent) {
+        guard !isInteractionSuspended else { return }
         isHovered = true
         NSCursor.resizeLeftRight.set()
     }
@@ -142,6 +160,7 @@ public final class SidebarSplitterView: NSView {
     }
 
     override public func mouseDown(with event: NSEvent) {
+        guard !isInteractionSuspended else { return }
         isDragging = true
         NSCursor.resizeLeftRight.push()
         initialMouseX = NSEvent.mouseLocation.x
@@ -221,16 +240,34 @@ public final class ResizeHandleView: NSView {
         trackingArea = area
     }
 
+    public var isInteractionSuspended: Bool = false {
+        didSet {
+            guard oldValue != isInteractionSuspended else { return }
+            if isInteractionSuspended {
+                isHovered = false
+                isDragging = false
+            }
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+        }
+    }
+
     override public func resetCursorRects() {
         super.resetCursorRects()
+        guard !isInteractionSuspended else { return }
         addCursorRect(bounds, cursor: ResizeHandleView.diagonalCursor)
     }
 
     override public func cursorUpdate(with event: NSEvent) {
+        guard !isInteractionSuspended else {
+            NSCursor.arrow.set()
+            return
+        }
         ResizeHandleView.diagonalCursor.set()
     }
 
     override public func mouseEntered(with event: NSEvent) {
+        guard !isInteractionSuspended else { return }
         isHovered = true
         ResizeHandleView.diagonalCursor.set()
     }
@@ -243,6 +280,7 @@ public final class ResizeHandleView: NSView {
     }
 
     override public func mouseDown(with event: NSEvent) {
+        guard !isInteractionSuspended else { return }
         guard let window = self.window else { return }
         isDragging = true
         ResizeHandleView.diagonalCursor.push()
@@ -389,7 +427,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private var dragSessionOriginCategoryId: UUID?
     private var typeAheadQuery = ""
     private var typeAheadResetWorkItem: DispatchWorkItem?
-    private var activeFolderOverlay: ShelfFolderOverlayView?
+    public private(set) var activeFolderOverlay: ShelfFolderOverlayView?
 
     override public func loadView() {
         let savedW = CGFloat(ConfigManager.shared.config.shelfWidth)
@@ -741,7 +779,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         categoryBar.refreshCapsuleLayout()
 
         snapWindowWidthIfNeeded()
-        shelfGrid.reloadData(items: selectedCategory?.items ?? [])
+        reloadGridForSelectedCategory()
     }
 
     @objc private func handleIconSizeChanged() {
@@ -756,7 +794,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
                 ConfigManager.shared.updateShelfSize(width: snappedWidth, height: window.frame.height)
             }
         }
-        shelfGrid.reloadData(items: selectedCategory?.items ?? [])
+        reloadGridForSelectedCategory()
     }
 
     @objc private func handleItemSpacingChanged() {
@@ -777,6 +815,19 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func handleKeyDown(_ event: NSEvent) -> Bool {
+        if activeFolderOverlay != nil {
+            if event.keyCode == 53 { // Esc: 优先仅关闭文件夹浮层
+                closeFolderOverlay()
+                return true
+            }
+            // 阻断所有未带 ⌘/⌃/⌥ 修饰键的普通击键（如 Tab, Return, Delete, 空格, 字母, 方向键），严禁渗透到底层网格
+            let modifiers = event.modifierFlags.intersection([.command, .control, .option])
+            if modifiers.isEmpty {
+                return true
+            }
+            return false
+        }
+
         if event.modifierFlags.contains(.command) {
             if event.charactersIgnoringModifiers == "," {
                 SettingsWindowController.shared.showSettingsWindow()
@@ -1216,7 +1267,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
                 categoryBar.setSelectedCategory(id: originId, animated: true)
                 self.selectedCategory = originCat
-                shelfGrid.reloadData(items: originCat.items)
+                reloadGridForSelectedCategory()
                 shelfGrid.playCategoryPageTransition(direction: direction, isVertical: categoryBar.orientation == .vertical)
                 NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
             }
@@ -1289,27 +1340,49 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         }
     }
 
+    public func setInteractionSuspended(_ suspended: Bool) {
+        shelfGrid.isInteractionSuspended = suspended
+        categoryBar.isInteractionSuspended = suspended
+        sidebarSplitter.isInteractionSuspended = suspended
+        resizeHandle.isInteractionSuspended = suspended
+        if let win = view.window {
+            win.invalidateCursorRects(for: view)
+        }
+    }
+
     public func folderOverlay(_ overlay: ShelfFolderOverlayView, didSelectItem item: LauncherItem) {
+        if item.checkTargetMissing() {
+            self.shelfGrid(self.shelfGrid, didRequestRelocateItem: item)
+            return
+        }
         if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
+            closeFolderOverlay(animated: false)
             PanelCoordinator.shared.hideShelfPanel()
         }
         LauncherExecutor.open(item: item)
     }
 
-    public func closeFolderOverlay() {
+    public func closeFolderOverlay(animated: Bool = true) {
+        setInteractionSuspended(false)
         guard let overlay = activeFolderOverlay else { return }
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.16
-            overlay.animator().alphaValue = 0.0
-        }, completionHandler: {
+        overlay.prepareForClose()
+        if animated {
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.16
+                overlay.animator().alphaValue = 0.0
+            }, completionHandler: {
+                overlay.removeFromSuperview()
+            })
+        } else {
             overlay.removeFromSuperview()
-        })
+        }
         activeFolderOverlay = nil
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didRequestOpenFolder folder: LauncherItem, subItems: [LauncherItem]) {
-        closeFolderOverlay()
+        closeFolderOverlay(animated: false)
         guard let catId = selectedCategory?.id else { return }
+        setInteractionSuspended(true)
         let overlay = ShelfFolderOverlayView(folderItem: folder, subItems: subItems, categoryId: catId, frame: view.bounds)
         overlay.delegate = self
         overlay.alphaValue = 0.0
@@ -1438,6 +1511,10 @@ public final class ShelfPanel: NSPanel {
     override public var canBecomeMain: Bool { false }
 
     override public func cancelOperation(_ sender: Any?) {
+        if shelfViewController.activeFolderOverlay != nil {
+            shelfViewController.closeFolderOverlay()
+            return
+        }
         if !shelfViewController.cancelKeyboardFilter() {
             if !PanelCoordinator.shared.isShelfPinned {
                 PanelCoordinator.shared.hideShelfPanel()
@@ -1450,6 +1527,10 @@ public final class ShelfPanel: NSPanel {
             return
         }
         if event.keyCode == 53 { // Esc
+            if shelfViewController.activeFolderOverlay != nil {
+                shelfViewController.closeFolderOverlay()
+                return
+            }
             if !shelfViewController.cancelKeyboardFilter() {
                 if !PanelCoordinator.shared.isShelfPinned {
                     PanelCoordinator.shared.hideShelfPanel()
@@ -1466,7 +1547,8 @@ public final class ShelfPanel: NSPanel {
 
     public func prepareForDisplay() {
         updateWindowAppearanceForTheme()
-        shelfViewController.closeFolderOverlay()
+        shelfViewController.closeFolderOverlay(animated: false)
+        shelfViewController.setInteractionSuspended(false)
         shelfViewController.snapWindowWidthIfNeeded()
         shelfViewController.resetKeyboardState()
         shelfViewController.loadData()

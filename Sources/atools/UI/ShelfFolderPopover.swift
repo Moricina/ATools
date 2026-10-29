@@ -16,14 +16,26 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     public private(set) var subItems: [LauncherItem] = []
     public let categoryId: UUID
 
-    private let dimBackdropView = NSView()
-    private let cardContainer = NSView()
+    private let dimBackdropView = FolderDimBackdropView()
+    private let cardContainer = FolderCardContainerView()
     private let backdrop = VisualEffectBackdropView()
     private let titleField = NSTextField()
     private let closeButton = NSButton()
     private let scrollView = NSScrollView()
     private let gridContentView = FlippedGridView()
     private var subItemButtons: [ShelfItemButton] = []
+    private var isCancellingTitleEdit = false
+
+    override public var mouseDownCanMoveWindow: Bool { false }
+
+    override public func mouseDown(with event: NSEvent) {
+        // 截断 Responder 链，阻止点击浮层空白区域冒泡到 ShelfRootView
+    }
+
+    override public func resetCursorRects() {
+        super.resetCursorRects()
+        addCursorRect(bounds, cursor: .arrow)
+    }
 
     public init(folderItem: LauncherItem, subItems: [LauncherItem], categoryId: UUID, frame: NSRect = .zero) {
         self.folderItem = folderItem
@@ -41,14 +53,14 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         wantsLayer = true
         autoresizingMask = [.width, .height]
 
-        // 半透明暗色背景遮罩，点击自动关闭
+        // 半透明暗色背景遮罩，精准点击自动关闭
         dimBackdropView.wantsLayer = true
         dimBackdropView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.25).cgColor
         dimBackdropView.translatesAutoresizingMaskIntoConstraints = false
+        dimBackdropView.onValidClick = { [weak self] in
+            self?.handleBackdropClicked()
+        }
         addSubview(dimBackdropView)
-
-        let clickGesture = NSClickGestureRecognizer(target: self, action: #selector(handleBackdropClicked))
-        dimBackdropView.addGestureRecognizer(clickGesture)
 
         // 居中卡片容器
         cardContainer.wantsLayer = true
@@ -65,7 +77,7 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         cardContainer.addSubview(backdrop)
 
-        // 顶部标题（支持内联重命名）
+        // 顶部标题（默认纯文本，双击进入内联重命名）
         titleField.translatesAutoresizingMaskIntoConstraints = false
         titleField.stringValue = folderItem.name.isEmpty ? "未命名文件夹" : folderItem.name
         titleField.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
@@ -73,10 +85,13 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         titleField.alignment = .center
         titleField.isBezeled = false
         titleField.drawsBackground = false
-        titleField.isEditable = true
-        titleField.isSelectable = true
+        titleField.isEditable = false
+        titleField.isSelectable = false
         titleField.focusRingType = .none
         titleField.delegate = self
+        let doubleClickGesture = NSClickGestureRecognizer(target: self, action: #selector(handleTitleDoubleClicked))
+        doubleClickGesture.numberOfClicksRequired = 2
+        titleField.addGestureRecognizer(doubleClickGesture)
         cardContainer.addSubview(titleField)
 
         // 关闭按钮
@@ -97,6 +112,11 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         scrollView.documentView = gridContentView
         cardContainer.addSubview(scrollView)
 
+        let widthConstraint = cardContainer.widthAnchor.constraint(equalToConstant: 340)
+        widthConstraint.priority = .defaultHigh
+        let heightConstraint = cardContainer.heightAnchor.constraint(equalToConstant: 240)
+        heightConstraint.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             dimBackdropView.leadingAnchor.constraint(equalTo: leadingAnchor),
             dimBackdropView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -105,8 +125,10 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
 
             cardContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
             cardContainer.centerYAnchor.constraint(equalTo: centerYAnchor),
-            cardContainer.widthAnchor.constraint(equalToConstant: 340),
-            cardContainer.heightAnchor.constraint(equalToConstant: 240),
+            widthConstraint,
+            heightConstraint,
+            cardContainer.widthAnchor.constraint(lessThanOrEqualTo: widthAnchor, constant: -16),
+            cardContainer.heightAnchor.constraint(lessThanOrEqualTo: heightAnchor, constant: -16),
 
             backdrop.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor),
             backdrop.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor),
@@ -206,12 +228,49 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         delegate?.folderOverlay(self, didSelectItem: sender.item)
     }
 
+    @objc private func handleTitleDoubleClicked() {
+        beginEditingTitle()
+    }
+
+    public func beginEditingTitle() {
+        titleField.isEditable = true
+        titleField.isSelectable = true
+        window?.makeFirstResponder(titleField)
+        titleField.currentEditor()?.selectAll(nil)
+    }
+
+    public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            isCancellingTitleEdit = true
+            titleField.stringValue = folderItem.name
+            window?.makeFirstResponder(nil)
+            titleField.isEditable = false
+            titleField.isSelectable = false
+            isCancellingTitleEdit = false
+            return true
+        } else if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            window?.makeFirstResponder(nil)
+            titleField.isEditable = false
+            titleField.isSelectable = false
+            return true
+        }
+        return false
+    }
+
+    public func prepareForClose() {
+        if window?.firstResponder === titleField || window?.firstResponder === titleField.currentEditor() {
+            window?.makeFirstResponder(nil)
+        }
+    }
+
     @objc private func handleBackdropClicked() {
+        prepareForClose()
         finishEditingTitle()
         delegate?.folderOverlayDidRequestClose(self)
     }
 
     @objc private func handleCloseClicked() {
+        prepareForClose()
         finishEditingTitle()
         delegate?.folderOverlayDidRequestClose(self)
     }
@@ -221,14 +280,46 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     }
 
     private func finishEditingTitle() {
+        guard !isCancellingTitleEdit else { return }
+        titleField.isEditable = false
+        titleField.isSelectable = false
         let newTitle = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !newTitle.isEmpty && newTitle != folderItem.name {
             folderItem.name = newTitle
             delegate?.folderOverlay(self, didRenameFolder: folderItem.id, to: newTitle)
+        } else {
+            titleField.stringValue = folderItem.name
         }
     }
 
     private final class FlippedGridView: NSView {
         override var isFlipped: Bool { true }
+    }
+}
+
+private final class FolderCardContainerView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func mouseDown(with event: NSEvent) {
+        // 阻止点击空白区域冒泡到上层 ShelfRootView 触发窗口拖动
+    }
+}
+
+private final class FolderDimBackdropView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+    var onValidClick: (() -> Void)?
+    private var downPoint: NSPoint?
+
+    override func mouseDown(with event: NSEvent) {
+        downPoint = convert(event.locationInWindow, from: nil)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { downPoint = nil }
+        guard let down = downPoint else { return }
+        let up = convert(event.locationInWindow, from: nil)
+        let dist = hypot(up.x - down.x, up.y - down.y)
+        if dist < 4.0 && bounds.contains(up) {
+            onValidClick?()
+        }
     }
 }

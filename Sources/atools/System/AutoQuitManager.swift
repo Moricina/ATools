@@ -436,9 +436,12 @@ public final class AutoQuitManager {
             entry.lastActiveDate = Date()
             watched[pid] = entry
             // 关键安全防御：切走应用（失焦）说明用户正在切换应用/切换工作上下文，而不是主动关窗！
-            // 立即撤销失焦瞬间因瞬态波动可能发起的退出调度与复查任务！
-            cancelPendingQuitLocked(pid)
-            cancelPendingRecheckLocked(pid)
+            // 若最近 3.0s 内发生过明确的关窗销毁事件，失焦是最后一个窗口关闭后系统交出焦点的必然结果，绝不能撤销排队退出！
+            let recentlyHadCloseEvent = Date().timeIntervalSince(entry.lastCloseEventDate) < 3.0
+            if !recentlyHadCloseEvent {
+                cancelPendingQuitLocked(pid)
+                cancelPendingRecheckLocked(pid)
+            }
         }
     }
 
@@ -573,8 +576,18 @@ public final class AutoQuitManager {
         let app = entry.app
         guard !app.isTerminated else { return }
 
+        let recentlyHadCloseEvent = Date().timeIntervalSince(entry.lastCloseEventDate) < 3.0
+
         // 安全防护 1：用户使用 Cmd+H 隐藏的应用绝不能自动退出
-        guard !app.isHidden else { return }
+        // 特例：若发生过明确关窗事件且 AX 确证已无窗口（如 Gemini / Catalyst 在关窗时调用 [NSApp hide:]），允许继续求值退出；
+        // 纯 Cmd+H 隐藏（无关窗事件或 AX 仍保留窗口）坚决予以保护放行。
+        if app.isHidden {
+            let axCount = axWindows(of: entry.axApp)?.count
+            let hadCloseEvent = entry.lastCloseEventDate != .distantPast
+            if !hadCloseEvent || (axCount ?? 1) > 0 {
+                return
+            }
+        }
 
         // 安全防护 2：Space 虚拟桌面切换过渡期内（2秒内）冻结零窗杀进程，撤销退出调度
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
@@ -583,9 +596,9 @@ public final class AutoQuitManager {
             return
         }
 
-        // 安全防护 3：应用刚失焦切换到后台的过渡期（2.0 秒内）冻结零窗杀进程
+        // 安全防护 3：应用刚失焦切换到后台且近期无关窗事件时，冻结零窗杀进程
         // 切应用瞬间窗口层级与 AX 状态发生剧烈翻转，且可能伴随输入法/Tooltip 等微小辅助元素销毁，绝不能借机发起退出调度
-        if !app.isActive && Date().timeIntervalSince(entry.lastActiveDate) < 2.0 {
+        if !app.isActive && Date().timeIntervalSince(entry.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
             cancelPendingQuitLocked(pid)
             cancelPendingRecheckLocked(pid)
             return
@@ -731,8 +744,8 @@ public final class AutoQuitManager {
             return
         }
 
-        // 前台确诊零窗时的主动时序加固：刷新最后关窗时间戳，确保延迟退出期间即使失焦也能顺利终审
-        if app.isActive, var entry = watched[pid] {
+        // 确诊零窗时的主动时序加固：刷新最后关窗时间戳，确保延迟退出期间即使失焦也能顺利终审
+        if var entry = watched[pid] {
             entry.lastCloseEventDate = Date()
             watched[pid] = entry
         }
@@ -798,7 +811,17 @@ public final class AutoQuitManager {
         let app = entry.app
         // pid 槽位可能被新进程复用：必须用持有的 NSRunningApplication 对象做身份验证
         guard !app.isTerminated else { return }
-        guard !app.isHidden else { return }
+
+        // 安全防护 1：用户使用 Cmd+H 隐藏的应用绝不能自动退出
+        // 特例：若发生过明确关窗事件且 AX 确证已无窗口（如 Gemini / Catalyst 在关窗时调用 [NSApp hide:]），允许继续终审退出；
+        // 纯 Cmd+H 隐藏（无关窗事件或 AX 仍保留窗口）坚决予以保护放行。
+        if app.isHidden {
+            let axCount = axWindows(of: entry.axApp)?.count
+            let hadCloseEvent = entry.lastCloseEventDate != .distantPast
+            if !hadCloseEvent || (axCount ?? 1) > 0 {
+                return
+            }
+        }
 
         // 关键安全防御 1：若应用已重新变为活跃状态且拥有窗口，绝对不能退出
         if app.isActive {
@@ -855,24 +878,20 @@ public final class AutoQuitManager {
             return
         }
 
-        // 关键安全防御 3：若应用当前处于失焦/后台状态，且失焦过渡期或近期无前台主动关窗，坚决放弃退出
-        if !app.isActive {
+        // 关键安全防御 3：若应用当前处于失焦/后台状态，且从未记录过前台关窗事件，坚决放弃退出
+        if !app.isActive && entry.lastCloseEventDate == .distantPast {
             let sinceActive = Date().timeIntervalSince(entry.lastActiveDate)
-            let sinceClose = Date().timeIntervalSince(entry.lastCloseEventDate)
-            // 如果刚切到后台不久（< 2.5s），或者最近根本没有收到过明确的窗口销毁事件（>= 3.0s），坚决放弃
-            if sinceActive < 2.5 || sinceClose >= 3.0 {
-                runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is in background (sinceActive=\(String(format: "%.1f", sinceActive))s, sinceClose=\(String(format: "%.1f", sinceClose))s).")
-                AutoQuitDecisionTrace.shared.record(
-                    pid: pid,
-                    bundleID: app.bundleIdentifier ?? "",
-                    appName: app.localizedName ?? "",
-                    axWindowCount: nil,
-                    wsWindowCount: nil,
-                    decision: .aborted,
-                    reasonCode: "BackgroundDeactivatedGracePeriod"
-                )
-                return
-            }
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is in background with no close event recorded (sinceActive=\(String(format: "%.1f", sinceActive))s).")
+            AutoQuitDecisionTrace.shared.record(
+                pid: pid,
+                bundleID: app.bundleIdentifier ?? "",
+                appName: app.localizedName ?? "",
+                axWindowCount: nil,
+                wsWindowCount: nil,
+                decision: .aborted,
+                reasonCode: "BackgroundWithoutCloseEvent"
+            )
+            return
         }
         let cfg = ConfigManager.shared.config
         guard cfg.enableAutoQuit else { return }

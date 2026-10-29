@@ -4135,6 +4135,45 @@
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，本地进程已热重启生效。
 
 
+---
+
+### [2026-10-30] 第 120 项：文件夹浮层全面交互隔离、防穿透、防拖窗、双击内联重命名与过滤重载闭环
+
+- **问题背景与病灶定位**：
+  - 文件夹展开浮层（`ShelfFolderOverlayView`）在开启状态下存在多维度的底层事件穿透与交互异常：
+    1. **悬停与 ToolTip 穿透**：`ShelfItemButton` 的 `NSTrackingArea` 与系统 ToolTip 机制基于屏幕几何坐标遍历，即使视觉被上层遮罩盖住，底层依然会收到 `mouseEntered` 与 ToolTip 弹窗；
+    2. **光标泄漏**：底座胶囊、分隔条与右下角缩放手柄的 `cursorUpdate` 会在遮罩上渗出手形或倾斜缩放光标；
+    3. **点击空白处整窗拖动**：卡片空白区域（如标题栏与外围空白）未消费 `mouseDown`，沿 Responder 链冒泡至 `ShelfRootView.mouseDown` 触发了 `window.performDrag`；
+    4. **键盘事件零隔离**：`handleKeyDown` 在浮层打开时未做拦截，Tab/Return/Delete/方向键等直接作用于底层网格，甚至会误启动被遮盖的 App；按 Esc 直接收起了整个抽屉面板；
+    5. **分类重载漏过滤（744/759/1219）**：切换分类方向、图标大小或取消拖拽回滚时调用了未过滤子项的 `reloadData(items:)`，导致文件夹子项作为顶层项重复冒出；
+    6. **标题编辑误触发**：标题输入框原本默认处于可编辑状态，单击即抢焦点，按 Esc 走默认 blur 导致未敲完的半成品名字被直接提交。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - **全系统交互挂起联动**：新增 `setInteractionSuspended(_ suspended: Bool)`，在浮层打开时同步挂起 `shelfGrid`、`categoryBar`、`sidebarSplitter` 与 `resizeHandle`，浮层关闭时幂等复原；
+     - **光标防泄漏**：`SidebarSplitterView` 与 `ResizeHandleView` 支持交互挂起，挂起时移除光标矩形并在 `cursorUpdate` 中回退为默认箭头光标；
+     - **键盘事件隔离**：`handleKeyDown` 顶部检测 `activeFolderOverlay != nil`，Esc 优先仅关闭浮层，拦截并吞噬所有未带 ⌘/⌃/⌥ 的裸按键（Tab/Return/Delete/字母过滤），彻底杜绝击穿；
+     - **Esc 与面板收起逻辑加固**：`ShelfPanel.cancelOperation` 与 `keyDown` 中的 Esc 分支均优先检查并关闭浮层；
+     - **744/759/1219 过滤修复**：将 `handleOrientationChanged`、`handleIconSizeChanged` 及拖拽取消回滚处的三处直接重载统一改为调用 `reloadGridForSelectedCategory()`，杜绝子项幽灵复出；
+     - **启动目标失效检测与面板自动收起**：`folderOverlay(didSelectItem:)` 补充失效检测（若目标失效弹窗引导重新定位），并在 `autoCloseOnLaunch` 为真且未置顶时同步退出面板与浮层。
+  2. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
+     - **防拖窗与事件截断**：`ShelfFolderOverlayView` 实现 `mouseDownCanMoveWindow = false` 与空 `mouseDown`；卡片容器改用 `FolderCardContainerView` 拦截空白点击，阻断事件向 `ShelfRootView` 冒泡；
+     - **遮罩手势防误触**：遮罩改用 `FolderDimBackdropView`，仅当鼠标按下与释放位移 $<4\text{pt}$ 时判定为有效点击关闭；
+     - **小窗口自适应防裁剪**：卡片约束加入 `width/height <= bounds - 16`，小窗口下标题栏与关闭按钮绝对不被裁切；
+     - **光标保底**：浮层全局注册 `.arrow` 光标矩形；
+     - **受控标题内联编辑**：标题默认不可编辑不可选，必须双击才进入编辑态并自动全选文本；接入 `control(_:textView:doCommandBy:)`，按 Esc 时精准回滚撤销原名称，按 Enter 时提交修改，关闭浮层前自动释放 First Responder。
+  3. [`Sources/atools/UI/PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：
+     - 在 `hideShelfPanel` 隐藏前无动画“硬清”浮层，杜绝下次呼出时闪现残留遮罩。
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 测试 `[14]` 增设：挂起状态下 ToolTip 强制为 nil、异步校验后 ToolTip 绝不复发、浮层开启时按键吞噬阻断以及 Esc 优先关闭浮层后底座交互自愈的全套断言。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **159.72 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，本地进程已热重启生效。
+
+
+
 
 
 

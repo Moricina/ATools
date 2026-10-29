@@ -339,6 +339,7 @@ public final class PanelCoordinator {
             return
         }
         shelfPanel.shelfViewController.stopMouseExitMonitoring()
+        shelfPanel.shelfViewController.closeFolderOverlay(animated: false)
         panelPresentationGeneration &+= 1
         let generation = panelPresentationGeneration
         runtimeLog("[Panel] hideShelfPanel gen=\(generation) restoreFocus=\(restoreFocus) forceHidePinned=\(forceHidePinned)")

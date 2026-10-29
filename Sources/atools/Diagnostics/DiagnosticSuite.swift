@@ -2415,6 +2415,31 @@ public enum DiagnosticSuite {
     hotkeyItem.setHotkeyBinding(testBinding)
     TestAssertions.expect(hotkeyItem.parsedHotkeyBinding?.displayString == "⌘1", "单项快捷键绑定编解码序列化往返必须一致")
 
+    // (c2) Test interaction suspension and toolTip / key isolation
+    let suspendPanel = ShelfPanel()
+    let suspendGrid = suspendPanel.shelfViewController.shelfGrid
+    suspendGrid.isInteractionSuspended = true
+    TestAssertions.expect(suspendGrid.itemButtons.allSatisfy { $0.toolTip == nil }, "挂起期间所有按钮的 toolTip 必须强制置为 nil")
+    suspendGrid.validateItemTargetsAsynchronously(for: suspendGrid.items)
+    TestAssertions.expect(suspendGrid.itemButtons.allSatisfy { $0.toolTip == nil }, "即使异步校验完成，挂起期间 toolTip 也绝对不可死灰复燃")
+    suspendGrid.isInteractionSuspended = false
+
+    // (c3) Test overlay key handling (Esc and bare keys isolation)
+    let testFolder = LauncherItem(id: UUID(), name: "测试浮层隔离", itemType: .application, target: "", isVirtualGroup: true)
+    suspendPanel.shelfViewController.shelfGrid(suspendGrid, didRequestOpenFolder: testFolder, subItems: [subItemA])
+    TestAssertions.expect(suspendPanel.shelfViewController.activeFolderOverlay != nil, "打开文件夹浮层后 activeFolderOverlay 不应为 nil")
+    TestAssertions.expect(suspendGrid.isInteractionSuspended == true, "浮层打开时底座网格必须处于交互挂起状态")
+
+    let dummyReturnEvent = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!
+    let swallowed = suspendPanel.shelfViewController.handleKeyDown(dummyReturnEvent)
+    TestAssertions.expect(swallowed == true, "浮层打开时普通击键必须被阻断吞噬，严禁下穿至底层网格")
+
+    let escEvent = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 53)!
+    let escHandled = suspendPanel.shelfViewController.handleKeyDown(escEvent)
+    TestAssertions.expect(escHandled == true, "浮层打开时按 Esc 应当被优先消费")
+    TestAssertions.expect(suspendPanel.shelfViewController.activeFolderOverlay == nil, "按 Esc 后文件夹浮层应当被关闭")
+    TestAssertions.expect(suspendGrid.isInteractionSuspended == false, "关闭浮层后底座网格交互状态必须立刻恢复")
+
     // (d) Test Quick Slot & Launch Frequency Tracking
     let qItem = LauncherItem(name: "高频测试项", itemType: .application, target: "/Applications/FreqTest.app")
     _ = ConfigManager.shared.addItem(qItem, to: targetCat.id)
