@@ -2080,6 +2080,7 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "cc.atools.aurapane", ownerName: "AuraPane", title: "设置", width: 400, height: 300, isOnScreen: false) == true, "AuraPane offscreen settings must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.oplus.devicespace", ownerName: "O+Connect", title: "OPPO 互联", width: 1252, height: 710, isOnScreen: false) == true, "OPPO Connect offscreen hidden window must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.oplus.devicespace", ownerName: "O+Connect", title: "O+Connect", width: 370, height: 313, isOnScreen: false) == true, "OPPO Connect tray panel must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.google.GeminiMacOS", ownerName: "Gemini", title: "", width: 500, height: 500, isOnScreen: false) == true, "Gemini offscreen auxiliary layer must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.TextEdit", ownerName: "TextEdit", title: "文档1", width: 800, height: 600, isOnScreen: true) == false, "Onscreen active document must never be cleaned")
 
         // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量

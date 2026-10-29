@@ -4169,8 +4169,35 @@
 
 - **验证与测试结果**：
   - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
-  - 物理常驻内存 Footprint 维持在 **159.72 MB**；
-  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，本地进程已热重启生效。
+---
+
+### [2026-10-30] 第 121 项：适配 Google Gemini 及 Catalyst 关窗隐藏特性、失焦竞争解耦与终审放行
+
+- **问题背景与病灶定位**：
+  - 用户反馈 Google Gemini（`Gemini.app`，Bundle ID `com.google.GeminiMacOS`）点击红叉后无法自动退出。
+  - 经深入排查 AX 树、WindowServer 图层及进程生命周期，定位到四大环环相扣的时序与逻辑病灶：
+    1. **Catalyst 关窗隐藏特性与粗暴守卫冲突**：Gemini 属于 Mac Catalyst / WebKit 混合架构，在点击红叉关闭最后一个窗口时，内部会主动调用 `[NSApp hide:nil]`，导致 `app.isHidden == true`，同时 AX 窗口数归零。原 `AutoQuitManager` 中设置了 `guard !app.isHidden else { return }`（旨在保护 ⌘H 隐藏），导致 Gemini 关窗时被直接误判为用户 ⌘H 隐藏而提前退出求值；
+    2. **关窗失焦时序竞争导致退出任务被秒撤销**：用户点击红叉后，Gemini 实体窗口销毁，macOS 立即收回焦点并向其后方应用分发激活事件，Gemini 触发 `NSWorkspace.didDeactivateApplicationNotification`。此前 `handleAppDeactivated` 中无条件执行了 `cancelPendingQuitLocked(pid)`，将刚由 `kAXUIElementDestroyedNotification` 建立的 1.0 秒退出计时任务在数十毫秒内瞬间取消；
+    3. **终审防御逻辑的析取条件逻辑倒置**：`executePendingQuit` 原检查 `if sinceActive < 2.5 || sinceClose >= 3.0`，由于使用了 `||` 析取，即使用户 1 秒前刚有关窗操作（`sinceClose < 3.0` 为真），只要该应用在 2.5 秒内失焦（`sinceActive < 2.5` 为真），便无差别触发 `BackgroundDeactivatedGracePeriod` 防误杀中止退出；
+    4. **离屏残余图层未清洗**：Gemini 关窗后 WindowServer 层面残留了一个尺寸为 500×500 的离屏未展示缓冲底板（`isOnScreen == false`）。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **失焦与关窗事件精准解耦**：在 `handleAppDeactivated` 中增加 `recentlyHadCloseEvent` 判定。若应用在最近 3.0 秒内接收到过明确的关窗销毁事件，失焦乃最后一个窗口销毁后 macOS 交出前台焦点的必然系统行为，绝不撤销正在倒计时的退出调度任务；仅在纯切应用失焦且近期无关窗事件时才执行取消；
+     - **⌘H 与关窗隐藏特征分离**：在 `evaluateAppWindowsLocked` 与 `executePendingQuit` 中将 `guard !app.isHidden` 重构为：当 `app.isHidden == true` 时，仅当其从未发生过关窗事件（`lastCloseEventDate == .distantPast`）或 AX 树仍有在活窗口（`axCount > 0`）时，才作为 ⌘H 隐藏保护放行；若发生过关窗事件且 AX 确证已为 0 窗口，允许继续求值并正常执行退出；
+     - **终审后台防御逻辑纠正**：在 `executePendingQuit` 中彻底摒弃对 `sinceActive < 2.5` 的误杀阻断，修正为仅当 `!app.isActive && entry.lastCloseEventDate == .distantPast`（从未发生过关窗事件的纯后台应用）时才中止退出，为用户主动关窗提供 100% 的终审放行通路；
+     - **时序加固**：在 `scheduleQuitLocked` 调度退出时，无条件将当前时间同步刷新至 `entry.lastCloseEventDate`，保证在跨失焦过渡和延迟期间始终维持鲜活的合法关窗凭证。
+  2. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - 内置 Google Gemini 专属规则：`AppQuirkRule(id: "gemini", name: "Google Gemini", bundleIDPrefixes: ["com.google.GeminiMacOS"], ownerNameKeywords: ["gemini"], offscreenTitles: ["gemini"], ghostSizes: [GhostWindowSize(w: 500, h: 500, tolerance: 25)])`，实现离屏辅助图层自动清洗。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 测试 `[12]` 中补充针对 Gemini 500×500 离屏图层在 `AutoQuitQuirks` 中被正确清洗识别的断言。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **147.78 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Applications/ATools.app` 已热替换部署；
+  - 编写端到端真实测试脚本验证：冷启动启动 Gemini，模拟点击红叉关窗，ATools 准确触发 `Last window closed for Gemini; quitting in 1.0s.`，1.8s 后调用 `Terminating Gemini after last window closed.`，Gemini 进程安全、干净彻底退出。
+
 
 
 
