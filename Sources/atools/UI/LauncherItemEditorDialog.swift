@@ -28,6 +28,8 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
     private let workingDirField = NSTextField()
     private var browseWorkingDirButton: SettingsPillButton!
     private let tagsField = NSTextField()
+    private var hotkeyRecorder: HotkeyRecorderControl!
+    private var pendingHotkeyBinding: HotkeyBinding?
 
     private static var activeDialog: LauncherItemEditorDialog?
 
@@ -83,7 +85,7 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         self.isCreatingNew = isCreatingNew
         self.onSaved = onSaved
 
-        let contentRect = NSRect(x: 0, y: 0, width: 500, height: 440)
+        let contentRect = NSRect(x: 0, y: 0, width: 500, height: 500)
         let win = NSWindow(
             contentRect: contentRect,
             styleMask: [.titled, .closable, .fullSizeContentView],
@@ -95,8 +97,8 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
         win.isReleasedWhenClosed = false
-        win.minSize = NSSize(width: 500, height: 440)
-        win.maxSize = NSSize(width: 500, height: 440)
+        win.minSize = NSSize(width: 500, height: 500)
+        win.maxSize = NSSize(width: 500, height: 500)
 
         let isDark = ConfigManager.shared.config.theme.isDark
         win.appearance = NSAppearance(named: isDark ? .darkAqua : .aqua)
@@ -211,6 +213,19 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         tagsHint.font = NSFont.systemFont(ofSize: 11)
         tagsHint.textColor = .tertiaryLabelColor
         container.addSubview(tagsHint)
+
+        // Row 6: Hotkey
+        let hotkeyLabel = makeFieldLabel("专属热键：")
+        hotkeyRecorder = HotkeyRecorderControl(binding: nil)
+        hotkeyRecorder.translatesAutoresizingMaskIntoConstraints = false
+        hotkeyRecorder.onChange = { [weak self] newBinding in
+            self?.pendingHotkeyBinding = newBinding
+        }
+        hotkeyRecorder.onClear = { [weak self] in
+            self?.pendingHotkeyBinding = nil
+        }
+        container.addSubview(hotkeyLabel)
+        container.addSubview(hotkeyRecorder)
 
         // Bottom Buttons
         let cancelBtn = SettingsPillButton(title: "取消", target: self, action: #selector(cancelClicked))
@@ -328,6 +343,16 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
             tagsHint.leadingAnchor.constraint(equalTo: tagsField.leadingAnchor),
             tagsHint.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
+            // Row 6: Hotkey
+            hotkeyLabel.topAnchor.constraint(equalTo: tagsHint.bottomAnchor, constant: 14),
+            hotkeyLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            hotkeyLabel.widthAnchor.constraint(equalToConstant: labelWidth),
+
+            hotkeyRecorder.centerYAnchor.constraint(equalTo: hotkeyLabel.centerYAnchor),
+            hotkeyRecorder.leadingAnchor.constraint(equalTo: hotkeyLabel.trailingAnchor, constant: 6),
+            hotkeyRecorder.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            hotkeyRecorder.heightAnchor.constraint(equalToConstant: SettingsPillButton.height),
+
             // Footer buttons
             saveBtn.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             saveBtn.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -366,6 +391,9 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
         argumentsField.stringValue = item.executionContext?.formattedArgumentsString ?? ""
         workingDirField.stringValue = item.executionContext?.workingDirectory ?? ""
         tagsField.stringValue = item.formattedTagsString
+
+        pendingHotkeyBinding = item.parsedHotkeyBinding
+        hotkeyRecorder.currentBinding = pendingHotkeyBinding
 
         refreshIconPreview()
         refreshTargetValidationState()
@@ -562,6 +590,9 @@ public final class LauncherItemEditorDialog: NSWindowController, NSWindowDelegat
 
         // 处理搜索别名标签 (tags)
         updated.tags = LauncherItem.parseTags(tagsField.stringValue)
+
+        // 处理专属全局快捷键
+        updated.setHotkeyBinding(pendingHotkeyBinding)
 
         if isCreatingNew {
             let targetCatId = categoryId ?? ConfigManager.shared.config.categories.first?.id

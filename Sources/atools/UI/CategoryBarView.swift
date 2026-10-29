@@ -375,15 +375,21 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
                 selectionCapsule.animator().frame = target
             }
         } else {
+            selectionCapsule.layer?.removeAllAnimations()
             selectionCapsule.frame = target
         }
     }
 
     override public func layout() {
         super.layout()
-        // Don't cut a running glide short; the animation already targets the final frame.
-        if !selectionCapsule.isHidden, selectionCapsule.layer?.animationKeys()?.isEmpty ?? true {
-            layoutSelectionCapsule(animated: false)
+        // Don't cut a running glide short; but track active editing immediately
+        if !selectionCapsule.isHidden {
+            if activeEditingPill != nil {
+                selectionCapsule.layer?.removeAllAnimations()
+                layoutSelectionCapsule(animated: false)
+            } else if selectionCapsule.layer?.animationKeys()?.isEmpty ?? true {
+                layoutSelectionCapsule(animated: false)
+            }
         }
     }
 
@@ -395,6 +401,10 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         addItem.image = ThumbnailPipeline.shared.symbolIcon(name: "plus", pointSize: 13)
         addItem.target = self
         menu.addItem(addItem)
+
+        if let jumpSubmenuItem = makeJumpToCategoryMenuItem() {
+            menu.addItem(jumpSubmenuItem)
+        }
 
         menu.addItem(NSMenuItem.separator())
         let isPinned = PanelCoordinator.shared.isShelfPinned
@@ -449,6 +459,33 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     @objc private func contextCloseShelf() {
         PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
+    }
+
+    @objc internal func contextJumpToCategory(_ sender: NSMenuItem) {
+        if let cat = sender.representedObject as? Category {
+            delegate?.categoryBar(self, didSelectCategory: cat)
+        }
+    }
+
+    public func makeJumpToCategoryMenuItem() -> NSMenuItem? {
+        guard categories.count > 1 else { return nil }
+        let jumpMenu = NSMenu(title: "跳转至分类")
+        for cat in categories {
+            let isCurrent = cat.id == selectedCategoryId
+            let title = isCurrent ? "✓ \(cat.name)" : cat.name
+            let item = NSMenuItem(title: title, action: #selector(contextJumpToCategory(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = cat
+            jumpMenu.addItem(item)
+        }
+        let jumpSubmenuItem = NSMenuItem(title: "跳转至分类", action: nil, keyEquivalent: "")
+        jumpSubmenuItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.right.circle", pointSize: 13)
+        jumpSubmenuItem.submenu = jumpMenu
+        return jumpSubmenuItem
+    }
+
+    public func categoryPillJumpMenuItem(_ pill: CategoryPillView) -> NSMenuItem? {
+        return makeJumpToCategoryMenuItem()
     }
 
     // MARK: - CategoryPillDelegate
@@ -568,11 +605,14 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         }
         selectedPill = pill
 
+        // 🌟 核心修复：必须先启动编辑态挂载初始最小宽度约束（76pt）与隐去原标签，再做布局计算与胶囊对齐
+        pill.beginEditing(cursorAtEnd: false)
+
         stackView.layoutSubtreeIfNeeded()
-        layoutSelectionCapsule(animated: true)
+        selectionCapsule.layer?.removeAllAnimations()
+        layoutSelectionCapsule(animated: false)
         scrollSelectedPillIntoView(animated: true)
 
-        pill.beginEditing(cursorAtEnd: false)
         installClickOutsideMonitor()
 
         DispatchQueue.main.async { [weak self] in
@@ -595,16 +635,25 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         }
         selectedPill = pill
 
+        pill.beginEditing(cursorAtEnd: true)
+
         stackView.layoutSubtreeIfNeeded()
-        layoutSelectionCapsule(animated: true)
+        selectionCapsule.layer?.removeAllAnimations()
+        layoutSelectionCapsule(animated: false)
         scrollSelectedPillIntoView(animated: true)
 
-        pill.beginEditing(cursorAtEnd: true)
         installClickOutsideMonitor()
 
         DispatchQueue.main.async { [weak self] in
             self?.scrollSelectedPillIntoView(animated: true)
         }
+    }
+
+    public func categoryPillDidChangeText(_ pill: CategoryPillView) {
+        stackView.layoutSubtreeIfNeeded()
+        selectionCapsule.layer?.removeAllAnimations()
+        layoutSelectionCapsule(animated: false)
+        scrollSelectedPillIntoView(animated: false)
     }
 
     public func commitActiveEditing() {

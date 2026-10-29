@@ -375,7 +375,7 @@ private final class ShelfRootView: NSView {
     }
 }
 
-public final class ShelfViewController: NSViewController, CategoryBarDelegate, ShelfGridDelegate {
+public final class ShelfViewController: NSViewController, CategoryBarDelegate, ShelfGridDelegate, ShelfFolderOverlayDelegate {
     internal let categoryBar = CategoryBarView()
     internal let shelfGrid = ShelfGridView()
     private let resizeHandle = ResizeHandleView(frame: .zero)
@@ -389,6 +389,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private var dragSessionOriginCategoryId: UUID?
     private var typeAheadQuery = ""
     private var typeAheadResetWorkItem: DispatchWorkItem?
+    private var activeFolderOverlay: ShelfFolderOverlayView?
 
     override public func loadView() {
         let savedW = CGFloat(ConfigManager.shared.config.shelfWidth)
@@ -781,6 +782,15 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
                 SettingsWindowController.shared.showSettingsWindow()
                 return true
             }
+            // ⌘1~⌘9 Quick Slot 直达启动
+            if ConfigManager.shared.config.enableQuickSlots,
+               let chars = event.charactersIgnoringModifiers,
+               chars.count == 1,
+               let digit = Int(chars), digit >= 1 && digit <= 9 {
+                if shelfGrid.executeQuickSlot(index: digit - 1) {
+                    return true
+                }
+            }
             if let chars = event.charactersIgnoringModifiers {
                 switch chars {
                 case "\u{f702}": // left arrow
@@ -870,15 +880,44 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             SettingsWindowController.shared.showSettingsWindow()
             return
         }
+        if shelfGrid.hasBatchSelection && (event.keyCode == 51 || event.keyCode == 117) {
+            shelfGrid.deleteSelectedBatchItems()
+            return
+        }
         super.keyDown(with: event)
     }
 
     override public func cancelOperation(_ sender: Any?) {
+        if activeFolderOverlay != nil {
+            closeFolderOverlay()
+            return
+        }
         if !cancelKeyboardFilter() {
+            if shelfGrid.hasBatchSelection {
+                shelfGrid.clearBatchSelection()
+                return
+            }
             if !PanelCoordinator.shared.isShelfPinned {
                 PanelCoordinator.shared.hideShelfPanel()
             }
         }
+    }
+
+    public func reloadGridForSelectedCategory() {
+        guard let cat = selectedCategory else {
+            shelfGrid.currentCategoryId = nil
+            shelfGrid.reloadData(items: [], allCategoryItems: [])
+            updateStatusBar()
+            return
+        }
+        shelfGrid.currentCategoryId = cat.id
+        var allItems = cat.items
+        if cat.isFavorites && ConfigManager.shared.config.smartFavoritesMode {
+            allItems = ConfigManager.shared.frequentItems(limit: 16)
+        }
+        let topLevel = allItems.filter { $0.parentId == nil }
+        shelfGrid.reloadData(items: topLevel, allCategoryItems: allItems)
+        updateStatusBar()
     }
 
     public func loadData() {
@@ -894,13 +933,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         }
 
         categoryBar.reloadData(categories: categories, selectedId: selectedCategory?.id)
-        if let cat = selectedCategory {
-            shelfGrid.reloadData(items: cat.items)
-            updateStatusBar()
-        } else {
-            shelfGrid.reloadData(items: [])
-            updateStatusBar()
-        }
+        reloadGridForSelectedCategory()
     }
 
     private func updateStatusBar() {
@@ -909,12 +942,13 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     // MARK: - CategoryBarDelegate
     public func categoryBar(_ bar: CategoryBarView, didSelectCategory category: Category) {
+        closeFolderOverlay()
         let prevCategory = self.selectedCategory
         typeAheadQuery.removeAll()
         shelfGrid.applyFilter("")
         let latestCategory = ConfigManager.shared.config.categories.first(where: { $0.id == category.id }) ?? category
         self.selectedCategory = latestCategory
-        shelfGrid.reloadData(items: latestCategory.items)
+        reloadGridForSelectedCategory()
 
         if let prev = prevCategory, prev.id != latestCategory.id {
             let allCats = ConfigManager.shared.config.categories
@@ -1017,6 +1051,24 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     public func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem) {
         guard let cat = selectedCategory else { return }
         ConfigManager.shared.removeItem(id: item.id, from: cat.id)
+        loadData()
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didDeleteItems items: [LauncherItem]) {
+        guard let cat = selectedCategory else { return }
+        ConfigManager.shared.removeItems(ids: Set(items.map { $0.id }), from: cat.id)
+        loadData()
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didMoveItems items: [LauncherItem], toCategoryId: UUID) {
+        guard let cat = selectedCategory else { return }
+        ConfigManager.shared.moveItems(ids: Set(items.map { $0.id }), from: cat.id, to: toCategoryId)
+        loadData()
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didCreateFolderWithItems items: [LauncherItem]) {
+        guard let cat = selectedCategory else { return }
+        _ = ConfigManager.shared.createFolderWithItems(itemIds: Set(items.map { $0.id }), inCategoryId: cat.id)
         loadData()
     }
 
@@ -1192,6 +1244,98 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     private func executeLauncherItem(_ item: LauncherItem) {
         LauncherExecutor.open(item: item)
     }
+
+    // MARK: - ShelfFolderOverlayDelegate
+    public func folderOverlayDidRequestClose(_ overlay: ShelfFolderOverlayView) {
+        closeFolderOverlay()
+    }
+
+    public func folderOverlay(_ overlay: ShelfFolderOverlayView, didRenameFolder folderId: UUID, to newName: String) {
+        guard let cat = selectedCategory else { return }
+        if let idx = cat.items.firstIndex(where: { $0.id == folderId }) {
+            var updated = cat.items[idx]
+            updated.name = newName
+            ConfigManager.shared.updateItem(updated, in: cat.id)
+            reloadGridForSelectedCategory()
+        }
+    }
+
+    public func folderOverlay(_ overlay: ShelfFolderOverlayView, didRemoveItemFromFolder itemId: UUID, folderId: UUID) {
+        guard let cat = selectedCategory else { return }
+        if let idx = cat.items.firstIndex(where: { $0.id == itemId }) {
+            var updated = cat.items[idx]
+            updated.parentId = nil
+            ConfigManager.shared.updateItem(updated, in: cat.id)
+
+            let remaining = ConfigManager.shared.config.categories.first(where: { $0.id == cat.id })?.items.filter { $0.parentId == folderId } ?? []
+            if remaining.isEmpty {
+                ConfigManager.shared.removeItem(id: folderId, from: cat.id)
+                closeFolderOverlay()
+            } else {
+                overlay.reloadSubItems(remaining)
+            }
+            reloadGridForSelectedCategory()
+        }
+    }
+
+    public func folderOverlay(_ overlay: ShelfFolderOverlayView, didSelectItem item: LauncherItem) {
+        if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
+            PanelCoordinator.shared.hideShelfPanel()
+        }
+        LauncherExecutor.open(item: item)
+    }
+
+    public func closeFolderOverlay() {
+        guard let overlay = activeFolderOverlay else { return }
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.16
+            overlay.animator().alphaValue = 0.0
+        }, completionHandler: {
+            overlay.removeFromSuperview()
+        })
+        activeFolderOverlay = nil
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didRequestOpenFolder folder: LauncherItem, subItems: [LauncherItem]) {
+        closeFolderOverlay()
+        guard let catId = selectedCategory?.id else { return }
+        let overlay = ShelfFolderOverlayView(folderItem: folder, subItems: subItems, categoryId: catId, frame: view.bounds)
+        overlay.delegate = self
+        overlay.alphaValue = 0.0
+        view.addSubview(overlay)
+        activeFolderOverlay = overlay
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.20
+            overlay.animator().alphaValue = 1.0
+        }
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didMergeItemsIntoFolder sourceId: UUID, targetId: UUID) {
+        guard let cat = selectedCategory,
+              let srcItem = cat.items.first(where: { $0.id == sourceId }),
+              let targetItem = cat.items.first(where: { $0.id == targetId }) else { return }
+
+        if targetItem.isVirtualGroup {
+            var updatedSrc = srcItem
+            updatedSrc.parentId = targetItem.id
+            ConfigManager.shared.updateItem(updatedSrc, in: cat.id)
+        } else {
+            let folder = LauncherItem(
+                name: "新建文件夹",
+                itemType: .application,
+                target: "",
+                isVirtualGroup: true
+            )
+            ConfigManager.shared.addItem(folder, to: cat.id)
+            var updatedSrc = srcItem
+            updatedSrc.parentId = folder.id
+            var updatedTarget = targetItem
+            updatedTarget.parentId = folder.id
+            ConfigManager.shared.updateItem(updatedSrc, in: cat.id)
+            ConfigManager.shared.updateItem(updatedTarget, in: cat.id)
+        }
+        reloadGridForSelectedCategory()
+    }
 }
 
 public final class ShelfPanel: NSPanel {
@@ -1304,6 +1448,7 @@ public final class ShelfPanel: NSPanel {
 
     public func prepareForDisplay() {
         updateWindowAppearanceForTheme()
+        shelfViewController.closeFolderOverlay()
         shelfViewController.snapWindowWidthIfNeeded()
         shelfViewController.resetKeyboardState()
         shelfViewController.loadData()

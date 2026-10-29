@@ -3804,3 +3804,215 @@
     * 修复前：`wsCount = 1`（命中有标题离屏 "设置" 760x606），导致终审拦截；
     * 修复后：`wsCount = 0`，与 `axCount = 0` 达成双向权威确诊零窗，即刻触发延迟退出；
   - **实机部署与热重载**：已编译签名 `ATools.app (v1.3.34 build 60)` 并部署更新。
+
+
+---
+
+### [2026-10-29] 第 111 项：抽屉启动器三大体验升级（新装应用自动入库、多应用拖拽合并文件夹嵌套、全局/抽屉单项快捷秒启与频次智能排序）
+
+- **故障背景与功能升级诉求**：
+  - **新装应用不自动入库**：原全局仅有 `didLaunchApplication`（用于 AutoQuit），缺乏应用变动监听，安装新应用后必须手动拖入抽屉，割裂用户心智；
+  - **缺乏文件夹 / 子分类嵌套**：Launchpad 支持将图标拖叠为文件夹，分类较多时单层胶囊易横向堆满且应用无法按项目分组；
+  - **缺乏单项快捷键，排序全手动**：缺乏类似 `⌘1`~`⌘9` 的快速秒启槽位，且无按启动频次排行的智能排序。
+
+- **实施与加固详情**：
+  1. **新装应用静默感知与墓碑防复活机制 (Zero-Daemon Auto Discovery & Tombstone Guard)**：
+     - [`Sources/atools/Search/AppHotspotIndex.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/AppHotspotIndex.swift)：复用现有的 FSEvents 文件系统监听源（零额外进程常驻），引入 2.0s 深度防抖，过滤临时解包文件，扫描完成后通过 `ConfigManager.shared.handleAppIndexUpdated(apps:)` 进行协同；
+     - [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+       * 落地应用入库校验（确证 bundle 完整性及 `executablePath` 存在，拦截未解包完毕的半成品）；
+       * 引入 `ignoredAutoAddBundleIds` 墓碑列表，若用户手动删除某应用，其 Bundle ID 即刻被墓碑化，杜绝应用后续自动复活入库；
+       * 默认沉淀至首个非“常用”工作分类（未找到时落入首分类），并触发 `.atoolsShelfDataDidChange` 广播刷新；
+     - [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：新增 `enableAutoAddInstalledApps`、`autoAddTargetCategoryId`、`ignoredAutoAddBundleIds`、`lastAutoAppScanTimestamp` 配置项，保持 100% 向后兼容编解码。
+  2. **多应用拖拽合并与轻量液态文件夹浮层 (Folder Nesting & Liquid Popover Overlay)**：
+     - [`Sources/atools/Models/LauncherItem.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/LauncherItem.swift)：复用 `parentId: UUID?` 与 `isVirtualGroup: Bool`，全量维持一维数组序列化，杜绝树状结构带来的向下迁移破坏；
+     - [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift) (*新增*)：构建 `ShelfFolderOverlayView`，采用轻量化液态高斯毛玻璃底板、内联双击重命名标题、子应用图标网格、右键菜单“移出文件夹”、以及空文件夹自愈清理逻辑；
+     - [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+       * 文件夹复合图标渲染：支持 2x2 四宫格微缩图与原生文件夹底板合成；
+       * 拖拽热区冲突规避：拖动图标至另一图标中心 40% 核心热区并悬停达到 0.45 秒才触发合并高亮，边缘位置保持原生的图标排序换位；
+       * 代理协议扩充：新增 `didRequestOpenFolder` 与 `didMergeItemsIntoFolder` 接口；
+     - [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：顶层网格仅展示根节点应用（`parentId == nil`），实现 `ShelfFolderOverlayDelegate`，点击文件夹图标即展开居中浮层，点击空白或按 Esc 瞬间收起；
+     - [`Sources/atools/UI/CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)：新增空白处右键快速跳转分类子菜单，解决分类过多时的定位问题。
+  3. **单项全局快捷键、⌘1~⌘9 抽屉秒启与使用频次智能区 (Quick Slots & Usage Frequency)**：
+     - [`Sources/atools/Models/LauncherItem.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/LauncherItem.swift)：新增 `launchCount: Int`、`lastLaunchedAt: Double?` 统计字段，以及 `parsedHotkeyBinding` / `setHotkeyBinding` 快捷键模型；
+     - [`Sources/atools/System/LauncherExecutor.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/LauncherExecutor.swift)：应用启动成功后自动回调 `ConfigManager.shared.recordItemLaunch(itemId:)` 累计频次；
+     - [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：新增 `recordItemLaunch`（防抖存盘）与 `frequentItems(limit:)` 频次排行计算；
+     - [`Sources/atools/App/HotkeyManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/HotkeyManager.swift)：新增 `registerAllItemHotkeys()`，通过 Carbon EventLoop 将单项快捷键统一接入全局热键管理系统（ID >= 1000），按下即全屏穿透秒启目标应用；
+     - [`Sources/atools/UI/LauncherItemEditorDialog.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LauncherItemEditorDialog.swift)：在编辑弹窗中新增 Row 6 快捷键录制控件，支持任意项自定义全局热键；
+     - [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift) & [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+       * 前 9 个应用右上角显示微型 `⌘1`~`⌘9` 秒启徽标（启用时）；
+       * 抽屉展开状态下拦截 `⌘1` ~ `⌘9` 组合键直接触发启动，避免与即打即搜的数字检索产生冲突；
+     - [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift)：增加“新安装应用自动进抽屉”和“抽屉内 ⌘1~⌘9 快速秒启”用户配置开关。
+
+- **验证与测试结果**：
+  - **单元诊断测试**：更新 [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift) 新增 `[14]` 专项测试，涵盖：
+    1. 新装应用自动入库与 Tombstone 墓碑防复活有效性；
+    2. 多应用合并文件夹、一维存储与级联删除/移出自愈；
+    3. 2x2 文件夹复合图标渲染；
+    4. 单项全局热键 Codable 编解码与无缝往返；
+    5. `launchCount` 频次累加与 `frequentItems` 动态降序排行。
+  - **全套回归诊断**：执行 `./Scripts/build.sh --test`，全套 14 大项自动化测试 **100% 全部 PASSED 通过**（编译零错误零警告，测试耗时极短，Footprint 维持在 252MB 基线区间，无额外内存开销）。
+
+
+---
+
+### [2026-10-29] 第 112 项：修复新建/重命名分类时光标与文字跑出胶囊外（布局时序与内联编辑动态宽度错位）缺陷
+
+- **故障背景与根因定位**：
+  - **用户反馈**：“为什么我新建分类的时候，光标和字体是在胶囊外面的，很诡异”（附带截图：胶囊缩成左侧小圆圈，文字与光标被挤在右侧体外）；
+  - **现场数据与根因排查**：
+    1. **时序颠倒导致初始胶囊尺寸缩成极小点**：在 [`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift) 的 `beginAddCategoryInline` 中，旧逻辑在 `stackView.addArrangedSubview(pill)` 之后，先执行了 `stackView.layoutSubtreeIfNeeded()` 与 `layoutSelectionCapsule(animated: true)`，最后才调用 `pill.beginEditing(cursorAtEnd: false)`。而此时新建分类的名称为空字符串 `""`，且编辑态的宽度约束尚未激活，导致首次布局计算出该胶囊宽度仅为 28pt（甚至 0pt）；
+    2. **内联编辑框宽度未随用户输入动态自适应**：AppKit 中可编辑的 `NSTextField` 其水平 `intrinsicContentSize` 为 `-1`（`noIntrinsicMetric`），在旧实现中并未根据实际输入的字符动态调整 Auto Layout 约束。当用户输入“其他”等文字时，`NSTextField` 采用居中对齐，文字被挤到 72pt 区域中心，而底层的白底高光胶囊 `selectionCapsule` 仍停滞在旧动画帧或仅 28pt 处，产生“胶囊在左、字体和光标悬空在右”的脱节错位现象；
+    3. **动画阻塞导致胶囊更新被截断**：`layout()` 中曾判断 `animationKeys()?.isEmpty`，若胶囊正处于补间动画中，后续的尺寸同步会被 AppKit 忽略。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift)：
+     - **实时文本宽度测算与动态自适应约束**：新增 `updateEditingWidth()`，基于文字当前字号（13pt Semibold）测量实际排版宽度，动态计算 `max(76, ceil(textWidth) + hPadding * 2 + 12)`，并实时赋给 `minWidthConstraint.constant`；
+     - **即打即扩与代理联动**：在 `controlTextDidChange` 中增加文本变化监听，文字输入或退格时即刻更新约束，并通过 `CategoryPillDelegate.categoryPillDidChangeText` 实时通知外层分类栏；
+     - **编辑态首帧立即激活**：在 `beginEditing` 入口处首先执行 `updateEditingWidth()`，确保编辑框在首帧即拥有 76pt 饱满空间。
+  2. [`Sources/atools/UI/CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)：
+     - **纠正新建与重命名时序**：在 `beginAddCategoryInline` 与 `beginRenameCategoryInline` 中，调整为**先调用 `pill.beginEditing` 激活 76pt 约束**，再执行 `stackView.layoutSubtreeIfNeeded()` 与 `layoutSelectionCapsule(animated: false)`，并强制移除历史残余动画（`removeAllAnimations()`），实现首帧 100% 毫秒级同心同位锁死；
+     - **编辑态动画打断保护**：在 `layout()` 中对正在编辑中的胶囊特赦放行，杜绝动画未完结导致胶囊尺寸跳帧；
+     - **实现 `categoryPillDidChangeText`**：用户边输入边实时重新贴合胶囊高光底衬，实现行云流水般的跟随伸缩。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：运行 `./Scripts/build.sh --test`，全套 14 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **实机部署与热重载**：已通过 `./Scripts/package_app.sh` 编译并签名 `ATools.app`，平滑重载进程（PID 63300），新建分类时光标与文字在胶囊内部居中展示并随文字长度自适应延展。
+
+
+---
+
+### [2026-10-29] 第 113 项：支持分类栏任意胶囊右键呼出「跳转至分类」完整上下文菜单
+
+- **故障背景与功能升级诉求**：
+  - **用户反馈**：“跳转至分类只有把应用抽屉拉的很大，在空白区域才能点出来，能不能让在分类栏任何一个位置右键都有这个跳转至分类”；
+  - **排查确诊**：原先的“跳转至分类”子菜单仅在 [`CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift) 的空白区右键事件（`CategoryBarView.rightMouseDown`）中构造。当用户创建分类较多时，胶囊药丸将铺满整条分类栏，几乎不存在任何空白间隙，导致用户无法唤出分类快速跳转，且在分类胶囊（[`CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift)）上右键时缺失该跳转子菜单。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)：
+     - 抽象出公共的 `makeJumpToCategoryMenuItem() -> NSMenuItem?` 生成器，根据当前全部分类列表动态生成带“✓ 当前分类”高亮标识的跳转子菜单；
+     - 接入 `CategoryPillDelegate.categoryPillJumpMenuItem` 协议，使每个胶囊右键菜单能够直接获取外层分类栏的跳转菜单实例；
+  2. [`Sources/atools/UI/CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift)：
+     - 在 `CategoryPillView.rightMouseDown` 中统一挂载 `delegate?.categoryPillJumpMenuItem(self)`，并在“新建分类...”下方呈现“跳转至分类 >”；
+     - 补齐胶囊右键菜单的全局上下文操作（“固定在桌面”、“隐藏桌面图标”、“偏好设置...”、“关闭抽屉”），实现全栏右键体验 100% 对齐。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：运行 `./Scripts/build.sh --test`，全套 14 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **实机部署与热重载**：已通过 `./Scripts/package_app.sh` 编译并签名 `ATools.app`，完成单例平滑重载（PID 66150），分类栏任意胶囊或空白处右键均可一键呼出“跳转至分类”子菜单。
+
+
+---
+
+### [2026-10-29] 第 114 项：实现新装应用历史基线防灌水快照与自定义入库目标分类（专属新应用收件箱/指定已有分类与自愈回退）
+
+- **故障背景与功能升级诉求**：
+  - **用户反馈**：“为什么我的办公分类里面把启动台其他图标都放进来了，能不能在新安装应用自动进抽屉下面添加一个用户自定义指定应用抽屉已有的分类 或者默认放进新建一个分类的功能，这样新的应用就放到用户指定的分类中”；
+  - **根因定位**：
+    1. **旧扫描逻辑无历史基线，把系统内已有应用误判为“新安装”**：旧版本以抽屉内已有条目的 target 进行比对，凡是抽屉内未收录的应用均被识别为新增，导致初次启用该功能时将系统中近百款既有 App 一股脑灌入默认首个非“常用”分类（用户正好为“办公”）；
+    2. **DMG/PKG 历史编译时间干扰**：DMG 拖拽安装的应用会保留开发者原始编译时间戳（如 2023 年），无法单纯通过 `creationDate > baselineTime` 判断新增；
+    3. **缺乏用户入库路由策略选择**：用户无法指定“新应用入库到哪个分类”，也无法选择是否单独开辟一个收件箱分类。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：
+     - **新增 `AutoAddPolicyMode` 枚举**：支持 `.dedicatedInbox`（专属收件箱）与 `.existingCategory`（指定已有分类）；
+     - **新增配置项并保持 100% 向后兼容**：
+       * `autoAddPolicyMode: AutoAddPolicyMode = .dedicatedInbox`
+       * `autoAddInboxCategoryName: String = "新应用"`
+       * `knownAppBundleIds: [String] = []`（全机应用历史存量快照清单，基准指纹盾）
+  2. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Storage/ConfigManager.swift)：
+     - **首次建立完整基准存量快照（零灌水屏障）**：初次启用或 `knownAppBundleIds` 为空时，立即扫描当前 `/Applications` 与 `~/Applications`，将现有所有合法 regular app 的 Bundle ID 录入快照，首发直接 `return` 0 入库，彻底阻断历史老应用灌入工作分类；
+     - **增量甄别与挂载卷防护**：后续文件系统变动（FSEvents）触发时，排除 `isVolumeApp`（过滤挂载镜像中的临时应用），仅当应用 Bundle ID 不在 `knownAppBundleIds` 且不在 `ignoredAutoAddBundleIds`（Tombstone 墓碑）时确认为新装应用；
+     - **动态目标分类路由与自愈创建**：
+       * 若为 `.dedicatedInbox`：查找名称为 `autoAddInboxCategoryName`（默认“新应用”）的分类，若不存在则原子化创建并赋予 `"sparkles"` 图标；
+       * 若为 `.existingCategory`：路由到用户指定的已有分类；若该分类已被用户删除，则**无感知自愈回退**至专属收件箱，杜绝数据悬空；
+     - **分类删除自愈监听**：在 `deleteCategory(id:)` 中，若被删分类恰好是指定的入库目标，即刻将策略重置为 `.dedicatedInbox` 并清除其 ID；
+  3. [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift)：
+     - 在 Tab 3（分类与视觉排版）“新安装应用自动进抽屉”开关正下方新增 `autoAddPolicyPopUp: SettingsLiquidPopUpButton` 选项控件；
+     - 动态加载菜单项：首项为 `🌟 专属分类「新应用」(推荐)`，其后跟随当前所有非“常用”分类；
+     - 与主开关实现动态联动：关闭主开关时下拉框置灰禁用，开启时恢复交互并保持选项双向同步持久化；
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在测试 `[14]` 中新增基准快照防灌水、专属“新应用”收件箱自动建类、指定分类入库、墓碑防复活与自愈回退的完整闭环测试。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：运行 `./Scripts/build.sh --test`，全套 14 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **实机打包与热重载**：已通过 `./Scripts/package_app.sh` 编译并签名 `ATools.app`，重启应用（PID 69608），偏好设置与后台入库路由完全生效。
+
+
+---
+
+### [2026-10-29] 第 115 项：实现应用抽屉面板原生橡皮筋框选（Marquee Selection）、多选管理与右键批量移除/迁移/建文件夹完整闭环
+
+- **需求背景与交互痛点**：
+  - **用户反馈**：“能不能在应用抽屉面板新建一个批量移除图标的功能，例如支持用户在空白区域左键拖选选中多个图标后右键-从分类中移除 看看如何能不影响移动应用抽屉面板位置的体验，又兼顾批量移除图标”；
+  - **交互矛盾根因**：原抽屉面板为无边框悬浮窗，在空白区域 `mouseDown` 时会直接调用阻塞式 `window.performDrag(with:)`，导致 WindowServer 独占鼠标循环，完全阻断了网格内部的任何拖拽多选手势。
+
+- **实施与加固详情**：
+  1. **移动窗口与拉框多选的“双轨死区裁决与修饰键穿透”机制**：
+     - [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+       * **死区阈值（Deadzone）防误触**：在网格空白区按下鼠标时不抢先调用 `performDrag`，仅当拖动位移 $> 3.0\text{pt}$ 且未按修饰键时，正式启动橡皮筋框选；
+       * **单击空白处清空**：位移 $\le 3.0\text{pt}$ 松开鼠标时判定为单击空白，立即清空当前全部多选态；
+       * **修饰键穿透移窗**：在网格任意位置按住 `⌘` (Command) 或 `⌥` (Option) 拖拽，直接穿透为平滑移窗；
+       * **物理保留通道**：面板顶部 14pt 边缘、分类栏胶囊间隙、底部边缘及空分类（0 项）全域保持随时直接拖拽移窗。
+  2. **macOS 原生级橡皮筋选框与图标高亮呈现**：
+     - 构建 `RubberbandSelectionView`，采用 Accent Color 半透明液态蓝遮罩与 1px 微圆角细边框，`hitTest` 返回 `nil` 杜绝事件拦截；
+     - **即打即搜过滤隔离**：相交判定严格限制在可见（`!btn.isHidden`）的图标外框，彻底杜绝意外误选隐藏项目；
+     - 图标选中视觉：`ShelfItemButton` 选中时呈现液态高光底衬，标题文本采用 Accent 蓝底白字圆角胶囊药丸，完全对齐系统级视觉规范；
+     - 支持 `⌘ + 单击` 单项反选/加选、`⇧ + 单击` 连续范围多选、`Esc` 键优先清空选区。
+  3. **批量操作上下文菜单与原子数据事务**：
+     - 右键多选选区或任意选中项弹出批量菜单：
+       * **“从分类中移除 (X 项)”**：支持 `⌫` (Delete/Backspace) 快捷键直出，批量将 Bundle ID 记入 Tombstone 墓碑杜绝新装应用自动复活；
+       * **“移动至分类 >”**：子菜单动态列出其他分类，一键整体原子搬移；
+       * **“新建文件夹 (包含 X 项)”**：选中的多项（非文件夹）一键打包合并，防递归嵌套；
+     - [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：实现原子批量操作 `removeItems(ids:from:)`、`moveItems(ids:from:to:)`、`createFolderWithItems`，单次获取写锁、单次存盘与单次广播。
+  4. [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - 接入 `ShelfGridDelegate` 批量协议与 `cancelOperation` 响应梯队（过滤词 -> 批量选区 -> 隐藏面板）。
+  5. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增测试 `[15]`，涵盖批量建文件夹、防嵌套拦截、跨分类原子搬移、级联清理、墓碑登记与橡皮筋框选状态机。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：运行 `./Scripts/build.sh --test`，全套 15 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **实机部署与热重载**：已通过 `./Scripts/package_app.sh` 编译并签名 `ATools.app`，平滑重载进程（PID 78094），空白处框选多选与右键批量移除完全生效。
+
+
+---
+
+### [2026-10-29] 第 116 项：关窗退出 (AutoQuit) 三维现代化重构：解耦硬编码规则引擎化、全面剥离录屏权限依赖（纯辅助功能驱动）与可撤销倒计时 HUD / 决策诊断面板闭环
+
+- **需求背景与核心痛点**：
+  - 用户反馈原关窗退出机制虽然比 SwiftQuit 严谨，但存在三处严重缺陷：
+    1. **硬编码应用名单**：写死 Parallels、WPS、夸克、QQEXDOC、AuraPane 等特判，每来新应用就要打补丁，维护债严重；
+    2. **权限过重**：为了获取窗口标题使用了 `CGPreflightScreenCaptureAccess` 屏幕录制权限，门槛过高劝退大量用户；
+    3. **缺乏用户可见决策**：缺少退出倒计时与撤销机制，排障纯靠 DebugLogger，用户体验封闭。
+  - 经由专有子代理（军师）进行严格技术层逐项核验，确立了“AX 语义第一权威 + WindowServer 零权限物理在屏辅助”的铁律，并加固了致盲防误杀、Retina 缩放比与 HUD 键盘事件隔离策略。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **声明式规则模型与引擎**：构建 `AppQuirkRule` 与 `GhostWindowSize`（带容差区间与长宽比匹配）；
+     - **集中式规则库**：将 Parallels、VMware、UTM、Docker 等虚拟机/模拟器分类保护，以及 WPS、夸克、QQEXDOC、AuraPane、日历等应用关窗后的离屏残留图层完整迁入 `builtinRules`；
+     - **通用启发式清洗**：实现 `isGhostWindow`，自动清洗系统代理视图、CEF 缓冲画布、通用设置/偏好窗口 orderOut 残留与微型光标/代理。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **全面剔除屏幕录制权限依赖**：彻底移除 `CGPreflightScreenCaptureAccess()`，降级为纯「辅助功能 (Accessibility)」授权驱动，向 SwiftQuit 看齐；
+     - **权限与职责严格分离**：AX 树负责获取标准窗口列表、真实标题与角色（不需要录屏权限）；WindowServer 仅获取公开的几何数据（`kCGWindowLayer` 0...15、`kCGWindowBounds`、`kCGWindowAlpha`、`kCGWindowIsOnscreen`，零隐私权限风险）；
+     - **双重裁决与防致盲安全防线**：AX 确证在活窗口时立即放行；仅在 AX 报告零窗且无 Dock 最小化窗口时，结合 WindowServer 在屏几何判断，覆盖 600ms 淡出动画防抖；
+     - **会话内撤销抑制**：用户点击撤销退出后，将 PID 计入 `suppressedPids` 抑制集合，直至应用重新激活并新建窗口，彻底杜绝反复弹窗打扰；
+     - **状态快照**：暴露 `currentWatchedAppsSnapshot()` 供诊断面板随时抓取运行态。
+  3. [`Sources/atools/System/AutoQuitUndoHUDController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitUndoHUDController.swift)：
+     - **原生液态毛玻璃撤销胶囊**：采用 `.nonactivatingPanel` 浮层，位于屏幕底部舒适视区，展示应用图标、退出倒计时与清晰的「取消」按钮；
+     - **输入事件隔离**：严禁全局截获 Esc/Space 键，杜绝吞噬用户正常打字击键；
+     - **零常驻显存**：平时窗口置空 (`nil`)，倒计时结束或取消后立即释放并回收 Window Backing Store。
+  4. [`Sources/atools/System/AutoQuitDecisionTrace.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitDecisionTrace.swift) 与 [`Sources/atools/UI/Settings/AutoQuitInspectorSheet.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitInspectorSheet.swift)：
+     - **纯值类型环形缓冲区**：内存常驻 50 条最近决策流水（`AutoQuitDecisionRecord`），严禁强引用进程与图片对象，物理常驻内存净增量 < 8 KB；
+     - **诊断面板与报告导出**：在设置页提供「诊断与决策历史...」独立 Sheet，可切换查看当前监视应用实况与决策流水线，支持一键复制完整排障诊断报告。
+  5. [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift) 与 [`Sources/atools/UI/Settings/AutoQuitTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitTabView.swift)：
+     - 新增 `enableAutoQuitUndoHUD: Bool` 配置，默认开启；设置界面增设开关行与诊断入口，提示文案明确仅需辅助功能授权。
+  6. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在测试 `[12]` 中追加规则引擎、幽灵清洗、配置往返与环形队列纯值安全性的全套断言。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：运行 `./Scripts/build.sh --test`，全套 15 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **常驻物理内存**：测试期 Footprint 维持在 ~149.8 MB，零异常膨胀。
+
+  7. **OPPO 互联等 Electron 应用 `win.hide()` 离屏图层零窗误判修复**：
+     - **病灶**：OPPO 互联（`com.oplus.devicespace`）点红叉时执行 `win.hide()`，在 WindowServer 留下 `isOnScreen == false` 的离屏底板与 Layer 3 托盘浮动层，原逻辑将所有 $>160\times 100$ 的离屏层均计入存活窗口，导致拦截退出；
+     - **加固**：在 `AutoQuitQuirks` 注册 `oppo_connect` 规则（匹配 370x313 托盘层与 1252x710 主窗口离屏层），确立 WindowServer 仅核验当前屏幕物理在屏窗口（`isOnScreen == true`），跨 Space 判定完全交由 AX 树（权威）与 Space 切换宽限期，彻底根治 Electron 类软件点击红叉不退出问题。
+  - **版本发布与签名**：版本号正式自增至 `v1.3.35 (build 61)`，完成 Ed25519 签名与 GitHub Release 全平台发布。
+

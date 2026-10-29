@@ -40,16 +40,9 @@ public final class AutoQuitManager {
         "cc.atools.app.dev"
     ]
 
-    /// 虚拟机、模拟器与容器平台（常驻后台/全屏独立空间/无感融合模式/Windows子应用，物理级排除在自动退出之外，防范虚拟机崩溃及未保存数据丢失）
+    /// 虚拟机、模拟器与容器平台（基于 AutoQuitQuirks 统一声明式规则库，物理级排除在自动退出之外，防范虚拟机崩溃及未保存数据丢失）
     public static func isProtectedVirtualizationApp(bundleID: String) -> Bool {
-        let lower = bundleID.lowercased()
-        if lower.hasPrefix("com.parallels.") || lower.contains("parallels") { return true }
-        if lower.hasPrefix("com.vmware.") { return true }
-        if lower.hasPrefix("com.utmapp.") { return true }
-        if lower.hasPrefix("org.virtualbox.") { return true }
-        if lower.hasPrefix("com.docker.") { return true }
-        if lower.hasPrefix("com.google.android.simulator") || lower.hasPrefix("com.android.emulator") { return true }
-        return false
+        return AutoQuitQuirks.shared.isProtectedVirtualizationApp(bundleID: bundleID)
     }
 
     private struct WatchedApp {
@@ -76,6 +69,7 @@ public final class AutoQuitManager {
     private var isRunning = false
     private var lock = os_unfair_lock()
     private var lastSpaceChangeDate: Date = .distantPast
+    private var suppressedPids: Set<pid_t> = []
 
     private var defaultCenterObservers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -260,33 +254,19 @@ public final class AutoQuitManager {
         return false
     }
 
-    /// WindowServer 层面标准应用窗口计数（Layer 0...150，有效尺寸，排除离屏缓存与极小隐形辅助窗口）
-    public static func windowServerStandardWindowCount(for pid: pid_t) -> Int? {
+    /// WindowServer 层面标准应用窗口计数（Layer 0...15，纯几何公开信息，零隐私与录屏权限要求，结合 AutoQuitQuirks 规则清洗离屏幽灵）
+    public static func windowServerStandardWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int? {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
-        let systemProxies: Set<String> = [
-            "Touch Bar", "Focus Proxy", "Item Status", "Emoji & Symbols", "FocusProxy"
-        ]
-        let internalCefViews: Set<String> = [
-            "ConvTabListView", "ConvTabTopBar", "MainMenuPanelView", "Form"
-        ]
-
-        let hasScreenCapture: Bool
-        if #available(macOS 11.0, *) {
-            hasScreenCapture = CGPreflightScreenCaptureAccess()
-        } else {
-            hasScreenCapture = false
-        }
-        let app = NSRunningApplication(processIdentifier: pid)
-        let isActive = app?.isActive ?? false
+        let quirks = AutoQuitQuirks.shared
+        let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
 
         var count = 0
-        var candidateOffscreenLargeWindows = 0
         for w in list {
             guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            // 限制在标准业务窗体层级（Layer 0 普通窗口，Layer 3/8 浮动面板与模态对话框；排除 Layer 20 程序坞、Layer 24 状态栏及 Layer 100+ 桌面悬浮球/挂件）
+            // 限制在标准业务窗体层级（Layer 0 普通窗口，Layer 3/8 浮动面板与模态对话框）
             guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
             guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
@@ -294,130 +274,35 @@ public final class AutoQuitManager {
                   let height = bounds["Height"] as? Double,
                   width > 40, height > 40 else { continue }
 
+            let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
-            let trimmedName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if systemProxies.contains(trimmedName) { continue }
-            if internalCefViews.contains(trimmedName) { continue }
-
-            // 钉钉特定的常驻后台/隐形登录弹窗 (500x372)
-            if abs(width - 500) < 15 && abs(height - 372) < 15 { continue }
-
-            // WPS Office 特定的常驻隐形弹窗底板/模板底板 (420x154)
-            if abs(width - 420) < 15 && abs(height - 154) < 15 { continue }
-
-            // 菜单栏/工具栏横条 (height <= 48)
-            if height <= 48 { continue }
-
-            // AppKit 500x500 占位层
-            if abs(width - 500) < 25 && abs(height - 500) < 25 { continue }
-
-            // 小型代理/光标/状态图标
-            if width <= 80 && height <= 60 { continue }
-
-            // CEF 离屏缓冲画布 (640x508, 600x600, 640x480)
-            if abs(width - 640) < 20 && abs(height - 508) < 20 { continue }
-            if abs(width - 600) < 20 && abs(height - 600) < 20 { continue }
-            if abs(width - 640) < 20 && abs(height - 480) < 20 && trimmedName.isEmpty { continue }
-
             let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
 
+            // 核心清洗：利用 AutoQuitQuirks 识别系统代理、CEF 缓冲、orderOut 离屏底板
+            if quirks.isGhostWindow(
+                bundleID: resolvedBundleID,
+                ownerName: ownerName,
+                title: rawName,
+                width: width,
+                height: height,
+                isOnScreen: isOnScreen
+            ) {
+                continue
+            }
+
             if isOnScreen {
-                // 当前屏幕可见的标准在屏窗口（无论是否失焦、是否被遮挡，一律确认为有效业务窗口）
-                if !trimmedName.isEmpty {
+                // 当前屏幕可见的标准在屏业务窗口（包括处于关闭淡出动画中或 AX 尚未同步的实体窗口）
+                if width > 120 && height > 90 || !rawName.isEmpty {
                     count += 1
-                    continue
-                }
-                if width > 120 && height > 90 {
-                    count += 1
-                    continue
-                }
-            } else {
-                // 离屏/非当前Space/后台被遮挡窗口（kCGWindowIsOnscreen 为 false 或 nil）:
-                // 特殊排除：针对特定 AppKit 应用在关闭窗口时仅执行 orderOut: 移出屏幕、但窗口元数据残留的问题。
-                // 日历等应用在关窗后，其残留图层的名字等于应用自身的默认标题（如"日历"或"Calendar"），且不再在屏。
-                let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
-                let isPureAppTitleResidual = (trimmedName == ownerName) && (ownerName == "Calendar" || ownerName == "日历")
-                if isPureAppTitleResidual {
-                    continue
-                }
-
-                // 特殊排除：腾讯文档关闭后的特定离屏缓存底板 (1366x800)
-                let isTencentDocsResidual = (ownerName.contains("QQEXDOC") || ownerName.contains("TencentDocs"))
-                    && abs(width - 1366) < 20 && abs(height - 800) < 20
-                if isTencentDocsResidual {
-                    continue
-                }
-
-                // 特殊排除：WPS Office 在用户关闭窗口后，AppKit orderOut 机制移出屏幕的默认底板与无名离屏图层
-                let isWPS = ownerName.contains("WPS") || ownerName.contains("wpsoffice")
-                if isWPS {
-                    if trimmedName.isEmpty { continue }
-                    let defaultWpsTitles: Set<String> = [
-                        "WPS Office", "首页", "稻壳素材", "快速访问工具栏"
-                    ]
-                    if defaultWpsTitles.contains(trimmedName) { continue }
-                }
-
-                // 特殊排除：夸克网盘（Quark）常驻离屏预加载的弹窗底板（如 "分享链接" 等）及无名离屏 CEF 背景底板
-                let isQuark = ownerName.contains("夸克") || ownerName.lowercased().contains("quark")
-                if isQuark {
-                    let defaultQuarkOffscreenTitles: Set<String> = [
-                        "分享链接"
-                    ]
-                    if defaultQuarkOffscreenTitles.contains(trimmedName) || trimmedName.isEmpty {
-                        continue
-                    }
-                }
-
-                // 特殊排除：AuraPane 等现代化 AppKit 应用关闭后，通过 orderOut: 移出屏幕常驻的设置底板与欢迎底板
-                let isAuraPane = ownerName.contains("AuraPane")
-                if isAuraPane {
-                    let defaultAuraPaneOffscreenTitles: Set<String> = [
-                        "设置", "Settings", "Preferences", "偏好设置"
-                    ]
-                    if defaultAuraPaneOffscreenTitles.contains(trimmedName) || trimmedName.isEmpty {
-                        continue
-                    }
-                }
-
-                // 特殊排除：通用 AppKit 应用在用户关闭设置窗口后，orderOut 移出屏幕但未销毁的离屏设置底板
-                let isGenericSettingsResidual = (trimmedName == "设置" || trimmedName == "偏好设置" || trimmedName == "Settings" || trimmedName == "Preferences")
-                if isGenericSettingsResidual {
-                    continue
-                }
-
-                // 核心保活与无名离屏底板精细判定：
-                // 1) 若拥有明确的业务窗口标题且尺寸有效（!trimmedName.isEmpty && width > 160 && height > 100），确认为跨 Space 在活业务窗口；
-                // 2) 若标题为空（未授予屏幕录制权限，或属于 AppKit orderOut 机制隐藏的离屏底板）：
-                //    - 若应用处于后台/非激活态（!isActive）：在宿主未获屏幕录制权限时，系统对所有第三方窗口标题致盲，必须依托业务尺寸保活（width >= 240 && height >= 180），杜绝跨 Space 误退；
-                //    - 若应用处于前台活跃态（isActive）：
-                //      * 若检测到 >= 2 个离屏大窗口（width >= 240 && height >= 180），确认为跨多 Space 多文档/多网页存活，绝非单窗口应用的残留底板，必须累加计数保活；
-                //      * 若仅存在 1 个离屏大窗口：AuraPane 类单窗口应用在关窗时仅残留 1 个 orderOut 底板（AX 树恒为 0）。此时先不强行累加，将最终确诊交由 AX 双重权威校验（若另一个 Space 真实有窗口，AX 会报告 axCount >= 1 或在 AX 超时 nil 时保守拦截），杜绝单窗口与跨 Space 的误退冲突。
-                if !trimmedName.isEmpty && width > 160 && height > 100 {
-                    count += 1
-                    continue
-                }
-                if !hasScreenCapture && width >= 240 && height >= 180 {
-                    if !isActive {
-                        count += 1
-                        continue
-                    } else {
-                        // 前台候选大窗口计数，稍后统一求值
-                        candidateOffscreenLargeWindows += 1
-                    }
                 }
             }
-        }
-        if candidateOffscreenLargeWindows >= 2 {
-            count += candidateOffscreenLargeWindows
         }
         return count
     }
 
     /// 实例级别零窗确认：结合当前进程的 AX 查询与 WindowServer 计数
-    public static func isConfirmedZeroWindows(pid: pid_t, axCount: Int?) -> Bool {
-        let wsCount = windowServerStandardWindowCount(for: pid)
+    public static func isConfirmedZeroWindows(pid: pid_t, axCount: Int?, bundleID: String? = nil) -> Bool {
+        let wsCount = windowServerStandardWindowCount(for: pid, bundleID: bundleID)
         return isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount)
     }
 
@@ -726,9 +611,9 @@ public final class AutoQuitManager {
         }
 
         // 2. 仅在 AX 报告无窗或不可用时，才向 WindowServer 发起在屏标准窗口验证
-        let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+        let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
 
-        if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) {
+        if AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount, bundleID: app.bundleIdentifier) {
             recheckCounts.removeValue(forKey: pid)
             cancelPendingRecheckLocked(pid)
             scheduleQuitLocked(pid, app: entry.app)
@@ -758,6 +643,16 @@ public final class AutoQuitManager {
                 // 绝对不能退出！清除重试计数并撤销退出调度，安全保护后台运行或失焦的应用。
                 recheckCounts.removeValue(forKey: pid)
                 cancelPendingQuitLocked(pid)
+                AutoQuitDecisionTrace.shared.record(
+                    pid: pid,
+                    bundleID: app.bundleIdentifier ?? "",
+                    appName: app.localizedName ?? "",
+                    axWindowCount: axCount,
+                    wsWindowCount: wsCount,
+                    decision: .aborted,
+                    reasonCode: "WindowServerConfirmedOnscreen",
+                    detail: "防抖期后 WindowServer 仍有在屏实体窗口"
+                )
             }
         } else if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
             recheckCounts.removeValue(forKey: pid)
@@ -789,7 +684,7 @@ public final class AutoQuitManager {
                   !terminatingPids.contains(pid) else { continue }
             if !entry.hadWindows {
                 let axCount = axWindows(of: entry.axApp)?.count
-                let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+                let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: entry.app.bundleIdentifier)
                 if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
                     entry.hadWindows = true
                     if let list = axWindows(of: entry.axApp) {
@@ -806,7 +701,6 @@ public final class AutoQuitManager {
             } else {
                 // 核心生命周期防御：兜底轮询绝不能在后台对稳定运行、未发生关窗事件的应用进行“零窗误杀”！
                 // 只有当应用当前处于前台活跃状态（app.isActive）或者最近 3.0 秒内接收到过明确的关窗销毁事件时，才触发求值！
-                // 处于后台且无关窗操作的应用绝对不进行轮询扫描，彻底杜绝在全屏虚拟机或其它 Space 下偷袭后台应用
                 let isActive = entry.app.isActive
                 let recentlyHadCloseEvent = now.timeIntervalSince(entry.lastCloseEventDate) < 3.0
 
@@ -822,6 +716,21 @@ public final class AutoQuitManager {
         guard pendingQuits[pid] == nil else { return }
         guard !terminatingPids.contains(pid) else { return }
 
+        // 若本轮会话中用户已点击取消退出，抑制对该应用的自动退出，直至重新激活开窗
+        if suppressedPids.contains(pid) {
+            AutoQuitDecisionTrace.shared.record(
+                pid: pid,
+                bundleID: app.bundleIdentifier ?? "",
+                appName: app.localizedName ?? "pid \(pid)",
+                axWindowCount: 0,
+                wsWindowCount: 0,
+                decision: .aborted,
+                reasonCode: "UserSuppressedInCurrentSession",
+                detail: "用户曾点击取消，本轮会话静默豁免"
+            )
+            return
+        }
+
         // 前台确诊零窗时的主动时序加固：刷新最后关窗时间戳，确保延迟退出期间即使失焦也能顺利终审
         if app.isActive, var entry = watched[pid] {
             entry.lastCloseEventDate = Date()
@@ -835,10 +744,42 @@ public final class AutoQuitManager {
             self?.executePendingQuit(pid: pid)
         }
         pendingQuits[pid] = work
+
+        AutoQuitDecisionTrace.shared.record(
+            pid: pid,
+            bundleID: app.bundleIdentifier ?? "",
+            appName: app.localizedName ?? "pid \(pid)",
+            axWindowCount: 0,
+            wsWindowCount: 0,
+            decision: .quitScheduled,
+            reasonCode: "ConfirmedZeroWindows",
+            detail: "计划延迟 \(delaySeconds)s 后执行退出"
+        )
+
         if delaySeconds <= 0 {
             DispatchQueue.main.async(execute: work)
             runtimeLog("[AutoQuit] Last window closed for \(app.localizedName ?? "pid \(pid)"); quitting immediately (0s).")
         } else {
+            // 展示可撤销 HUD 浮层（需配置开启）
+            if ConfigManager.shared.config.enableAutoQuitUndoHUD {
+                AutoQuitUndoHUDController.shared.showCountdown(for: app, seconds: delaySeconds) { [weak self] cancelledPid in
+                    guard let self = self else { return }
+                    os_unfair_lock_lock(&self.lock)
+                    self.cancelPendingQuitLocked(cancelledPid)
+                    self.suppressedPids.insert(cancelledPid)
+                    os_unfair_lock_unlock(&self.lock)
+                    AutoQuitDecisionTrace.shared.record(
+                        pid: cancelledPid,
+                        bundleID: app.bundleIdentifier ?? "",
+                        appName: app.localizedName ?? "pid \(cancelledPid)",
+                        axWindowCount: 0,
+                        wsWindowCount: 0,
+                        decision: .aborted,
+                        reasonCode: "UserCancelledViaUndoHUD",
+                        detail: "用户在 HUD 上点击了取消"
+                    )
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds, execute: work)
             runtimeLog("[AutoQuit] Last window closed for \(app.localizedName ?? "pid \(pid)"); quitting in \(delaySeconds)s.")
         }
@@ -851,6 +792,7 @@ public final class AutoQuitManager {
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
 
+        AutoQuitUndoHUDController.shared.dismiss()
         pendingQuits[pid] = nil
         guard isRunning, let entry = watched[pid] else { return }
         let app = entry.app
@@ -861,9 +803,18 @@ public final class AutoQuitManager {
         // 关键安全防御 1：若应用已重新变为活跃状态且拥有窗口，绝对不能退出
         if app.isActive {
             let axCount = axWindows(of: entry.axApp)?.count
-            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
             if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 {
                 runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is active and has window.")
+                AutoQuitDecisionTrace.shared.record(
+                    pid: pid,
+                    bundleID: app.bundleIdentifier ?? "",
+                    appName: app.localizedName ?? "",
+                    axWindowCount: axCount,
+                    wsWindowCount: wsCount,
+                    decision: .aborted,
+                    reasonCode: "AppBecameActiveWithWindow"
+                )
                 return
             }
         }
@@ -877,12 +828,30 @@ public final class AutoQuitManager {
             }
             if hasMinimized {
                 runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): has minimized window in Dock.")
+                AutoQuitDecisionTrace.shared.record(
+                    pid: pid,
+                    bundleID: app.bundleIdentifier ?? "",
+                    appName: app.localizedName ?? "",
+                    axWindowCount: windows.count,
+                    wsWindowCount: nil,
+                    decision: .aborted,
+                    reasonCode: "HasMinimizedWindowInDock"
+                )
                 return
             }
         }
 
         if Date().timeIntervalSince(lastSpaceChangeDate) < 2.0 {
             runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): Space transition in progress.")
+            AutoQuitDecisionTrace.shared.record(
+                pid: pid,
+                bundleID: app.bundleIdentifier ?? "",
+                appName: app.localizedName ?? "",
+                axWindowCount: nil,
+                wsWindowCount: nil,
+                decision: .aborted,
+                reasonCode: "SpaceTransitionGracePeriod"
+            )
             return
         }
 
@@ -893,6 +862,15 @@ public final class AutoQuitManager {
             // 如果刚切到后台不久（< 2.5s），或者最近根本没有收到过明确的窗口销毁事件（>= 3.0s），坚决放弃
             if sinceActive < 2.5 || sinceClose >= 3.0 {
                 runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is in background (sinceActive=\(String(format: "%.1f", sinceActive))s, sinceClose=\(String(format: "%.1f", sinceClose))s).")
+                AutoQuitDecisionTrace.shared.record(
+                    pid: pid,
+                    bundleID: app.bundleIdentifier ?? "",
+                    appName: app.localizedName ?? "",
+                    axWindowCount: nil,
+                    wsWindowCount: nil,
+                    decision: .aborted,
+                    reasonCode: "BackgroundDeactivatedGracePeriod"
+                )
                 return
             }
         }
@@ -909,14 +887,33 @@ public final class AutoQuitManager {
         
         // 双重权威校验复核：AX 与 WindowServer 必须确诊零窗，绝不能误杀仍有窗口的应用
         let axCount = axWindows(of: entry.axApp)?.count
-        guard AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount) else {
-            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): windows still present (AX=\(axCount.map(String.init) ?? "nil"), WS=\(AutoQuitManager.windowServerStandardWindowCount(for: pid).map(String.init) ?? "nil")).")
+        guard AutoQuitManager.isConfirmedZeroWindows(pid: pid, axCount: axCount, bundleID: app.bundleIdentifier) else {
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): windows still present (AX=\(axCount.map(String.init) ?? "nil"), WS=\(wsCount.map(String.init) ?? "nil")).")
+            AutoQuitDecisionTrace.shared.record(
+                pid: pid,
+                bundleID: app.bundleIdentifier ?? "",
+                appName: app.localizedName ?? "",
+                axWindowCount: axCount,
+                wsWindowCount: wsCount,
+                decision: .aborted,
+                reasonCode: "WindowsStillPresentOnFinalCheck"
+            )
             return
         }
 
         terminatingPids.insert(pid)
         recheckCounts.removeValue(forKey: pid)
         cancelPendingRecheckLocked(pid)
+        AutoQuitDecisionTrace.shared.record(
+            pid: pid,
+            bundleID: app.bundleIdentifier ?? "",
+            appName: app.localizedName ?? "pid \(pid)",
+            axWindowCount: 0,
+            wsWindowCount: 0,
+            decision: .quitExecuted,
+            reasonCode: "ConfirmedAndTerminated"
+        )
         runtimeLog("[AutoQuit] Terminating \(app.localizedName ?? "pid \(pid)") after last window closed.")
         app.terminate()
     }
@@ -935,6 +932,7 @@ public final class AutoQuitManager {
         for work in pendingRechecks.values { work.cancel() }
         pendingRechecks.removeAll()
         recheckCounts.removeAll()
+        AutoQuitUndoHUDController.shared.dismiss()
     }
 
     private func cancelPendingQuitLocked(_ pid: pid_t) {
@@ -942,6 +940,7 @@ public final class AutoQuitManager {
         cancelPendingRecheckLocked(pid)
         if let work = pendingQuits.removeValue(forKey: pid) {
             work.cancel()
+            AutoQuitUndoHUDController.shared.dismiss()
         }
     }
 
@@ -1038,5 +1037,24 @@ public final class AutoQuitManager {
         }
 
         return false
+    }
+
+    // MARK: - 诊断快照
+
+    /// 获取当前监视中的活跃应用快照（供 AutoQuitInspectorSheet 查看与排障审计）
+    public func currentWatchedAppsSnapshot() -> [(name: String, bundleID: String, pid: pid_t, axCount: String, wsCount: String, rule: String)] {
+        assert(Thread.isMainThread)
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        var result: [(name: String, bundleID: String, pid: pid_t, axCount: String, wsCount: String, rule: String)] = []
+        for (pid, entry) in watched {
+            let name = entry.app.localizedName ?? "应用"
+            let bid = entry.app.bundleIdentifier ?? "-"
+            let ax = axWindows(of: entry.axApp).map { String($0.count) } ?? "err"
+            let ws = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: bid).map(String.init) ?? "-"
+            let rule = AutoQuitQuirks.shared.matchRule(bundleID: bid, ownerName: name)?.name ?? "通用标准"
+            result.append((name: name, bundleID: bid, pid: pid, axCount: ax, wsCount: ws, rule: rule))
+        }
+        return result.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 }

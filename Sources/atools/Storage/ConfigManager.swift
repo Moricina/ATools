@@ -597,6 +597,39 @@ public final class ConfigManager {
         save()
     }
 
+    public func updateEnableAutoAddInstalledApps(_ enabled: Bool) {
+        self.config.enableAutoAddInstalledApps = enabled
+        if enabled && self.config.knownAppBundleIds.isEmpty {
+            // 立即沉淀基线，确保开启瞬间不灌水
+            let regularApps = AppHotspotIndex.shared.allRegularApps
+            let bids = regularApps.compactMap { $0.bundleId }.filter { !$0.isEmpty }
+            self.config.knownAppBundleIds = Array(Set(bids)).sorted()
+            self.config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
+        }
+        save()
+    }
+
+    public func updateAutoAddTargetPolicy(mode: AutoAddPolicyMode, categoryId: UUID?, inboxName: String? = nil) {
+        self.config.autoAddPolicyMode = mode
+        self.config.autoAddTargetCategoryId = categoryId
+        if let name = inboxName, !name.isEmpty {
+            self.config.autoAddInboxCategoryName = name
+        }
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
+    public func updateKnownAppBundleIds(_ ids: [String]) {
+        self.config.knownAppBundleIds = ids
+        save()
+    }
+
+    public func updateEnableQuickSlots(_ enabled: Bool) {
+        self.config.enableQuickSlots = enabled
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
     public func updateAutoCloseOnMouseExit(_ enabled: Bool) {
         self.config.autoCloseOnMouseExit = enabled
         save()
@@ -651,6 +684,12 @@ public final class ConfigManager {
     public func updateAutoQuitDelaySeconds(_ seconds: Int) {
         let clamped = max(0, min(10, seconds))
         self.config.autoQuitDelaySeconds = clamped
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+    }
+
+    public func updateEnableAutoQuitUndoHUD(_ enabled: Bool) {
+        self.config.enableAutoQuitUndoHUD = enabled
         save()
         NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
     }
@@ -747,15 +786,260 @@ public final class ConfigManager {
     }
 
     public func removeItem(id: UUID, from categoryId: UUID) {
-        if let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) {
-            let removed = self.config.categories[idx].items.filter { $0.id == id }
-            self.config.categories[idx].items.removeAll(where: { $0.id == id })
-            for item in removed {
-                removeManagedIconIfUnused(item.customIconPath, excludingItemId: item.id)
-                ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+        removeItems(ids: [id], from: categoryId)
+    }
+
+    /// 原子批量移除启动项（单次写锁、单次存盘、单次广播、统一 Tombstone 墓碑化防复活）
+    public func removeItems(ids: Set<UUID>, from categoryId: UUID) {
+        guard !ids.isEmpty else { return }
+        guard let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return }
+
+        let removed = self.config.categories[idx].items.filter { ids.contains($0.id) }
+        guard !removed.isEmpty else { return }
+
+        // 级联清理：若移除的项中包含虚拟组（文件夹），级联移除所有归属其下的子项
+        var allIdsToRemove = ids
+        let groupIds = Set(removed.filter { $0.isVirtualGroup }.map { $0.id })
+        if !groupIds.isEmpty {
+            let subItems = self.config.categories[idx].items.filter { sub in
+                if let p = sub.parentId, groupIds.contains(p) { return true }
+                return false
             }
+            for sub in subItems {
+                allIdsToRemove.insert(sub.id)
+                removeManagedIconIfUnused(sub.customIconPath, excludingItemId: sub.id)
+                ThumbnailPipeline.shared.invalidateIcon(forItem: sub)
+            }
+            self.config.categories[idx].items.removeAll(where: { sub in
+                if let p = sub.parentId, groupIds.contains(p) { return true }
+                return false
+            })
+        }
+
+        self.config.categories[idx].items.removeAll(where: { allIdsToRemove.contains($0.id) })
+        for item in removed {
+            removeManagedIconIfUnused(item.customIconPath, excludingItemId: item.id)
+            ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+            // 记录 Tombstone，防新装应用监听将其误当作“新应用”再次复活
+            if item.itemType == .application {
+                if let bid = Bundle(path: item.target)?.bundleIdentifier {
+                    if !self.config.ignoredAutoAddBundleIds.contains(bid) {
+                        self.config.ignoredAutoAddBundleIds.append(bid)
+                    }
+                }
+            }
+        }
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
+    /// 原子批量跨分类迁移启动项
+    public func moveItems(ids: Set<UUID>, from fromCategoryId: UUID, to toCategoryId: UUID) {
+        guard !ids.isEmpty, fromCategoryId != toCategoryId else { return }
+        guard let srcIdx = self.config.categories.firstIndex(where: { $0.id == fromCategoryId }),
+              let dstIdx = self.config.categories.firstIndex(where: { $0.id == toCategoryId }) else { return }
+
+        let movingItems = self.config.categories[srcIdx].items.filter { ids.contains($0.id) }
+        guard !movingItems.isEmpty else { return }
+
+        // 若迁移的项包含文件夹，同步将其子项一并迁入目标分类
+        let groupIds = Set(movingItems.filter { $0.isVirtualGroup }.map { $0.id })
+        var subItemsToMove: [LauncherItem] = []
+        if !groupIds.isEmpty {
+            subItemsToMove = self.config.categories[srcIdx].items.filter { sub in
+                if let p = sub.parentId, groupIds.contains(p) { return true }
+                return false
+            }
+        }
+
+        let allIdsToMove = ids.union(Set(subItemsToMove.map { $0.id }))
+        self.config.categories[srcIdx].items.removeAll(where: { allIdsToMove.contains($0.id) })
+        self.config.categories[dstIdx].items.append(contentsOf: movingItems)
+        self.config.categories[dstIdx].items.append(contentsOf: subItemsToMove)
+
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
+    /// 将选中的多项原子化打包合并为新文件夹（禁止文件夹嵌套）
+    @discardableResult
+    public func createFolderWithItems(itemIds: Set<UUID>, inCategoryId: UUID, folderName: String = "未命名文件夹") -> LauncherItem? {
+        guard itemIds.count >= 2 else { return nil }
+        guard let catIdx = self.config.categories.firstIndex(where: { $0.id == inCategoryId }) else { return nil }
+
+        let itemsToGroup = self.config.categories[catIdx].items.filter { itemIds.contains($0.id) }
+        // 严格防嵌套：已选项目中若包含虚拟组（文件夹），直接拒绝
+        if itemsToGroup.contains(where: { $0.isVirtualGroup }) { return nil }
+
+        let folder = LauncherItem(
+            name: folderName,
+            itemType: .fileOrFolder,
+            target: "",
+            isVirtualGroup: true
+        )
+
+        let firstIdx = self.config.categories[catIdx].items.firstIndex(where: { itemIds.contains($0.id) }) ?? self.config.categories[catIdx].items.count
+
+        for i in 0..<self.config.categories[catIdx].items.count {
+            if itemIds.contains(self.config.categories[catIdx].items[i].id) {
+                self.config.categories[catIdx].items[i].parentId = folder.id
+            }
+        }
+
+        self.config.categories[catIdx].items.insert(folder, at: firstIdx)
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+        return folder
+    }
+
+    // MARK: - 启动频次统计与智能常用推荐
+
+    public func recordItemLaunch(itemId: UUID) {
+        var didUpdate = false
+        for catIdx in 0..<config.categories.count {
+            if let itemIdx = config.categories[catIdx].items.firstIndex(where: { $0.id == itemId }) {
+                config.categories[catIdx].items[itemIdx].launchCount += 1
+                config.categories[catIdx].items[itemIdx].lastLaunchedAt = Date().timeIntervalSince1970
+                didUpdate = true
+                break
+            }
+        }
+        if didUpdate {
+            save()
+            if config.enableFavoritesCategory && config.smartFavoritesMode {
+                NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+            }
+        }
+    }
+
+    /// 获取使用频率最高的启动项（智能常用推荐）
+    public func frequentItems(limit: Int = 12) -> [LauncherItem] {
+        var allItems: [LauncherItem] = []
+        for cat in config.categories where !cat.isFavorites {
+            for item in cat.items where !item.isVirtualGroup {
+                allItems.append(item)
+            }
+        }
+        let sorted = allItems.sorted { a, b in
+            if a.launchCount != b.launchCount {
+                return a.launchCount > b.launchCount
+            }
+            return (a.lastLaunchedAt ?? 0) > (b.lastLaunchedAt ?? 0)
+        }
+        return Array(sorted.prefix(limit))
+    }
+
+    // MARK: - 新安装应用自动入库 (Auto App Discovery & Onboarding)
+
+    public func handleAppIndexUpdated(apps: [IndexedApp]) {
+        guard config.enableAutoAddInstalledApps else { return }
+
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.handleAppIndexUpdated(apps: apps)
+            }
+            return
+        }
+
+        var knownSet = Set(config.knownAppBundleIds)
+        let isFirstBaselineSetup = knownSet.isEmpty
+
+        // 收集本次扫描中所有合规本地应用的 Bundle ID
+        var scannedValidBids = Set<String>()
+        for app in apps {
+            guard app.isRegularApp else { continue }
+            let path = app.path
+            guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { continue }
+            if path.hasPrefix("/Volumes/") { continue }
+            if let bid = app.bundleId, !bid.isEmpty {
+                scannedValidBids.insert(bid)
+            }
+        }
+
+        // 🌟 核心防线：首次初始化时（knownSet 为空），全量沉淀现有应用为已知基线，本次绝对不执行任何入库入抽屉动作！
+        if isFirstBaselineSetup {
+            config.knownAppBundleIds = Array(scannedValidBids).sorted()
+            config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
+            save()
+            runtimeLog("[AutoDiscovery] Established baseline snapshot with \(config.knownAppBundleIds.count) known app(s). Zero apps injected.")
+            return
+        }
+
+        var targetCatIdx: Int?
+
+        if config.autoAddPolicyMode == .existingCategory,
+           let targetId = config.autoAddTargetCategoryId,
+           let idx = config.categories.firstIndex(where: { $0.id == targetId }) {
+            targetCatIdx = idx
+        } else {
+            // 专属收件箱分类模式 (或目标分类被删除时的安全自愈)
+            let inboxName = config.autoAddInboxCategoryName.isEmpty ? "新应用" : config.autoAddInboxCategoryName
+            if let idx = config.categories.firstIndex(where: { $0.name == inboxName }) {
+                targetCatIdx = idx
+            } else {
+                // 自动创建名为“新应用”的独立专属分类并带 sparkles 图标
+                let newCat = Category(name: inboxName, iconSymbol: "sparkles", items: [])
+                if let favIdx = config.categories.firstIndex(where: { $0.isFavorites }) {
+                    config.categories.insert(newCat, at: favIdx + 1)
+                    targetCatIdx = favIdx + 1
+                } else {
+                    config.categories.insert(newCat, at: 0)
+                    targetCatIdx = 0
+                }
+            }
+        }
+
+        guard let targetIndex = targetCatIdx else { return }
+
+        var existingTargets = Set<String>()
+        for cat in config.categories {
+            for item in cat.items {
+                existingTargets.insert(item.target)
+            }
+        }
+
+        let ignoredSet = Set(config.ignoredAutoAddBundleIds)
+        var newlyAddedCount = 0
+
+        for app in apps {
+            guard app.isRegularApp else { continue }
+            let path = app.path
+            guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { continue }
+            if path.hasPrefix("/Volumes/") { continue }
+
+            guard let bid = app.bundleId, !bid.isEmpty else { continue }
+            if knownSet.contains(bid) { continue }
+            if ignoredSet.contains(bid) { continue }
+            if existingTargets.contains(path) {
+                knownSet.insert(bid)
+                continue
+            }
+
+            // 完整性核验：主可执行二进制必须已落地
+            if let executablePath = Bundle(path: path)?.executablePath,
+               !FileManager.default.fileExists(atPath: executablePath) {
+                continue
+            }
+
+            let newItem = LauncherItem(
+                name: app.localizedName.isEmpty ? app.name : app.localizedName,
+                itemType: .application,
+                target: path
+            )
+
+            config.categories[targetIndex].items.append(newItem)
+            existingTargets.insert(path)
+            knownSet.insert(bid)
+            newlyAddedCount += 1
+        }
+
+        config.knownAppBundleIds = Array(knownSet).sorted()
+        config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
+
+        if newlyAddedCount > 0 {
             save()
             NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+            runtimeLog("[AutoDiscovery] Successfully auto-added \(newlyAddedCount) new app(s) to category: \(config.categories[targetIndex].name)")
         }
     }
 
@@ -971,6 +1255,10 @@ public final class ConfigManager {
         self.config.categories.remove(at: idx)
         for i in 0..<self.config.categories.count {
             self.config.categories[i].sortWeight = i
+        }
+        if self.config.autoAddTargetCategoryId == id {
+            self.config.autoAddTargetCategoryId = nil
+            self.config.autoAddPolicyMode = .dedicatedInbox
         }
         save()
         return true

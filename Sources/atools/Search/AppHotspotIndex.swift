@@ -114,7 +114,8 @@ public final class AppHotspotIndex {
             self?.refreshIndex()
         }
         debounceWorkItem = item
-        queue.asyncAfter(deadline: .now() + 0.5, execute: item)
+        // 防抖 2.0s，避免解压/PKG/Cask 写入过程中读取半包
+        queue.asyncAfter(deadline: .now() + 2.0, execute: item)
     }
 
     /// Re-scans at most once per `interval` so apps installed after launch become searchable.
@@ -141,6 +142,9 @@ public final class AppHotspotIndex {
             self.apps = results
             self.appsLock.unlock()
             completion?()
+
+            // 触发新安装应用自动入库
+            ConfigManager.shared.handleAppIndexUpdated(apps: results)
         }
     }
 

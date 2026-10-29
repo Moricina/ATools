@@ -39,6 +39,13 @@ public final class ThumbnailPipeline {
         genericCache.removeAllObjects()
     }
 
+    /// 快速同步读取已有内存缓存图标
+    public func cachedIcon(forItem item: LauncherItem) -> NSImage? {
+        let trimmedCustom = item.customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keyStr = (trimmedCustom != nil && !trimmedCustom!.isEmpty) ? Self.cacheKey(forPath: item.target, customIconPath: trimmedCustom) : item.target
+        return cache.object(forKey: keyStr as NSString)
+    }
+
     /// 驱逐指定启动项或路径的缩略图缓存（用于更换自定义图标或重新定位目标后立即刷新）
     public func invalidateIcon(forItem item: LauncherItem) {
         cache.removeObject(forKey: item.target as NSString)

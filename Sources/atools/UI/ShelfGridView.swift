@@ -4,6 +4,9 @@ import AppKit
 public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didLaunchItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem)
+    func shelfGrid(_ grid: ShelfGridView, didDeleteItems items: [LauncherItem])
+    func shelfGrid(_ grid: ShelfGridView, didMoveItems items: [LauncherItem], toCategoryId: UUID)
+    func shelfGrid(_ grid: ShelfGridView, didCreateFolderWithItems items: [LauncherItem])
     func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem)
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem)
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView)
@@ -15,9 +18,14 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int)
     func shelfGridDidBeginDrag(_ grid: ShelfGridView)
     func shelfGrid(_ grid: ShelfGridView, didEndDragWith operation: NSDragOperation)
+    func shelfGrid(_ grid: ShelfGridView, didRequestOpenFolder folder: LauncherItem, subItems: [LauncherItem])
+    func shelfGrid(_ grid: ShelfGridView, didMergeItemsIntoFolder sourceId: UUID, targetId: UUID)
 }
 
 public extension ShelfGridDelegate {
+    func shelfGrid(_ grid: ShelfGridView, didDeleteItems items: [LauncherItem]) {}
+    func shelfGrid(_ grid: ShelfGridView, didMoveItems items: [LauncherItem], toCategoryId: UUID) {}
+    func shelfGrid(_ grid: ShelfGridView, didCreateFolderWithItems items: [LauncherItem]) {}
     func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem) {}
     func shelfGrid(_ grid: ShelfGridView, didRequestRelocateItem item: LauncherItem) {}
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView) {}
@@ -26,6 +34,8 @@ public extension ShelfGridDelegate {
     func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {}
     func shelfGridDidBeginDrag(_ grid: ShelfGridView) {}
     func shelfGrid(_ grid: ShelfGridView, didEndDragWith operation: NSDragOperation) {}
+    func shelfGrid(_ grid: ShelfGridView, didRequestOpenFolder folder: LauncherItem, subItems: [LauncherItem]) {}
+    func shelfGrid(_ grid: ShelfGridView, didMergeItemsIntoFolder sourceId: UUID, targetId: UUID) {}
 }
 
 /// P0-2：失效启动项右上角黄色感叹号微标视图
@@ -79,6 +89,55 @@ private final class MissingTargetBadgeView: NSView {
             height: size.height
         )
         str.draw(in: textRect)
+    }
+}
+
+public final class QuickSlotBadgeView: NSView {
+    private let label = NSTextField(labelWithString: "")
+
+    public var text: String = "" {
+        didSet {
+            label.stringValue = text
+            isHidden = text.isEmpty
+        }
+    }
+
+    override public init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        layer?.masksToBounds = true
+        updateAppearance()
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = NSFont.monospacedSystemFont(ofSize: 9, weight: .bold)
+        label.alignment = .center
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 2.5),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -2.5)
+        ])
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    public func updateAppearance() {
+        let isDark = glassIsDark
+        layer?.backgroundColor = isDark
+            ? NSColor(white: 0.16, alpha: 0.82).cgColor
+            : NSColor(white: 0.94, alpha: 0.88).cgColor
+        layer?.borderWidth = 0.5
+        layer?.borderColor = isDark
+            ? NSColor(white: 1.0, alpha: 0.20).cgColor
+            : NSColor(white: 0.0, alpha: 0.14).cgColor
+        label.textColor = isDark
+            ? NSColor(white: 0.88, alpha: 0.95)
+            : NSColor(white: 0.18, alpha: 0.95)
     }
 }
 
@@ -138,8 +197,21 @@ public final class ShelfItemButton: NSControl {
             }
         }
     }
+    /// 拖拽合成文件夹时高亮标记目标容器
+    public var isFolderMergeTarget: Bool = false {
+        didSet {
+            if oldValue != isFolderMergeTarget {
+                updateAppearanceStyles()
+            }
+        }
+    }
+    public let quickSlotBadge = QuickSlotBadgeView()
     public var onDragSessionWillBegin: (() -> Void)?
     public var onDragSessionDidEnd: ((NSDragOperation) -> Void)?
+    /// 批量多选相关回调
+    public var onToggleSelectionRequested: (() -> Void)?
+    public var onRangeSelectionRequested: (() -> Void)?
+    public var onRightMouseDown: ((NSEvent) -> Bool)?
     /// Called when hover state changes so the parent grid can update keyboard selection.
     public var onHoverChanged: ((Bool) -> Void)?
     private var isHovered: Bool = false {
@@ -217,6 +289,10 @@ public final class ShelfItemButton: NSControl {
         missingBadgeView.isHidden = !isTargetMissing
         addSubview(missingBadgeView)
 
+        quickSlotBadge.translatesAutoresizingMaskIntoConstraints = false
+        quickSlotBadge.isHidden = true
+        addSubview(quickSlotBadge)
+
         let initialFontSize = max(10, min(14, round(11.0 * scale)))
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.font = NSFont.systemFont(ofSize: initialFontSize, weight: .regular)
@@ -226,6 +302,9 @@ public final class ShelfItemButton: NSControl {
         titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         titleLabel.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
         titleLabel.stringValue = item.name
+        titleLabel.wantsLayer = true
+        titleLabel.layer?.cornerRadius = 4
+        titleLabel.layer?.masksToBounds = true
         addSubview(titleLabel)
 
         let topPadding = max(4, round(6.0 * scale))
@@ -249,9 +328,14 @@ public final class ShelfItemButton: NSControl {
             missingBadgeView.widthAnchor.constraint(equalToConstant: 18),
             missingBadgeView.heightAnchor.constraint(equalToConstant: 18),
 
+            quickSlotBadge.topAnchor.constraint(equalTo: iconImageView.topAnchor, constant: -2),
+            quickSlotBadge.trailingAnchor.constraint(equalTo: iconImageView.trailingAnchor, constant: 4),
+            quickSlotBadge.heightAnchor.constraint(equalToConstant: 14),
+
             titleLabel.topAnchor.constraint(equalTo: iconImageView.bottomAnchor, constant: 4),
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -2)
+            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 2),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -2)
         ])
 
         ThumbnailPipeline.shared.icon(forItem: item) { [weak self] img in
@@ -312,6 +396,17 @@ public final class ShelfItemButton: NSControl {
         CATransaction.commit()
     }
 
+    public func setQuickSlot(index: Int?) {
+        guard let idx = index, ConfigManager.shared.config.enableQuickSlots, idx >= 0 && idx < 9 else {
+            quickSlotBadge.isHidden = true
+            quickSlotBadge.text = ""
+            return
+        }
+        quickSlotBadge.text = "⌘\(idx + 1)"
+        quickSlotBadge.isHidden = false
+        quickSlotBadge.updateAppearance()
+    }
+
     public func updateScaleDimensions() {
         let iconSize = round(48.0 * scale)
         let fontSize = max(10, min(14, round(11.0 * scale)))
@@ -326,7 +421,9 @@ public final class ShelfItemButton: NSControl {
         let isDark = glassIsDark
 
         let scale: CGFloat
-        if isLongPressArmed {
+        if isFolderMergeTarget {
+            scale = 1.08
+        } else if isLongPressArmed {
             scale = 1.08
         } else if isSwapTarget {
             scale = 1.05
@@ -346,7 +443,15 @@ public final class ShelfItemButton: NSControl {
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
 
         let px = physicalOnePixel
-        if isSwapTarget {
+        if isFolderMergeTarget {
+            liquidBackdrop.isHidden = true
+            baseLayer.backgroundColor = NSColor.systemTeal.withAlphaComponent(isDark ? 0.30 : 0.22).cgColor
+            baseLayer.borderColor = NSColor.systemTeal.withAlphaComponent(0.95).cgColor
+            baseLayer.borderWidth = px * 2.5
+            baseLayer.shadowOpacity = 0.35
+            baseLayer.shadowRadius = 10
+            baseLayer.opacity = 1.0
+        } else if isSwapTarget {
             liquidBackdrop.isHidden = true
             baseLayer.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(isDark ? 0.26 : 0.18).cgColor
             baseLayer.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
@@ -421,9 +526,6 @@ public final class ShelfItemButton: NSControl {
             iconImageView.layer?.transform = transform
         }
 
-        titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
-        titleLabel.alphaValue = isTargetMissing ? 0.62 : 1.0
-
         let textShadow = NSShadow()
         if isDark {
             // 深色模式：无死角黑曜石定向微沉降投影，保持笔画清晰锐利，阻断底层高亮/白色壁纸透光（WCAG 2.1 AA 达标）
@@ -436,7 +538,20 @@ public final class ShelfItemButton: NSControl {
             textShadow.shadowOffset = NSSize(width: 0, height: 0.5)
             textShadow.shadowBlurRadius = 1.0
         }
-        titleLabel.shadow = textShadow
+
+        if isSelected {
+            titleLabel.wantsLayer = true
+            titleLabel.layer?.cornerRadius = 4
+            titleLabel.layer?.masksToBounds = true
+            titleLabel.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
+            titleLabel.textColor = .white
+            titleLabel.shadow = nil
+        } else {
+            titleLabel.layer?.backgroundColor = NSColor.clear.cgColor
+            titleLabel.textColor = GlassPalette.textPrimary(isDark: isDark)
+            titleLabel.shadow = textShadow
+        }
+        titleLabel.alphaValue = isTargetMissing ? 0.62 : 1.0
     }
 
     override public func viewDidMoveToWindow() {
@@ -496,6 +611,15 @@ public final class ShelfItemButton: NSControl {
     }
 
     override public func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.command) {
+            onToggleSelectionRequested?()
+            return
+        }
+        if event.modifierFlags.contains(.shift) {
+            onRangeSelectionRequested?()
+            return
+        }
+
         isPressed = true
         isLongPressArmed = false
         mouseDownLocation = event.locationInWindow
@@ -543,6 +667,9 @@ public final class ShelfItemButton: NSControl {
         longPressWorkItem?.cancel()
         longPressWorkItem = nil
         isLongPressArmed = false
+        if onRightMouseDown?(event) == true {
+            return
+        }
         if let menu = menu {
             NSMenu.popUpContextMenu(menu, with: event, for: self)
         } else {
@@ -586,20 +713,128 @@ extension ShelfItemButton: NSDraggingSource {
     }
 }
 
+/// 橡皮筋框选半透明半高光选框视图（对齐 macOS Finder 原生设计）
+private final class RubberbandSelectionView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 3.0
+        layer?.borderWidth = 1.0
+        updateStyles()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func updateStyles() {
+        let accent = NSColor.controlAccentColor
+        layer?.backgroundColor = accent.withAlphaComponent(0.18).cgColor
+        layer?.borderColor = accent.withAlphaComponent(0.85).cgColor
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // 保持事件穿透，绝不拦截底层鼠标拖拽
+        return nil
+    }
+}
+
 private final class FlippedContentView: NSView {
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
 
+    weak var gridView: ShelfGridView?
+    private var dragStartWindowPoint: NSPoint?
+    private var dragStartContentPoint: NSPoint?
+    private var isDraggingWindow: Bool = false
+    private var hasMovedBeyondThreshold: Bool = false
+
     override func mouseDown(with event: NSEvent) {
         let localPoint = convert(event.locationInWindow, from: nil)
         let hit = hitTest(localPoint)
-        // If clicking on empty space in contentView (no ShelfItemButton hit), perform window drag
-        if hit == self || hit == nil {
-            window?.performDrag(with: event)
-        } else if hit === superview?.window?.contentView {
-            window?.performDrag(with: event)
-        } else {
+
+        // 若命中具体控件（如 ShelfItemButton 等），交给父类分发
+        if hit != self && hit != nil && hit !== superview?.window?.contentView {
             super.mouseDown(with: event)
+            return
+        }
+
+        // 若分类内无任何图标（0 项保底），全域拖拽保持原生移窗
+        if gridView?.items.isEmpty ?? true {
+            window?.performDrag(with: event)
+            return
+        }
+
+        // 修饰键穿透：按住 Command 或 Option 时直接移窗
+        if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.option) {
+            isDraggingWindow = true
+            window?.performDrag(with: event)
+            return
+        }
+
+        dragStartWindowPoint = event.locationInWindow
+        dragStartContentPoint = localPoint
+        isDraggingWindow = false
+        hasMovedBeyondThreshold = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !isDraggingWindow else { return }
+        guard let startWindow = dragStartWindowPoint, let startContent = dragStartContentPoint else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let currentWindow = event.locationInWindow
+        let currentContent = convert(currentWindow, from: nil)
+        let dist = hypot(currentWindow.x - startWindow.x, currentWindow.y - startWindow.y)
+
+        if !hasMovedBeyondThreshold {
+            if dist > 3.0 {
+                hasMovedBeyondThreshold = true
+                if event.modifierFlags.contains(.command) || event.modifierFlags.contains(.option) {
+                    isDraggingWindow = true
+                    window?.performDrag(with: event)
+                    return
+                }
+                gridView?.beginMarqueeSelection(at: startContent, modifierFlags: event.modifierFlags)
+            }
+        }
+
+        if hasMovedBeyondThreshold && !isDraggingWindow {
+            gridView?.updateMarqueeSelection(start: startContent, current: currentContent, modifierFlags: event.modifierFlags)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer {
+            dragStartWindowPoint = nil
+            dragStartContentPoint = nil
+            isDraggingWindow = false
+            hasMovedBeyondThreshold = false
+        }
+
+        if hasMovedBeyondThreshold && !isDraggingWindow {
+            gridView?.finishMarqueeSelection()
+        } else if !hasMovedBeyondThreshold && !isDraggingWindow {
+            // 单击空白处未拖动 -> 清空全部多选态
+            gridView?.clearBatchSelection()
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let hit = hitTest(localPoint)
+        if hit != self && hit != nil && hit !== superview?.window?.contentView {
+            super.rightMouseDown(with: event)
+            return
+        }
+
+        // 空白处右键：若有多选图标，展示批量操作上下文菜单；否则展示全局网格菜单
+        if let grid = gridView, grid.hasBatchSelection {
+            grid.showBatchContextMenu(with: event)
+        } else {
+            gridView?.showGridMenu(with: event)
         }
     }
 }
@@ -613,17 +848,38 @@ public final class ShelfGridView: NSView {
         let localPoint = convert(event.locationInWindow, from: nil)
         let hit = hitTest(localPoint)
         if hit == self || hit == scrollView || hit == nil {
-            window?.performDrag(with: event)
+            if items.isEmpty || event.modifierFlags.contains(.command) || event.modifierFlags.contains(.option) {
+                window?.performDrag(with: event)
+            } else {
+                contentView.mouseDown(with: event)
+            }
         } else {
             super.mouseDown(with: event)
         }
     }
 
+    override public func mouseDragged(with event: NSEvent) {
+        contentView.mouseDragged(with: event)
+    }
+
+    override public func mouseUp(with event: NSEvent) {
+        contentView.mouseUp(with: event)
+    }
+
     internal var items: [LauncherItem] = []
     internal var itemButtons: [ShelfItemButton] = []
+    public var allCategoryItems: [LauncherItem] = []
+    public var currentCategoryId: UUID?
     private var keyboardSelectedID: UUID?
     private var activeFilter = ""
     private var targetValidationGeneration: UInt64 = 0
+
+    // MARK: - 批量框选与多选状态机
+    public private(set) var selectedItemIDs: Set<UUID> = []
+    public var hasBatchSelection: Bool { !selectedItemIDs.isEmpty }
+    private var marqueeInitialSelectedIDs: Set<UUID> = []
+    private var marqueeAnchorItemID: UUID?
+    private let marqueeSelectionView = RubberbandSelectionView()
 
     // MARK: - 实时平滑让位、Alt 快速交换、Esc 撤销还原与横向滑动翻页状态
     private var dragSourceID: UUID?
@@ -637,6 +893,8 @@ public final class ShelfGridView: NSView {
     private var didCommitCurrentDrag: Bool = false
     private var dragKeyMonitor: Any?
     private var lastKnownDragPointInContent: NSPoint?
+    private var folderMergeTimer: Timer?
+    private var pendingMergeTargetButton: ShelfItemButton?
 
     private var horizontalSwipeDelta: CGFloat = 0
     private var hasTriggeredSwipeInGesture: Bool = false
@@ -675,6 +933,9 @@ public final class ShelfGridView: NSView {
         addSubview(scrollView)
 
         contentView.wantsLayer = true
+        contentView.gridView = self
+        marqueeSelectionView.isHidden = true
+        contentView.addSubview(marqueeSelectionView)
         scrollView.documentView = contentView
 
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -708,6 +969,7 @@ public final class ShelfGridView: NSView {
         self.appearance = app
         contentView.appearance = app
         scrollView.appearance = app
+        marqueeSelectionView.updateStyles()
     }
 
     @objc private func handleThemeChanged() {
@@ -727,9 +989,60 @@ public final class ShelfGridView: NSView {
         relayoutButtons(animated: false)
     }
 
-    public func reloadData(items: [LauncherItem]) {
+    private func cancelFolderMergeTimer() {
+        folderMergeTimer?.invalidate()
+        folderMergeTimer = nil
+        pendingMergeTargetButton?.isFolderMergeTarget = false
+        pendingMergeTargetButton = nil
+    }
+
+    public static func renderFolderCompositeIcon(for children: [LauncherItem], size: CGSize = CGSize(width: 48, height: 48)) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        let bounds = NSRect(origin: .zero, size: size)
+        let bgPath = NSBezierPath(roundedRect: bounds, xRadius: 10, yRadius: 10)
+        let isDark = ConfigManager.shared.config.theme.isDark
+        (isDark ? NSColor(white: 0.22, alpha: 0.65) : NSColor(white: 0.88, alpha: 0.75)).setFill()
+        bgPath.fill()
+        (isDark ? NSColor(white: 1.0, alpha: 0.15) : NSColor(white: 0.0, alpha: 0.10)).setStroke()
+        bgPath.lineWidth = 0.8
+        bgPath.stroke()
+
+        let validChildren = Array(children.prefix(4))
+        if validChildren.isEmpty {
+            if let folderSymbol = NSImage(systemSymbolName: "folder.fill", accessibilityDescription: nil) {
+                let tinted = folderSymbol.copy() as! NSImage
+                tinted.isTemplate = true
+                let iconRect = NSRect(x: (size.width - 24) / 2, y: (size.height - 24) / 2, width: 24, height: 24)
+                tinted.draw(in: iconRect)
+            }
+        } else {
+            let miniSize = size.width * 0.36
+            let padding = size.width * 0.09
+            let offsets: [NSPoint] = [
+                NSPoint(x: padding, y: size.height - padding - miniSize),
+                NSPoint(x: size.width - padding - miniSize, y: size.height - padding - miniSize),
+                NSPoint(x: padding, y: padding),
+                NSPoint(x: size.width - padding - miniSize, y: padding)
+            ]
+            for (i, child) in validChildren.enumerated() {
+                let rect = NSRect(origin: offsets[i], size: CGSize(width: miniSize, height: miniSize))
+                let childIcon = ThumbnailPipeline.shared.cachedIcon(forItem: child) ?? NSWorkspace.shared.icon(forFile: child.target)
+                childIcon.draw(in: rect)
+            }
+        }
+
+        image.unlockFocus()
+        return image
+    }
+
+    public func reloadData(items: [LauncherItem], allCategoryItems: [LauncherItem]? = nil) {
+        clearBatchSelection()
+        self.allCategoryItems = allCategoryItems ?? items
         // 切换分类或重载数据时，立即清理上一分类残留的拖拽快照，防止跨分类切页后旧分类按钮回写重叠
         resetDragPreviewSnapshotBeforeReload()
+        cancelFolderMergeTimer()
 
         let hadItems = !self.items.isEmpty
         self.items = items
@@ -821,6 +1134,7 @@ public final class ShelfGridView: NSView {
     }
 
     public func applyFilter(_ query: String) {
+        clearBatchSelection()
         activeFilter = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         for button in itemButtons {
             button.isHidden = !activeFilter.isEmpty && !button.item.matchesFilter(activeFilter)
@@ -879,6 +1193,19 @@ public final class ShelfGridView: NSView {
         }
     }
 
+    /// 抽屉内 ⌘1~⌘9 Quick Slot 毫秒级直启
+    public func executeQuickSlot(index: Int) -> Bool {
+        let visible = visibleButtons
+        guard visible.indices.contains(index) else { return false }
+        let button = visible[index]
+        keyboardSelectedID = button.item.id
+        updateKeyboardSelectionVisual()
+        if let action = button.action, let target = button.target {
+            NSApp.sendAction(action, to: target, from: button)
+        }
+        return true
+    }
+
     /// Reset hover/press visuals on every button (called before the panel is re-shown).
     public func resetInteractionStates() {
         for button in itemButtons {
@@ -913,6 +1240,10 @@ public final class ShelfGridView: NSView {
 
     private func makeButton(for item: LauncherItem, scale: Double) -> ShelfItemButton {
         let btn = ShelfItemButton(item: item, scale: scale, frame: .zero)
+        if item.isVirtualGroup {
+            let children = allCategoryItems.filter { $0.parentId == item.id }
+            btn.iconImageView.image = Self.renderFolderCompositeIcon(for: children)
+        }
         btn.target = self
         btn.action = #selector(itemClicked(_:))
         btn.onHoverChanged = { [weak self, weak btn] isHovered in
@@ -927,6 +1258,7 @@ public final class ShelfGridView: NSView {
         }
         btn.onDragSessionWillBegin = { [weak self, weak btn] in
             guard let self = self, let btn = btn else { return }
+            self.clearBatchSelection()
             self.delegate?.shelfGridDidBeginDrag(self)
             self.beginInternalDragPreview(for: btn)
         }
@@ -934,6 +1266,45 @@ public final class ShelfGridView: NSView {
             guard let self = self else { return }
             self.endInternalDragPreview(operation: operation)
             self.delegate?.shelfGrid(self, didEndDragWith: operation)
+        }
+
+        btn.onToggleSelectionRequested = { [weak self, weak btn] in
+            guard let self = self, let btn = btn else { return }
+            if self.selectedItemIDs.contains(btn.item.id) {
+                self.selectedItemIDs.remove(btn.item.id)
+            } else {
+                self.selectedItemIDs.insert(btn.item.id)
+                self.marqueeAnchorItemID = btn.item.id
+            }
+            self.updateButtonSelectionStates()
+        }
+
+        btn.onRangeSelectionRequested = { [weak self, weak btn] in
+            guard let self = self, let btn = btn else { return }
+            let visible = self.visibleButtons
+            guard let targetIdx = visible.firstIndex(where: { $0.item.id == btn.item.id }) else { return }
+            let anchorIdx: Int
+            if let anchorID = self.marqueeAnchorItemID, let idx = visible.firstIndex(where: { $0.item.id == anchorID }) {
+                anchorIdx = idx
+            } else {
+                anchorIdx = 0
+            }
+            let range = min(anchorIdx, targetIdx)...max(anchorIdx, targetIdx)
+            for i in range {
+                self.selectedItemIDs.insert(visible[i].item.id)
+            }
+            self.updateButtonSelectionStates()
+        }
+
+        btn.onRightMouseDown = { [weak self, weak btn] event in
+            guard let self = self, let btn = btn else { return false }
+            if self.selectedItemIDs.count > 1 && self.selectedItemIDs.contains(btn.item.id) {
+                self.showBatchContextMenu(with: event)
+                return true
+            } else if !self.selectedItemIDs.contains(btn.item.id) {
+                self.clearBatchSelection()
+            }
+            return false
         }
 
         // Standard Cocoa context menu using representedObject
@@ -1015,6 +1386,7 @@ public final class ShelfGridView: NSView {
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1.0, 0.36, 1.0)
             ctx.allowsImplicitAnimation = animated
             for (index, btn) in buttons.enumerated() {
+                btn.setQuickSlot(index: index < 9 ? index : nil)
                 let col = index % cols
                 let row = index / cols
                 let x = sideMargin + CGFloat(col) * (itemWidth + spacingX)
@@ -1097,6 +1469,14 @@ public final class ShelfGridView: NSView {
     }
 
     override public func rightMouseDown(with event: NSEvent) {
+        if hasBatchSelection {
+            showBatchContextMenu(with: event)
+        } else {
+            showGridMenu(with: event)
+        }
+    }
+
+    public func showGridMenu(with event: NSEvent) {
         let menu = NSMenu(title: "ShelfGridMenu")
 
         let createItem = NSMenuItem(title: "新建项目...", action: #selector(contextCreateItem), keyEquivalent: "")
@@ -1134,7 +1514,7 @@ public final class ShelfGridView: NSView {
 
         let settingsItem = NSMenuItem(title: "偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
         settingsItem.image = ThumbnailPipeline.shared.symbolIcon(name: "gearshape", pointSize: 13)
-        settingsItem.keyEquivalentModifierMask = .command
+        settingsItem.keyEquivalentModifierMask = [.command]
         settingsItem.target = self
         menu.addItem(settingsItem)
 
@@ -1171,8 +1551,169 @@ public final class ShelfGridView: NSView {
         PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
     }
 
+    // MARK: - 橡皮筋框选与多选操作核心
+
+    public func beginMarqueeSelection(at startPoint: NSPoint, modifierFlags: NSEvent.ModifierFlags) {
+        if modifierFlags.contains(.shift) || modifierFlags.contains(.command) {
+            marqueeInitialSelectedIDs = selectedItemIDs
+        } else {
+            marqueeInitialSelectedIDs = []
+            selectedItemIDs.removeAll()
+        }
+        marqueeSelectionView.isHidden = false
+        marqueeSelectionView.frame = NSRect(origin: startPoint, size: .zero)
+        contentView.addSubview(marqueeSelectionView, positioned: .above, relativeTo: nil)
+    }
+
+    public func updateMarqueeSelection(start: NSPoint, current: NSPoint, modifierFlags: NSEvent.ModifierFlags) {
+        let rect = NSRect(
+            x: min(start.x, current.x),
+            y: min(start.y, current.y),
+            width: abs(current.x - start.x),
+            height: abs(current.y - start.y)
+        )
+        marqueeSelectionView.frame = rect
+
+        // 仅对当前可见（!btn.isHidden）的图标做相交碰撞判定，阻断过滤状态下的隐藏应用误选
+        let intersectingIDs = Set(itemButtons.compactMap { btn -> UUID? in
+            guard !btn.isHidden else { return nil }
+            return btn.frame.intersects(rect) ? btn.item.id : nil
+        })
+
+        if modifierFlags.contains(.shift) || modifierFlags.contains(.command) {
+            selectedItemIDs = marqueeInitialSelectedIDs.union(intersectingIDs)
+        } else {
+            selectedItemIDs = intersectingIDs
+        }
+
+        updateButtonSelectionStates()
+    }
+
+    public func finishMarqueeSelection() {
+        marqueeSelectionView.isHidden = true
+        marqueeSelectionView.frame = .zero
+        marqueeInitialSelectedIDs.removeAll()
+        updateButtonSelectionStates()
+    }
+
+    @objc public func clearBatchSelection() {
+        guard !selectedItemIDs.isEmpty else { return }
+        selectedItemIDs.removeAll()
+        marqueeInitialSelectedIDs.removeAll()
+        marqueeAnchorItemID = nil
+        updateButtonSelectionStates()
+    }
+
+    public var selectedItems: [LauncherItem] {
+        return items.filter { selectedItemIDs.contains($0.id) }
+    }
+
+    private func updateButtonSelectionStates() {
+        for btn in itemButtons {
+            let selected = selectedItemIDs.contains(btn.item.id)
+            if btn.isSelected != selected {
+                btn.isSelected = selected
+            }
+        }
+    }
+
+    public func deleteSelectedBatchItems() {
+        guard !selectedItemIDs.isEmpty else { return }
+        let toDelete = selectedItems
+        delegate?.shelfGrid(self, didDeleteItems: toDelete)
+        clearBatchSelection()
+    }
+
+    public func showBatchContextMenu(with event: NSEvent) {
+        let count = selectedItemIDs.count
+        guard count > 0 else { return }
+
+        let menu = NSMenu(title: "BatchOperationsMenu")
+
+        let deleteItem = NSMenuItem(
+            title: "从分类中移除 (\(count) 项)",
+            action: #selector(batchContextDelete),
+            keyEquivalent: ""
+        )
+        deleteItem.image = ThumbnailPipeline.shared.symbolIcon(name: "trash", pointSize: 13)
+        deleteItem.target = self
+        menu.addItem(deleteItem)
+
+        // 跨分类迁移子菜单
+        let currentCatId = currentCategoryId
+        let otherCategories = ConfigManager.shared.config.categories.filter { cat in
+            !cat.isFavorites && cat.id != currentCatId
+        }
+        if !otherCategories.isEmpty {
+            let moveSubmenu = NSMenu(title: "MoveToCategory")
+            for cat in otherCategories {
+                let catItem = NSMenuItem(
+                    title: cat.name,
+                    action: #selector(batchContextMoveToCategory(_:)),
+                    keyEquivalent: ""
+                )
+                catItem.image = ThumbnailPipeline.shared.symbolIcon(name: cat.iconSymbol, pointSize: 13)
+                catItem.target = self
+                catItem.representedObject = cat.id
+                moveSubmenu.addItem(catItem)
+            }
+            let moveParentItem = NSMenuItem(title: "移动至分类", action: nil, keyEquivalent: "")
+            moveParentItem.image = ThumbnailPipeline.shared.symbolIcon(name: "folder", pointSize: 13)
+            moveParentItem.submenu = moveSubmenu
+            menu.addItem(moveParentItem)
+        }
+
+        // 新建文件夹 (选中的项均不能是虚拟文件夹，且数量 >= 2)
+        let selectedList = self.selectedItems
+        let hasFolderInSelection = selectedList.contains(where: { $0.isVirtualGroup })
+        if count >= 2 && !hasFolderInSelection {
+            let folderItem = NSMenuItem(
+                title: "新建文件夹 (包含 \(count) 项)",
+                action: #selector(batchContextCreateFolder),
+                keyEquivalent: ""
+            )
+            folderItem.image = ThumbnailPipeline.shared.symbolIcon(name: "folder.badge.plus", pointSize: 13)
+            folderItem.target = self
+            menu.addItem(folderItem)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+
+        let clearItem = NSMenuItem(title: "取消多选", action: #selector(clearBatchSelection), keyEquivalent: "")
+        clearItem.image = ThumbnailPipeline.shared.symbolIcon(name: "xmark.circle", pointSize: 13)
+        clearItem.target = self
+        menu.addItem(clearItem)
+
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    @objc public func batchContextDelete() {
+        deleteSelectedBatchItems()
+    }
+
+    @objc private func batchContextMoveToCategory(_ sender: NSMenuItem) {
+        guard let targetId = sender.representedObject as? UUID else { return }
+        let itemsToMove = self.selectedItems
+        guard !itemsToMove.isEmpty else { return }
+        delegate?.shelfGrid(self, didMoveItems: itemsToMove, toCategoryId: targetId)
+        clearBatchSelection()
+    }
+
+    @objc private func batchContextCreateFolder() {
+        let itemsToGroup = self.selectedItems
+        guard itemsToGroup.count >= 2 else { return }
+        delegate?.shelfGrid(self, didCreateFolderWithItems: itemsToGroup)
+        clearBatchSelection()
+    }
+
     @objc private func itemClicked(_ sender: ShelfItemButton) {
         clearKeyboardSelection()
+        clearBatchSelection()
+        if sender.item.isVirtualGroup {
+            let children = allCategoryItems.filter { $0.parentId == sender.item.id }
+            delegate?.shelfGrid(self, didRequestOpenFolder: sender.item, subItems: children)
+            return
+        }
         delegate?.shelfGrid(self, didLaunchItem: sender.item)
     }
 
@@ -1265,16 +1806,19 @@ public final class ShelfGridView: NSView {
 
     private func endInternalDragPreview(operation: NSDragOperation) {
         removeDragKeyMonitor()
+        cancelFolderMergeTimer()
 
         for btn in itemButtons {
             btn.isDraggingSource = false
             btn.isSwapTarget = false
+            btn.isFolderMergeTarget = false
             btn.alphaValue = 1.0
         }
         if let origButtons = dragOriginalButtons {
             for btn in origButtons {
                 btn.isDraggingSource = false
                 btn.isSwapTarget = false
+                btn.isFolderMergeTarget = false
                 btn.alphaValue = 1.0
             }
         }
@@ -1455,6 +1999,34 @@ public final class ShelfGridView: NSView {
         let loc = contentView.convert(sender.draggingLocation, from: nil)
         lastKnownDragPointInContent = loc
 
+        // 核心区 40% 悬停合成文件夹判定 (Inner Hotspot Rect)
+        var hitMergeCandidate: ShelfItemButton? = nil
+        for btn in itemButtons where !btn.isHidden && btn.item.id != sourceId {
+            let f = btn.frame
+            let inner = f.insetBy(dx: f.width * 0.30, dy: f.height * 0.30)
+            if inner.contains(loc) {
+                hitMergeCandidate = btn
+                break
+            }
+        }
+
+        if let candidate = hitMergeCandidate {
+            if pendingMergeTargetButton !== candidate {
+                cancelFolderMergeTimer()
+                pendingMergeTargetButton = candidate
+                folderMergeTimer = Timer.scheduledTimer(withTimeInterval: 0.45, repeats: false) { [weak self, weak candidate] _ in
+                    guard let self = self, let cand = candidate, self.pendingMergeTargetButton === cand else { return }
+                    cand.isFolderMergeTarget = true
+                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                }
+            }
+            return
+        } else {
+            if pendingMergeTargetButton != nil {
+                cancelFolderMergeTimer()
+            }
+        }
+
         // 情况 A：同分类内部实时让位 / Alt 快速交换
         if let sourceIdx = dragSourceIndex, origItems.indices.contains(sourceIdx) {
             let optionNow = NSEvent.modifierFlags.contains(.option)
@@ -1580,6 +2152,7 @@ public final class ShelfGridView: NSView {
     override public func draggingExited(_ sender: NSDraggingInfo?) {
         layer?.borderWidth = 0.0
         layer?.backgroundColor = NSColor.clear.cgColor
+        cancelFolderMergeTimer()
         if dragOriginalItems != nil {
             restoreDragPreviewToOriginal(animated: true)
         }
@@ -1588,6 +2161,7 @@ public final class ShelfGridView: NSView {
     override public func draggingEnded(_ sender: NSDraggingInfo) {
         layer?.borderWidth = 0.0
         layer?.backgroundColor = NSColor.clear.cgColor
+        cancelFolderMergeTimer()
     }
 
     override public func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
@@ -1595,6 +2169,7 @@ public final class ShelfGridView: NSView {
         layer?.backgroundColor = NSColor.clear.cgColor
 
         if isDragCancelledByEscape {
+            cancelFolderMergeTimer()
             restoreDragPreviewToOriginal(animated: true)
             return false
         }
@@ -1605,6 +2180,16 @@ public final class ShelfGridView: NSView {
         let idString = pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) ??
                        pboard.string(forType: NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType))
         if let idString = idString, let sourceId = UUID(uuidString: idString) {
+            // 优先检查是否命中文件夹合成目标
+            if let mergeBtn = pendingMergeTargetButton, mergeBtn.isFolderMergeTarget {
+                let targetId = mergeBtn.item.id
+                cancelFolderMergeTimer()
+                didCommitCurrentDrag = true
+                endInternalDragPreview(operation: .move)
+                delegate?.shelfGrid(self, didMergeItemsIntoFolder: sourceId, targetId: targetId)
+                return true
+            }
+
             let loc = contentView.convert(sender.draggingLocation, from: nil)
 
             // 情况 A：同分类内部拖拽落盘

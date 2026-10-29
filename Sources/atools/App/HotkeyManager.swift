@@ -32,6 +32,13 @@ public final class HotkeyManager {
 
     private init() {
         installCarbonEventHandler()
+        NotificationCenter.default.addObserver(
+            forName: .atoolsShelfDataDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.registerAllItemHotkeys()
+        }
     }
 
     private func installCarbonEventHandler() {
@@ -55,6 +62,10 @@ public final class HotkeyManager {
                 if let identified = HotKeyID(rawValue: hotKeyID.id) {
                     DispatchQueue.main.async {
                         HotkeyManager.shared.onHotKeyTriggered?(identified)
+                    }
+                } else if hotKeyID.id >= 1000 {
+                    DispatchQueue.main.async {
+                        HotkeyManager.shared.triggerItemHotkey(id: hotKeyID.id)
                     }
                 }
             }
@@ -82,6 +93,56 @@ public final class HotkeyManager {
             register(id: .search, binding: config.searchHotkey)
         } else {
             unregister(id: .search)
+        }
+        registerAllItemHotkeys()
+    }
+
+    // MARK: - 单项全局快捷键管理
+
+    private var registeredItemHotkeys: [UInt32: EventHotKeyRef] = [:]
+    private var itemHotKeyIdMap: [UInt32: UUID] = [:]
+    private var nextItemHotKeyId: UInt32 = 1000
+
+    public func registerAllItemHotkeys() {
+        for (_, ref) in registeredItemHotkeys {
+            UnregisterEventHotKey(ref)
+        }
+        registeredItemHotkeys.removeAll()
+        itemHotKeyIdMap.removeAll()
+        nextItemHotKeyId = 1000
+
+        let categories = ConfigManager.shared.config.categories
+        for cat in categories {
+            for item in cat.items {
+                guard let binding = item.parsedHotkeyBinding, !binding.isUnassigned, binding.specialTrigger == .none else { continue }
+                let assignedId = nextItemHotKeyId
+                nextItemHotKeyId += 1
+
+                var hotKeyRef: EventHotKeyRef?
+                let carbonHotKeyID = EventHotKeyID(signature: OSType(0x41544F4C), id: assignedId)
+                let status = RegisterEventHotKey(
+                    binding.keyCode,
+                    binding.carbonModifiers,
+                    carbonHotKeyID,
+                    GetApplicationEventTarget(),
+                    0,
+                    &hotKeyRef
+                )
+                if status == noErr, let ref = hotKeyRef {
+                    registeredItemHotkeys[assignedId] = ref
+                    itemHotKeyIdMap[assignedId] = item.id
+                }
+            }
+        }
+    }
+
+    public func triggerItemHotkey(id: UInt32) {
+        guard let itemId = itemHotKeyIdMap[id] else { return }
+        for cat in ConfigManager.shared.config.categories {
+            if let item = cat.items.first(where: { $0.id == itemId }) {
+                LauncherExecutor.open(item: item)
+                break
+            }
         }
     }
 

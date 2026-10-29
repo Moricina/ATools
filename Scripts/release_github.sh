@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.34}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-60}"
+VERSION="${ATOOLS_VERSION:-1.3.35}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-61}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -108,13 +108,38 @@ fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 更新说明
 
-### 🛡️ AutoQuit 关窗退出针对 AuraPane 及 AppKit 离屏设置底板死锁专项修复
-1. **根除离屏设置/偏好设置窗口残余误判**：
-   - 修复 AuraPane 及现代化 AppKit 应用在用户关闭设置窗口后，底层通过 \`orderOut:\` 隐藏常驻在后台的离屏窗口（如 760x606 \"设置\"）被 WindowServer 规则误判为在活跨 Space 业务窗口的死锁缺陷；
-2. **通用设置标题安全过滤**：
-   - 统一对离屏状态（\`isOnScreen == false\`）下且 AX 树已确认销毁的常用系统/应用偏好设置标题（\"设置\"、\"偏好设置\"、\"Settings\"、\"Preferences\"）予以排除，防止阻碍终审退出；
-3. **达成双向权威确诊即刻退出**：
-   - AuraPane 点击红叉关闭主窗口后，AX 与 WindowServer 即刻双向确诊零窗，1.0s 后优雅安全退出进程。"
+### 🚀 抽屉启动器重大体验升级 (Shelf Evolution)
+1. **新装应用静默感知与自动入库**：
+   - 基于 FSEvents 深度防抖感知应用安装与变动，零额外常驻守护进程；
+   - 自动校验 bundle 完整性并录入指定分类，搭载 Tombstone 墓碑机制防手动删除后复活。
+2. **多应用拖拽合并文件夹与液态毛玻璃浮层 (Folder Nesting)**：
+   - 拖拽图标至另一图标中心区域悬停 0.45 秒即可合并建文件夹；
+   - 呈现原生液态毛玻璃浮层、四宫格微缩图、内联双击重命名标题、右键“移出文件夹”与空文件夹自愈清理。
+3. **单项全局快捷键与 ⌘1~⌘9 抽屉秒启**：
+   - 支持为任意单项配置独占全局快捷键；
+   - 抽屉激活时原生支持 \`⌘1\` ~ \`⌘9\` 直出秒启前 9 个应用。
+4. **启动频次智能排序**：
+   - 自动追踪应用启动计次与最近启动时间，分类右键支持按使用频次一键重新降序排列。
+5. **橡皮筋框选多选与批量原子操作 (Marquee Batch Actions)**：
+   - 抽屉空白处按住鼠标拖拽拉出半透明液态虚线选框，支持 \`⌘\`/\`⇧\` 连续增减选；
+   - 右键选区支持批量移除入墓碑、批量原子搬移至指定分类、批量一键合并新建文件夹。
+
+---
+
+### 🛡️ 关窗退出 (AutoQuit) 三维现代化重构
+1. **全面剥离录屏权限依赖（向 SwiftQuit 看齐）**：
+   - 彻底移除 \`CGPreflightScreenCaptureAccess\`，仅需系统「辅助功能 (Accessibility)」授权即可无缝工作；
+   - 权限与职责严格隔离：AX 语义负责窗口列表与角色，WindowServer 仅核验零隐私权限公开几何数据。
+2. **声明式规则库与通用幽灵图层过滤引擎 (AutoQuitQuirks)**：
+   - 解耦写死的硬编码名单，建立集中式规则引擎；
+   - 自动化清洗系统代理视图、CEF 缓冲画布、通用设置/偏好窗口 orderOut 残余与微型光标。
+3. **原生液态毛玻璃可撤销倒计时 HUD**：
+   - 退出前在屏幕底部弹出轻柔倒计时胶囊与「取消」按钮，撤销后当次会话智能抑制；
+   - 零按键拦截、零常驻显存，退出后即刻释放 Window Backing Store。
+4. **决策诊断流水线与设置页检查器 (Trace & Inspector)**：
+   - 纯值类型环形缓冲区记录最近 50 条裁决，设置页增设「诊断与决策历史」独立面板，支持一键导出排障报告。
+5. **OPPO 互联等 Electron 应用 \`win.hide()\` 离屏层专项根治**：
+   - 准确过滤隐藏至托盘或后台的离屏窗口残余，双向权威确诊零窗，点击红叉即刻安全退出。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

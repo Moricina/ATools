@@ -1945,6 +1945,7 @@ public enum DiagnosticSuite {
         TestAssertions.expect(autoQuitRoundtrip.autoQuitMode == .onlyListed, "autoQuitMode should round-trip")
         TestAssertions.expect(autoQuitRoundtrip.autoQuitAppRules == ["com.apple.TextEdit", "com.google.Chrome"], "autoQuitAppRules should round-trip")
         TestAssertions.expect(autoQuitRoundtrip.autoQuitDelaySeconds == 5, "autoQuitDelaySeconds should round-trip")
+        TestAssertions.expect(autoQuitRoundtrip.enableAutoQuitUndoHUD == true, "enableAutoQuitUndoHUD should round-trip")
 
         // 旧版配置（缺字段）必须落到安全默认：总开关关闭
         let autoQuitLegacy = try JSONDecoder().decode(AtoolsConfig.self, from: "{\"version\":4,\"categories\":[]}".data(using: .utf8)!)
@@ -1952,6 +1953,7 @@ public enum DiagnosticSuite {
         TestAssertions.expect(autoQuitLegacy.autoQuitMode == .allApps, "missing autoQuitMode must default to .allApps")
         TestAssertions.expect(autoQuitLegacy.autoQuitAppRules.isEmpty, "missing autoQuitAppRules must default to []")
         TestAssertions.expect(autoQuitLegacy.autoQuitDelaySeconds == 2, "missing autoQuitDelaySeconds must default to 2s")
+        TestAssertions.expect(autoQuitLegacy.enableAutoQuitUndoHUD == true, "missing enableAutoQuitUndoHUD must default to true")
 
         // 解码期 clamp 越界延迟
         autoQuitCfg.autoQuitDelaySeconds = 999
@@ -1995,6 +1997,33 @@ public enum DiagnosticSuite {
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: nil, windowServerCount: 0) == false, "AX failure must never quit even if WindowServer 0")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 1, windowServerCount: 1) == false, "Active running window must not quit")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: nil) == true, "AX 0 with unknown WindowServer falls back to quit")
+        // 验证 AutoQuitQuirks 声明式规则引擎
+        let quirks = AutoQuitQuirks.shared
+        TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.parallels.desktop.console") == true, "Parallels must be protected by quirks")
+        TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.docker.docker") == true, "Docker must be protected by quirks")
+        TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.apple.TextEdit") == false, "TextEdit is not virtualization")
+
+        // 验证幽灵图层清洗逻辑
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice", ownerName: "WPS Office", title: "首页", width: 420, height: 154, isOnScreen: false) == true, "WPS offscreen home ghost window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark", ownerName: "夸克", title: "分享链接", width: 640, height: 480, isOnScreen: false) == true, "Quark offscreen ghost window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "cc.atools.aurapane", ownerName: "AuraPane", title: "设置", width: 400, height: 300, isOnScreen: false) == true, "AuraPane offscreen settings must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.oplus.devicespace", ownerName: "O+Connect", title: "OPPO 互联", width: 1252, height: 710, isOnScreen: false) == true, "OPPO Connect offscreen hidden window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.oplus.devicespace", ownerName: "O+Connect", title: "O+Connect", width: 370, height: 313, isOnScreen: false) == true, "OPPO Connect tray panel must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.TextEdit", ownerName: "TextEdit", title: "文档1", width: 800, height: 600, isOnScreen: true) == false, "Onscreen active document must never be cleaned")
+
+        // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量
+        let trace = AutoQuitDecisionTrace.shared
+        trace.clear()
+        for i in 1...60 {
+            trace.record(pid: pid_t(1000 + i), bundleID: "com.test.app\(i)", appName: "App\(i)", axWindowCount: 0, wsWindowCount: 0, decision: .quitExecuted, reasonCode: "TestReason\(i)")
+        }
+        let traceRecords = trace.recentRecords()
+        TestAssertions.expect(traceRecords.count == 50, "RingBuffer must cap at exactly 50 records")
+        TestAssertions.expect(traceRecords.first?.appName == "App60", "Newest record must be first")
+        let report = trace.generateDiagnosticReport()
+        TestAssertions.expect(report.contains("App60"), "Diagnostic report must contain recent records")
+        trace.clear()
+
         print("      ✓ AutoQuit config round-trip, legacy defaults & watch rules verified.")
     } catch {
         TestAssertions.expect(false, "AutoQuit diagnostics threw: \(error)")
@@ -2248,6 +2277,152 @@ public enum DiagnosticSuite {
         )
         print("      ✓ Single-Instance Guard and Distributed showUI verified.")
     }
+
+    // 14. Test Auto App Discovery, Folder Nesting, Item Hotkeys, Quick Slots & Usage Frequency
+    print("[14] Testing Auto App Discovery, Folder Nesting, Item Hotkeys & Usage Frequency...")
+    // (a) Test Auto App Discovery Baseline, Policy & Tombstone mechanism
+    ConfigManager.shared.updateKnownAppBundleIds([])
+    ConfigManager.shared.updateEnableAutoAddInstalledApps(true)
+    TestAssertions.expect(!ConfigManager.shared.config.knownAppBundleIds.isEmpty, "首次开启自动入库必须先沉淀全量已知应用基线池，杜绝历史应用灌水")
+
+    // 从基线中暂时剔除 Calculator，模拟其为新装应用
+    var knownBids = ConfigManager.shared.config.knownAppBundleIds
+    knownBids.removeAll(where: { $0 == "com.apple.calculator" })
+    ConfigManager.shared.updateKnownAppBundleIds(knownBids)
+
+    let testAppPath = "/System/Applications/Calculator.app"
+    let testApp = IndexedApp(
+        name: "Calculator",
+        localizedName: "计算器",
+        path: testAppPath,
+        bundleId: "com.apple.calculator",
+        isRegularApp: true
+    )
+
+    // Dedicated inbox mode test
+    ConfigManager.shared.updateAutoAddTargetPolicy(mode: .dedicatedInbox, categoryId: nil, inboxName: "新应用")
+    ConfigManager.shared.handleAppIndexUpdated(apps: [testApp])
+
+    let categories = ConfigManager.shared.config.categories
+    let inboxCat = categories.first(where: { $0.name == "新应用" })
+    TestAssertions.expect(inboxCat != nil, "默认应当自动创建并路由至专属「新应用」分类")
+    let foundItem = inboxCat?.items.first(where: { $0.target == testAppPath })
+    TestAssertions.expect(foundItem != nil, "真正新增的应用应当被安全入库至「新应用」专属分类中")
+
+    // 模拟用户从抽屉中删除该应用，验证 Tombstone 记录
+    if let itemToDelete = foundItem, let cat = inboxCat {
+        ConfigManager.shared.removeItem(id: itemToDelete.id, from: cat.id)
+        TestAssertions.expect(ConfigManager.shared.config.ignoredAutoAddBundleIds.contains("com.apple.calculator"),
+                              "用户主动删除的应用应当记录其 bundleId 至 ignoredAutoAddBundleIds (Tombstone)")
+
+        // 再次触发扫描，验证被忽略的 App 不会死灰复燃
+        ConfigManager.shared.handleAppIndexUpdated(apps: [testApp])
+        let reappeared = ConfigManager.shared.config.categories.lazy.flatMap(\.items).first(where: { $0.target == testAppPath })
+        TestAssertions.expect(reappeared == nil, "已记录在 Tombstone 的应用不应当被自动扫盘加回 (防死灰复燃)")
+    }
+
+    // (b) Test Folder / Virtual Group & Sub-items
+    let folderId = UUID()
+    let subItemA = LauncherItem(parentId: folderId, name: "子项 A", itemType: .application, target: "/Applications/Safari.app")
+    let subItemB = LauncherItem(parentId: folderId, name: "子项 B", itemType: .application, target: "/System/Applications/Utilities/Terminal.app")
+    let folderItem = LauncherItem(id: folderId, name: "测试文件夹", itemType: .application, target: "", isVirtualGroup: true)
+
+    let targetCat = ConfigManager.shared.config.categories.first!
+    _ = ConfigManager.shared.addItems([folderItem, subItemA, subItemB], to: targetCat.id)
+
+    let compositeIcon = ShelfGridView.renderFolderCompositeIcon(for: [subItemA, subItemB])
+    TestAssertions.expect(compositeIcon.size.width > 0 && compositeIcon.size.height > 0, "文件夹四宫格微缩图应当成功生成")
+
+    // 验证级联清理：删除文件夹应当级联删除子项
+    ConfigManager.shared.removeItem(id: folderId, from: targetCat.id)
+    let remainingSubs = ConfigManager.shared.config.categories.first(where: { $0.id == targetCat.id })?.items.filter { $0.parentId == folderId } ?? []
+    TestAssertions.expect(remainingSubs.isEmpty, "删除文件夹时必须级联清理其内部所有子项，防止孤儿节点残留")
+
+    // (c) Test Item Hotkey Binding Round-Trip
+    var hotkeyItem = LauncherItem(name: "快捷键项", itemType: .application, target: "/Applications/Test.app")
+    let testBinding = HotkeyBinding(keyCode: 18, carbonModifiers: 256, displayString: "⌘1", specialTrigger: .none)
+    hotkeyItem.setHotkeyBinding(testBinding)
+    TestAssertions.expect(hotkeyItem.parsedHotkeyBinding?.displayString == "⌘1", "单项快捷键绑定编解码序列化往返必须一致")
+
+    // (d) Test Quick Slot & Launch Frequency Tracking
+    let qItem = LauncherItem(name: "高频测试项", itemType: .application, target: "/Applications/FreqTest.app")
+    _ = ConfigManager.shared.addItem(qItem, to: targetCat.id)
+    ConfigManager.shared.recordItemLaunch(itemId: qItem.id)
+    ConfigManager.shared.recordItemLaunch(itemId: qItem.id)
+
+    let updatedQItem = ConfigManager.shared.config.categories.lazy.flatMap(\.items).first(where: { $0.id == qItem.id })
+    TestAssertions.expect((updatedQItem?.launchCount ?? 0) >= 2, "recordItemLaunch 应当正确累加启动频次统计")
+    TestAssertions.expect(updatedQItem?.lastLaunchedAt != nil, "recordItemLaunch 应当记录最近启动时间戳")
+
+    let frequent = ConfigManager.shared.frequentItems(limit: 5)
+    TestAssertions.expect(!frequent.isEmpty && frequent.first?.id == qItem.id, "frequentItems 智能推荐应当优先排频次最高的项")
+
+    // 清理测试临时 item
+    ConfigManager.shared.removeItem(id: qItem.id, from: targetCat.id)
+
+    print("      ✓ Auto App Discovery, Tombstone, Folder Nesting, Hotkeys, Quick Slots & Usage Frequency verified.")
+
+    // [15] Testing Marquee Batch Selection & Batch Item Management
+    print("[15] Testing Marquee Batch Selection & Batch Item Management...")
+    let testCat = ConfigManager.shared.config.categories.first(where: { !$0.isFavorites })!
+    let b1 = LauncherItem(name: "批量项1", itemType: .application, target: "/System/Applications/Calculator.app")
+    let b2 = LauncherItem(name: "批量项2", itemType: .application, target: "/System/Applications/TextEdit.app")
+    let b3 = LauncherItem(name: "批量项3", itemType: .application, target: "/System/Applications/Notes.app")
+    _ = ConfigManager.shared.addItem(b1, to: testCat.id)
+    _ = ConfigManager.shared.addItem(b2, to: testCat.id)
+    _ = ConfigManager.shared.addItem(b3, to: testCat.id)
+
+    // (a) Test batch folder creation
+    let batchFolder = ConfigManager.shared.createFolderWithItems(itemIds: [b1.id, b2.id], inCategoryId: testCat.id, folderName: "测试批量组合")
+    TestAssertions.expect(batchFolder != nil, "createFolderWithItems 应当成功创建虚拟组文件夹")
+    let catAfterFolder = ConfigManager.shared.config.categories.first(where: { $0.id == testCat.id })!
+    let sub1 = catAfterFolder.items.first(where: { $0.id == b1.id })
+    let sub2 = catAfterFolder.items.first(where: { $0.id == b2.id })
+    TestAssertions.expect(sub1?.parentId == batchFolder?.id && sub2?.parentId == batchFolder?.id, "被合并项的 parentId 应当正确关联到新建文件夹")
+
+    // (b) Test nested folder rejection (anti-recursion rule)
+    if let f = batchFolder {
+        let nestedAttempt = ConfigManager.shared.createFolderWithItems(itemIds: [f.id, b3.id], inCategoryId: testCat.id)
+        TestAssertions.expect(nestedAttempt == nil, "createFolderWithItems 必须严格拦截包含文件夹的再次嵌套操作")
+    }
+
+    // (c) Test batch move between categories (if another non-favorites category exists)
+    let otherCats = ConfigManager.shared.config.categories.filter { !$0.isFavorites && $0.id != testCat.id }
+    if let otherCat = otherCats.first {
+        ConfigManager.shared.moveItems(ids: [b3.id], from: testCat.id, to: otherCat.id)
+        let srcItems = ConfigManager.shared.config.categories.first(where: { $0.id == testCat.id })!.items
+        let dstItems = ConfigManager.shared.config.categories.first(where: { $0.id == otherCat.id })!.items
+        TestAssertions.expect(!srcItems.contains(where: { $0.id == b3.id }), "源分类必须不再包含已迁出的项目")
+        TestAssertions.expect(dstItems.contains(where: { $0.id == b3.id }), "目标分类必须成功纳入已迁入的项目")
+        // Move back
+        ConfigManager.shared.moveItems(ids: [b3.id], from: otherCat.id, to: testCat.id)
+    }
+
+    // (d) Test batch removal with cascading cleanup and Tombstone registration
+    let idsToRemove: Set<UUID> = [batchFolder!.id, b3.id]
+    ConfigManager.shared.removeItems(ids: idsToRemove, from: testCat.id)
+    let catAfterRemove = ConfigManager.shared.config.categories.first(where: { $0.id == testCat.id })!
+    TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == batchFolder!.id }), "已批量移除的文件夹不应存在")
+    TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == b1.id }), "已移除文件夹的子项必须被级联清理")
+    TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == b2.id }), "已移除文件夹的子项必须被级联清理")
+    TestAssertions.expect(!catAfterRemove.items.contains(where: { $0.id == b3.id }), "已批量移除的项目不应存在")
+    TestAssertions.expect(ConfigManager.shared.config.ignoredAutoAddBundleIds.contains("com.apple.calculator"), "批量移除的应用 bundle ID 必须被记录入墓碑列表")
+
+    // (e) Test ShelfGridView marquee selection logic
+    let mockGrid = ShelfGridView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    mockGrid.currentCategoryId = testCat.id
+    mockGrid.reloadData(items: [
+        LauncherItem(name: "A", itemType: .application, target: "/A"),
+        LauncherItem(name: "B", itemType: .application, target: "/B")
+    ])
+    TestAssertions.expect(!mockGrid.hasBatchSelection, "刚加载或清空时 hasBatchSelection 必须为 false")
+    mockGrid.beginMarqueeSelection(at: NSPoint(x: 0, y: 0), modifierFlags: [])
+    mockGrid.updateMarqueeSelection(start: NSPoint(x: 0, y: 0), current: NSPoint(x: 500, y: 300), modifierFlags: [])
+    TestAssertions.expect(mockGrid.hasBatchSelection, "框选范围覆盖图标时 hasBatchSelection 必须为 true")
+    mockGrid.clearBatchSelection()
+    TestAssertions.expect(!mockGrid.hasBatchSelection, "clearBatchSelection 后必须清空选中态")
+
+    print("      ✓ Marquee Batch Selection, Atomic Batch Delete, Move, Folder Grouping & Tombstones verified.")
 
     if TestAssertions.failures > 0 {
         print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")

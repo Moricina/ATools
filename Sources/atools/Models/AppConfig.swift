@@ -247,6 +247,11 @@ public enum WebSearchEngine: String, Codable, CaseIterable {
     }
 }
 
+public enum AutoAddPolicyMode: String, Codable {
+    case dedicatedInbox = "dedicatedInbox"
+    case existingCategory = "existingCategory"
+}
+
 public struct AtoolsConfig: Codable {
     public var version: Int
     public var shelfHotkey: HotkeyBinding
@@ -304,6 +309,20 @@ public struct AtoolsConfig: Codable {
     public var autoQuitExcludeAppRules: [String]      // .allApps 排除名单
     public var autoQuitOnlyListedAppRules: [String]   // .onlyListed 白名单退出名单
     public var autoQuitDelaySeconds: Int
+    public var enableAutoQuitUndoHUD: Bool
+
+    // 新装应用自动入库 (Auto Discovery)
+    public var enableAutoAddInstalledApps: Bool
+    public var autoAddPolicyMode: AutoAddPolicyMode
+    public var autoAddTargetCategoryId: UUID?
+    public var autoAddInboxCategoryName: String
+    public var ignoredAutoAddBundleIds: [String]
+    public var knownAppBundleIds: [String]
+    public var lastAutoAppScanTimestamp: Double
+
+    // 单项快捷启动与智能排序 (Quick Slots & Smart Usage)
+    public var enableQuickSlots: Bool
+    public var smartFavoritesMode: Bool
 
     public func rules(for mode: AutoQuitMode) -> [String] {
         switch mode {
@@ -374,7 +393,17 @@ public struct AtoolsConfig: Codable {
         autoQuitAppRules: [String]? = nil,
         autoQuitExcludeAppRules: [String] = [],
         autoQuitOnlyListedAppRules: [String] = [],
-        autoQuitDelaySeconds: Int = 2
+        autoQuitDelaySeconds: Int = 2,
+        enableAutoQuitUndoHUD: Bool = true,
+        enableAutoAddInstalledApps: Bool = true,
+        autoAddPolicyMode: AutoAddPolicyMode = .dedicatedInbox,
+        autoAddTargetCategoryId: UUID? = nil,
+        autoAddInboxCategoryName: String = "新应用",
+        ignoredAutoAddBundleIds: [String] = [],
+        knownAppBundleIds: [String] = [],
+        lastAutoAppScanTimestamp: Double = 0,
+        enableQuickSlots: Bool = true,
+        smartFavoritesMode: Bool = true
     ) {
         self.version = version
         self.shelfHotkey = shelfHotkey
@@ -433,6 +462,16 @@ public struct AtoolsConfig: Codable {
             self.autoQuitOnlyListedAppRules = autoQuitOnlyListedAppRules
         }
         self.autoQuitDelaySeconds = autoQuitDelaySeconds
+        self.enableAutoQuitUndoHUD = enableAutoQuitUndoHUD
+        self.enableAutoAddInstalledApps = enableAutoAddInstalledApps
+        self.autoAddPolicyMode = autoAddPolicyMode
+        self.autoAddTargetCategoryId = autoAddTargetCategoryId
+        self.autoAddInboxCategoryName = autoAddInboxCategoryName
+        self.ignoredAutoAddBundleIds = ignoredAutoAddBundleIds
+        self.knownAppBundleIds = knownAppBundleIds
+        self.lastAutoAppScanTimestamp = lastAutoAppScanTimestamp
+        self.enableQuickSlots = enableQuickSlots
+        self.smartFavoritesMode = smartFavoritesMode
     }
 
     enum CodingKeys: String, CodingKey {
@@ -447,7 +486,9 @@ public struct AtoolsConfig: Codable {
         case extraHotFolders, searchFilterOrder
         case searchExcludeCaches, searchExcludeLogs, searchExcludeDeveloper, searchExcludeHidden, searchExcludeTrash, searchExcludeUserLibrary, customExcludedPaths
         case autoPasteOnSummonAfterCopy
-        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds
+        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds, enableAutoQuitUndoHUD
+        case enableAutoAddInstalledApps, autoAddPolicyMode, autoAddTargetCategoryId, autoAddInboxCategoryName, ignoredAutoAddBundleIds, knownAppBundleIds, lastAutoAppScanTimestamp
+        case enableQuickSlots, smartFavoritesMode
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
     }
@@ -528,6 +569,17 @@ public struct AtoolsConfig: Codable {
 
         let rawAutoQuitDelay = (try? container.decode(Int.self, forKey: .autoQuitDelaySeconds)) ?? 2
         self.autoQuitDelaySeconds = max(0, min(10, rawAutoQuitDelay))
+        self.enableAutoQuitUndoHUD = (try? container.decode(Bool.self, forKey: .enableAutoQuitUndoHUD)) ?? true
+
+        self.enableAutoAddInstalledApps = (try? container.decode(Bool.self, forKey: .enableAutoAddInstalledApps)) ?? true
+        self.autoAddPolicyMode = (try? container.decode(AutoAddPolicyMode.self, forKey: .autoAddPolicyMode)) ?? .dedicatedInbox
+        self.autoAddTargetCategoryId = try? container.decode(UUID.self, forKey: .autoAddTargetCategoryId)
+        self.autoAddInboxCategoryName = (try? container.decode(String.self, forKey: .autoAddInboxCategoryName)) ?? "新应用"
+        self.ignoredAutoAddBundleIds = (try? container.decode([String].self, forKey: .ignoredAutoAddBundleIds)) ?? []
+        self.knownAppBundleIds = (try? container.decode([String].self, forKey: .knownAppBundleIds)) ?? []
+        self.lastAutoAppScanTimestamp = (try? container.decode(Double.self, forKey: .lastAutoAppScanTimestamp)) ?? 0
+        self.enableQuickSlots = (try? container.decode(Bool.self, forKey: .enableQuickSlots)) ?? true
+        self.smartFavoritesMode = (try? container.decode(Bool.self, forKey: .smartFavoritesMode)) ?? true
 
         if let shelf = try? container.decode(HotkeyBinding.self, forKey: .shelfHotkey) {
             self.shelfHotkey = shelf
@@ -594,5 +646,15 @@ public struct AtoolsConfig: Codable {
         try container.encode(autoQuitOnlyListedAppRules, forKey: .autoQuitOnlyListedAppRules)
         try container.encode(currentAutoQuitAppRules, forKey: .autoQuitAppRules)
         try container.encode(autoQuitDelaySeconds, forKey: .autoQuitDelaySeconds)
+        try container.encode(enableAutoQuitUndoHUD, forKey: .enableAutoQuitUndoHUD)
+        try container.encode(enableAutoAddInstalledApps, forKey: .enableAutoAddInstalledApps)
+        try container.encode(autoAddPolicyMode, forKey: .autoAddPolicyMode)
+        try container.encodeIfPresent(autoAddTargetCategoryId, forKey: .autoAddTargetCategoryId)
+        try container.encode(autoAddInboxCategoryName, forKey: .autoAddInboxCategoryName)
+        try container.encode(ignoredAutoAddBundleIds, forKey: .ignoredAutoAddBundleIds)
+        try container.encode(knownAppBundleIds, forKey: .knownAppBundleIds)
+        try container.encode(lastAutoAppScanTimestamp, forKey: .lastAutoAppScanTimestamp)
+        try container.encode(enableQuickSlots, forKey: .enableQuickSlots)
+        try container.encode(smartFavoritesMode, forKey: .smartFavoritesMode)
     }
 }

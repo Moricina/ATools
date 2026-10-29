@@ -109,6 +109,8 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
     public var tags: [String]
     public var sortWeight: Int
     public var isVirtualGroup: Bool
+    public var launchCount: Int
+    public var lastLaunchedAt: Double?
 
     public init(
         id: UUID = UUID(),
@@ -121,7 +123,9 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         hotkey: String? = nil,
         tags: [String] = [],
         sortWeight: Int = 0,
-        isVirtualGroup: Bool = false
+        isVirtualGroup: Bool = false,
+        launchCount: Int = 0,
+        lastLaunchedAt: Double? = nil
     ) {
         self.id = id
         self.parentId = parentId
@@ -134,6 +138,30 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         self.tags = tags
         self.sortWeight = sortWeight
         self.isVirtualGroup = isVirtualGroup
+        self.launchCount = launchCount
+        self.lastLaunchedAt = lastLaunchedAt
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, parentId, name, itemType, target, executionContext, customIconPath, hotkey, tags, sortWeight, isVirtualGroup
+        case launchCount, lastLaunchedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? container.decode(UUID.self, forKey: .id)) ?? UUID()
+        self.parentId = try? container.decode(UUID.self, forKey: .parentId)
+        self.name = (try? container.decode(String.self, forKey: .name)) ?? ""
+        self.itemType = (try? container.decode(LauncherItemType.self, forKey: .itemType)) ?? .application
+        self.target = (try? container.decode(String.self, forKey: .target)) ?? ""
+        self.executionContext = try? container.decode(ExecutionContext.self, forKey: .executionContext)
+        self.customIconPath = try? container.decode(String.self, forKey: .customIconPath)
+        self.hotkey = try? container.decode(String.self, forKey: .hotkey)
+        self.tags = (try? container.decode([String].self, forKey: .tags)) ?? []
+        self.sortWeight = (try? container.decode(Int.self, forKey: .sortWeight)) ?? 0
+        self.isVirtualGroup = (try? container.decode(Bool.self, forKey: .isVirtualGroup)) ?? false
+        self.launchCount = (try? container.decode(Int.self, forKey: .launchCount)) ?? 0
+        self.lastLaunchedAt = try? container.decode(Double.self, forKey: .lastLaunchedAt)
     }
 
     /// 检测目标路径是否已失效（对标 GlassDesk IsTargetMissing）
@@ -270,6 +298,37 @@ public struct LauncherItemIdentity: Hashable {
 public extension LauncherItem {
     var identity: LauncherItemIdentity {
         LauncherItemIdentity(itemType: itemType, target: target)
+    }
+
+    /// 解析该项存储的全局单项快捷键绑定
+    var parsedHotkeyBinding: HotkeyBinding? {
+        guard let raw = hotkey, !raw.isEmpty else { return nil }
+        if let data = raw.data(using: .utf8),
+           let binding = try? JSONDecoder().decode(HotkeyBinding.self, from: data) {
+            return binding
+        }
+        return nil
+    }
+
+    mutating func setHotkeyBinding(_ binding: HotkeyBinding?) {
+        if let b = binding, !b.isUnassigned {
+            if let data = try? JSONEncoder().encode(b),
+               let str = String(data: data, encoding: .utf8) {
+                self.hotkey = str
+            } else {
+                self.hotkey = b.displayString
+            }
+        } else {
+            self.hotkey = nil
+        }
+    }
+
+    /// 人类可读的单项快捷键显示文本
+    var hotkeyDisplayString: String {
+        if let b = parsedHotkeyBinding {
+            return b.displayString
+        }
+        return hotkey ?? ""
     }
 }
 

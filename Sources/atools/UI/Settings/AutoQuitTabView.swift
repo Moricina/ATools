@@ -5,8 +5,10 @@ public final class AutoQuitTabView: NSView {
     private var autoQuitSwitch: NSSwitch!
     private var autoQuitModePopUp: SettingsLiquidPopUpButton!
     private var autoQuitDelayPopUp: SettingsLiquidPopUpButton!
+    private var autoQuitUndoHUDSwitch: NSSwitch!
     private var autoQuitRulesButton: SettingsPillButton!
     private var autoQuitPermissionLabel: NSTextField!
+    private var autoQuitInspectorButton: SettingsPillButton!
     private var autoQuitChangeObserver: NSObjectProtocol?
     private var headerView: SettingsHeaderView!
 
@@ -104,7 +106,18 @@ public final class AutoQuitTabView: NSView {
             subtitle: "留出短暂时间窗口，避免不小心关闭窗口后立即把应用退出",
             accessory: autoQuitDelayPopUp
         )
-        card1.addRow(rowDelay, isLast: true)
+        card1.addRow(rowDelay)
+
+        autoQuitUndoHUDSwitch = NSSwitch()
+        autoQuitUndoHUDSwitch.target = self
+        autoQuitUndoHUDSwitch.action = #selector(toggleAutoQuitUndoHUD(_:))
+        let rowHUD = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "bell.badge"),
+            title: "退出前显示倒计时浮层 (可撤销)",
+            subtitle: "在屏幕下方展示轻量毛玻璃胶囊 HUD，提供取消退出按钮，误关窗口可一键挽救",
+            accessory: autoQuitUndoHUDSwitch
+        )
+        card1.addRow(rowHUD, isLast: true)
 
         // Section 2: 规则与应用过滤
         let sec2Title = makeSectionHeader(title: "规则与应用过滤")
@@ -141,12 +154,22 @@ public final class AutoQuitTabView: NSView {
         let rowPerm = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.raised"),
             title: "辅助功能权限状态",
-            subtitle: "需要「辅助功能」授权才能安全感知其他软件窗口关闭",
+            subtitle: "仅需「辅助功能」授权感知窗口关闭，绝不申请或需要屏幕录制权限，零内容窥探",
             accessory: permContainer
         )
-        card2.addRow(rowPerm, isLast: true)
+        card2.addRow(rowPerm)
 
-        let tipLabel = NSTextField(labelWithString: "提示：ATools 采用轻量 Accessibility 观测与 AXUIElement 树差分比对，仅在窗口关闭时进行判定，不常驻轮询 CPU，内存占用极低。")
+        autoQuitInspectorButton = SettingsPillButton(title: "诊断与决策历史...", target: self, action: #selector(openAutoQuitInspector))
+        autoQuitInspectorButton.widthAnchor.constraint(equalToConstant: 148).isActive = true
+        let rowInspector = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "stethoscope"),
+            title: "决策审查与排障诊断",
+            subtitle: "查看当前受监视的应用窗口实况与决策流水线，一键导出完整诊断报告",
+            accessory: autoQuitInspectorButton
+        )
+        card2.addRow(rowInspector, isLast: true)
+
+        let tipLabel = NSTextField(labelWithString: "提示：ATools 采用纯「辅助功能」驱动，彻底移除屏幕录制权限依赖；结合 Space 宽限期与失焦防抖，既轻量纯粹又杜绝误杀。")
         tipLabel.translatesAutoresizingMaskIntoConstraints = false
         tipLabel.font = NSFont.systemFont(ofSize: 11)
         tipLabel.textColor = .secondaryLabelColor
@@ -182,7 +205,10 @@ public final class AutoQuitTabView: NSView {
         autoQuitSwitch.state = cfg.enableAutoQuit ? .on : .off
         autoQuitModePopUp.isEnabled = cfg.enableAutoQuit
         autoQuitDelayPopUp.isEnabled = cfg.enableAutoQuit
+        autoQuitUndoHUDSwitch.state = cfg.enableAutoQuitUndoHUD ? .on : .off
+        autoQuitUndoHUDSwitch.isEnabled = cfg.enableAutoQuit
         autoQuitRulesButton.isEnabled = true
+        autoQuitInspectorButton.isEnabled = true
 
         if let modeIdx = AutoQuitMode.allCases.firstIndex(of: cfg.autoQuitMode) {
             autoQuitModePopUp.selectItem(at: modeIdx)
@@ -264,6 +290,29 @@ public final class AutoQuitTabView: NSView {
         sheet.contentMaxSize = NSSize(width: 470, height: 430)
         sheet.setContentSize(NSSize(width: 470, height: 430))
         sheet.contentView = AutoQuitRulesEditorView(frame: NSRect(x: 0, y: 0, width: 470, height: 430), mode: mode)
+        hostWindow.beginSheet(sheet) { _ in
+            _ = sheet
+        }
+    }
+
+    @objc private func toggleAutoQuitUndoHUD(_ sender: NSSwitch) {
+        ConfigManager.shared.updateEnableAutoQuitUndoHUD(sender.state == .on)
+    }
+
+    @objc private func openAutoQuitInspector() {
+        guard let hostWindow = window else { return }
+        guard hostWindow.attachedSheet == nil else { return }
+        let sheet = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 660, height: 480),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        sheet.title = "AutoQuit 决策审查与应用诊断"
+        sheet.isReleasedWhenClosed = false
+        sheet.contentMinSize = NSSize(width: 580, height: 400)
+        sheet.setContentSize(NSSize(width: 660, height: 480))
+        sheet.contentView = AutoQuitInspectorSheet(frame: NSRect(x: 0, y: 0, width: 660, height: 480))
         hostWindow.beginSheet(sheet) { _ in
             _ = sheet
         }

@@ -8,13 +8,17 @@ public protocol CategoryPillDelegate: AnyObject {
     func categoryPillDidRequestAdd()
     func categoryPill(_ pill: CategoryPillView, didMoveLauncherItemID id: UUID)
     func categoryPill(_ pill: CategoryPillView, didAddPaths paths: [String])
+    func categoryPillDidChangeText(_ pill: CategoryPillView)
     func categoryPillDidCommitEditing(_ pill: CategoryPillView, name: String?)
     func categoryPillDidCancelEditing(_ pill: CategoryPillView)
+    func categoryPillJumpMenuItem(_ pill: CategoryPillView) -> NSMenuItem?
 }
 
 public extension CategoryPillDelegate {
+    func categoryPillDidChangeText(_ pill: CategoryPillView) {}
     func categoryPillDidCommitEditing(_ pill: CategoryPillView, name: String?) {}
     func categoryPillDidCancelEditing(_ pill: CategoryPillView) {}
+    func categoryPillJumpMenuItem(_ pill: CategoryPillView) -> NSMenuItem? { return nil }
 }
 
 /// 🌟 原生分类胶囊就地内联单行编辑框
@@ -303,6 +307,22 @@ public final class CategoryPillView: NSView {
     }
 
     // MARK: - In-Place Inline Editing
+    internal func updateEditingWidth() {
+        guard isEditing, !isVertical else { return }
+        let text = inlineTextField.stringValue
+        let font = inlineTextField.font ?? NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let textWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        let hPadding: CGFloat = isVertical ? 3 : 14
+        let targetWidth = max(76, ceil(textWidth) + hPadding * 2 + 12)
+        if let constraint = minWidthConstraint {
+            constraint.constant = targetWidth
+        } else {
+            let constraint = widthAnchor.constraint(equalToConstant: targetWidth)
+            constraint.isActive = true
+            minWidthConstraint = constraint
+        }
+    }
+
     public func beginEditing(cursorAtEnd: Bool) {
         guard !isEditing else { return }
         isEditing = true
@@ -318,10 +338,7 @@ public final class CategoryPillView: NSView {
         titleLabel.isHidden = true
         inlineTextField.isHidden = false
 
-        if !isVertical {
-            minWidthConstraint = widthAnchor.constraint(greaterThanOrEqualToConstant: 72)
-            minWidthConstraint?.isActive = true
-        }
+        updateEditingWidth()
 
         window?.makeFirstResponder(inlineTextField)
 
@@ -343,6 +360,7 @@ public final class CategoryPillView: NSView {
         guard isEditing else { return nil }
         isEditing = false
         minWidthConstraint?.isActive = false
+        minWidthConstraint = nil
         inlineTextField.isHidden = true
         titleLabel.isHidden = false
 
@@ -365,6 +383,7 @@ public final class CategoryPillView: NSView {
         guard isEditing else { return }
         isEditing = false
         minWidthConstraint?.isActive = false
+        minWidthConstraint = nil
         inlineTextField.isHidden = true
         titleLabel.stringValue = originalNameBeforeEditing
         titleLabel.isHidden = false
@@ -481,12 +500,41 @@ public final class CategoryPillView: NSView {
         addItem.target = self
         menu.addItem(addItem)
 
+        if let jumpItem = delegate?.categoryPillJumpMenuItem(self) {
+            menu.addItem(jumpItem)
+        }
+
         menu.addItem(NSMenuItem.separator())
+
+        let isPinned = PanelCoordinator.shared.isShelfPinned
+        let pinItem = NSMenuItem(
+            title: isPinned ? "✓ 固定在桌面" : "固定在桌面",
+            action: #selector(contextTogglePin),
+            keyEquivalent: ""
+        )
+        pinItem.target = self
+        menu.addItem(pinItem)
+
+        let isIconsHidden = DesktopIconManager.shared.isDesktopIconsHidden
+        let desktopIconsItem = NSMenuItem(
+            title: isIconsHidden ? "✓ 隐藏桌面图标" : "隐藏桌面图标",
+            action: #selector(contextToggleDesktopIcons),
+            keyEquivalent: ""
+        )
+        desktopIconsItem.image = ThumbnailPipeline.shared.symbolIcon(name: isIconsHidden ? "eye.slash.fill" : "eye.slash", pointSize: 13)
+        desktopIconsItem.target = self
+        menu.addItem(desktopIconsItem)
+
         let settingsItem = NSMenuItem(title: "偏好设置...", action: #selector(contextOpenSettings), keyEquivalent: ",")
         settingsItem.image = ThumbnailPipeline.shared.symbolIcon(name: "gearshape", pointSize: 13)
         settingsItem.keyEquivalentModifierMask = .command
         settingsItem.target = self
         menu.addItem(settingsItem)
+
+        menu.addItem(NSMenuItem.separator())
+        let closeItem = NSMenuItem(title: "关闭抽屉", action: #selector(contextCloseShelf), keyEquivalent: "")
+        closeItem.target = self
+        menu.addItem(closeItem)
 
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
@@ -503,8 +551,21 @@ public final class CategoryPillView: NSView {
         delegate?.categoryPillDidRequestAdd()
     }
 
+    @objc private func contextTogglePin() {
+        PanelCoordinator.shared.isShelfPinned.toggle()
+    }
+
+    @objc private func contextToggleDesktopIcons() {
+        _ = DesktopIconManager.shared.toggleDesktopIcons()
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
     @objc private func contextOpenSettings() {
         SettingsWindowController.shared.showSettingsWindow()
+    }
+
+    @objc private func contextCloseShelf() {
+        PanelCoordinator.shared.hideShelfPanel(forceHidePinned: true)
     }
 }
 
@@ -546,6 +607,8 @@ extension CategoryPillView: NSTextFieldDelegate {
             let trimmed = String(text.prefix(CategorySanitizer.maxNameLength))
             inlineTextField.stringValue = trimmed
         }
+        updateEditingWidth()
+        delegate?.categoryPillDidChangeText(self)
     }
 
     public func controlTextDidEndEditing(_ obj: Notification) {

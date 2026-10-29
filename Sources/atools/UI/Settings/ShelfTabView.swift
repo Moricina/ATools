@@ -17,6 +17,9 @@ public final class ShelfTabView: NSView {
     private var itemSpacingBadge: NSTextField!
     private var resetSpacingButton: SettingsResetButton!
     private var favoritesSwitch: NSSwitch!
+    private var autoAddInstalledAppsSwitch: NSSwitch!
+    private var autoAddPolicyPopUp: SettingsLiquidPopUpButton!
+    private var quickSlotsSwitch: NSSwitch!
     private var shelfMissingItemsRow: SettingsRowView!
     private var shelfCleanMissingBtn: SettingsPillButton!
     public var headerView: SettingsHeaderView!
@@ -335,6 +338,41 @@ public final class ShelfTabView: NSView {
         )
         card3.addRow(rowFav)
 
+        autoAddInstalledAppsSwitch = NSSwitch()
+        autoAddInstalledAppsSwitch.target = self
+        autoAddInstalledAppsSwitch.action = #selector(toggleAutoAddInstalledApps(_:))
+        let rowAutoAdd = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.down.app"),
+            title: "新安装应用自动进抽屉",
+            subtitle: "系统安装新应用后无需手动拖入，后台自动识别并上架到抽屉分类",
+            accessory: autoAddInstalledAppsSwitch
+        )
+        card3.addRow(rowAutoAdd)
+
+        autoAddPolicyPopUp = SettingsLiquidPopUpButton(frame: .zero, pullsDown: false)
+        autoAddPolicyPopUp.translatesAutoresizingMaskIntoConstraints = false
+        autoAddPolicyPopUp.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        autoAddPolicyPopUp.target = self
+        autoAddPolicyPopUp.action = #selector(autoAddPolicyChanged(_:))
+        let rowAutoAddPolicy = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "tray.and.arrow.down"),
+            title: "新应用入库目标",
+            subtitle: "指定新装应用的落脚点，推荐专属「新应用」分类实现物理隔离",
+            accessory: autoAddPolicyPopUp
+        )
+        card3.addRow(rowAutoAddPolicy)
+
+        quickSlotsSwitch = NSSwitch()
+        quickSlotsSwitch.target = self
+        quickSlotsSwitch.action = #selector(toggleQuickSlots(_:))
+        let rowQuickSlots = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
+            title: "抽屉内 ⌘1~⌘9 快速秒启",
+            subtitle: "打开抽屉时按 ⌘1~⌘9 毫秒级直启前 9 个应用，图标右上角显示快捷徽标",
+            accessory: quickSlotsSwitch
+        )
+        card3.addRow(rowQuickSlots)
+
         shelfCleanMissingBtn = SettingsPillButton(title: "一键清理失效项", target: self, action: #selector(cleanShelfMissingItemsClicked))
         shelfMissingItemsRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "exclamationmark.triangle"),
@@ -417,6 +455,35 @@ public final class ShelfTabView: NSView {
 
         favoritesSwitch.isEnabled = enabled
         favoritesSwitch.state = cfg.enableFavoritesCategory ? .on : .off
+
+        autoAddInstalledAppsSwitch.isEnabled = enabled
+        autoAddInstalledAppsSwitch.state = cfg.enableAutoAddInstalledApps ? .on : .off
+
+        autoAddPolicyPopUp.isEnabled = enabled && cfg.enableAutoAddInstalledApps
+        autoAddPolicyPopUp.removeAllItems()
+        let inboxTitle = "🌟 专属分类「\(cfg.autoAddInboxCategoryName.isEmpty ? "新应用" : cfg.autoAddInboxCategoryName)」(推荐)"
+        autoAddPolicyPopUp.addItem(withTitle: inboxTitle)
+        autoAddPolicyPopUp.lastItem?.representedObject = "INBOX"
+
+        let nonFavCategories = cfg.categories.filter { !$0.isFavorites }
+        if !nonFavCategories.isEmpty {
+            autoAddPolicyPopUp.menu?.addItem(NSMenuItem.separator())
+            for cat in nonFavCategories {
+                autoAddPolicyPopUp.addItem(withTitle: "📁 \(cat.name)")
+                autoAddPolicyPopUp.lastItem?.representedObject = cat.id
+            }
+        }
+
+        if cfg.autoAddPolicyMode == .existingCategory,
+           let targetId = cfg.autoAddTargetCategoryId,
+           let idx = autoAddPolicyPopUp.itemArray.firstIndex(where: { ($0.representedObject as? UUID) == targetId }) {
+            autoAddPolicyPopUp.selectItem(at: idx)
+        } else {
+            autoAddPolicyPopUp.selectItem(at: 0)
+        }
+
+        quickSlotsSwitch.isEnabled = enabled
+        quickSlotsSwitch.state = cfg.enableQuickSlots ? .on : .off
 
         let missingCount = ConfigManager.shared.scanMissingItems().count
         if missingCount == 0 {
@@ -525,6 +592,24 @@ public final class ShelfTabView: NSView {
     @objc private func toggleFavorites(_ sender: NSSwitch) {
         ConfigManager.shared.updateEnableFavoritesCategory(sender.state == .on)
         NotificationCenter.default.post(name: .atoolsFavoritesToggleDidChange, object: nil)
+    }
+
+    @objc private func toggleAutoAddInstalledApps(_ sender: NSSwitch) {
+        ConfigManager.shared.updateEnableAutoAddInstalledApps(sender.state == .on)
+        refresh()
+    }
+
+    @objc private func autoAddPolicyChanged(_ sender: NSPopUpButton) {
+        guard let item = sender.selectedItem else { return }
+        if let targetUUID = item.representedObject as? UUID {
+            ConfigManager.shared.updateAutoAddTargetPolicy(mode: .existingCategory, categoryId: targetUUID, inboxName: nil)
+        } else {
+            ConfigManager.shared.updateAutoAddTargetPolicy(mode: .dedicatedInbox, categoryId: nil, inboxName: "新应用")
+        }
+    }
+
+    @objc private func toggleQuickSlots(_ sender: NSSwitch) {
+        ConfigManager.shared.updateEnableQuickSlots(sender.state == .on)
     }
 
     @objc private func cleanShelfMissingItemsClicked() {
