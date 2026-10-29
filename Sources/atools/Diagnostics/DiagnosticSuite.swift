@@ -2357,18 +2357,51 @@ public enum DiagnosticSuite {
     let frequent = ConfigManager.shared.frequentItems(limit: 5)
     TestAssertions.expect(!frequent.isEmpty && frequent.first?.id == qItem.id, "frequentItems 智能推荐应当优先排频次最高的项")
 
-    // (e) Test sortItemsByFrequency
-    let lowFreqItem = LauncherItem(name: "低频项", itemType: .application, target: "/Applications/LowFreq.app")
+    // (e) Test sortItems (Frequency, Name, Recently Added) & Privacy Toggle
+    let lowFreqItem = LauncherItem(name: "低频项", itemType: .application, target: "/Applications/LowFreq.app", addedAt: 1000)
     _ = ConfigManager.shared.addItem(lowFreqItem, to: targetCat.id)
-    ConfigManager.shared.sortItemsByFrequency(in: targetCat.id)
-    let sortedCatItems = ConfigManager.shared.config.categories.first(where: { $0.id == targetCat.id })?.items ?? []
+    ConfigManager.shared.sortItems(in: targetCat.id, by: .frequency)
+    var sortedCatItems = ConfigManager.shared.config.categories.first(where: { $0.id == targetCat.id })?.items ?? []
     let qIdx = sortedCatItems.firstIndex(where: { $0.id == qItem.id }) ?? -1
     let lowIdx = sortedCatItems.firstIndex(where: { $0.id == lowFreqItem.id }) ?? -1
-    TestAssertions.expect(qIdx != -1 && lowIdx != -1 && qIdx < lowIdx, "sortItemsByFrequency 应当将高频启动项排在低频项之前")
+    TestAssertions.expect(qIdx != -1 && lowIdx != -1 && qIdx < lowIdx, "sortItems(.frequency) 应当将高频启动项排在低频项之前")
+
+    // Test Name Ascending
+    let itemAlphaA = LauncherItem(name: "Apple Music", itemType: .application, target: "/Applications/Music.app", addedAt: 2000)
+    let itemAlphaZ = LauncherItem(name: "Zoom", itemType: .application, target: "/Applications/Zoom.app", addedAt: 3000)
+    _ = ConfigManager.shared.addItem(itemAlphaZ, to: targetCat.id)
+    _ = ConfigManager.shared.addItem(itemAlphaA, to: targetCat.id)
+    ConfigManager.shared.sortItems(in: targetCat.id, by: .nameAscending)
+    sortedCatItems = ConfigManager.shared.config.categories.first(where: { $0.id == targetCat.id })?.items ?? []
+    let aIdx = sortedCatItems.firstIndex(where: { $0.id == itemAlphaA.id }) ?? -1
+    let zIdx = sortedCatItems.firstIndex(where: { $0.id == itemAlphaZ.id }) ?? -1
+    TestAssertions.expect(aIdx != -1 && zIdx != -1 && aIdx < zIdx, "sortItems(.nameAscending) 应当将 Apple Music 排在 Zoom 之前")
+
+    // Test Recently Added (itemAlphaZ: 3000 vs itemAlphaA: 2000)
+    ConfigManager.shared.sortItems(in: targetCat.id, by: .recentlyAdded)
+    sortedCatItems = ConfigManager.shared.config.categories.first(where: { $0.id == targetCat.id })?.items ?? []
+    let aIdxDate = sortedCatItems.firstIndex(where: { $0.id == itemAlphaA.id }) ?? -1
+    let zIdxDate = sortedCatItems.firstIndex(where: { $0.id == itemAlphaZ.id }) ?? -1
+    TestAssertions.expect(aIdxDate != -1 && zIdxDate != -1 && zIdxDate < aIdxDate, "sortItems(.recentlyAdded) 应当将更新添加的项排在前面")
+
+    // Test drag fallback to .manual
+    ConfigManager.shared.updateShelfSortPolicy(.frequency)
+    ConfigManager.shared.swapItems(at: 0, and: 1, in: targetCat.id)
+    TestAssertions.expect(ConfigManager.shared.config.shelfSortPolicy == .manual, "发生手动拖拽换位时，排序策略必须自动平滑置为 .manual")
+
+    // Test Privacy Toggle
+    ConfigManager.shared.updateTrackLaunchFrequency(false)
+    let preCount = ConfigManager.shared.config.categories.lazy.flatMap(\.items).first(where: { $0.id == itemAlphaA.id })?.launchCount ?? 0
+    ConfigManager.shared.recordItemLaunch(itemId: itemAlphaA.id)
+    let postCount = ConfigManager.shared.config.categories.lazy.flatMap(\.items).first(where: { $0.id == itemAlphaA.id })?.launchCount ?? 0
+    TestAssertions.expect(preCount == postCount, "关闭 trackLaunchFrequency 时绝对不可记录启动计次")
+    ConfigManager.shared.updateTrackLaunchFrequency(true) // 恢复默认
 
     // 清理测试临时 item
     ConfigManager.shared.removeItem(id: qItem.id, from: targetCat.id)
     ConfigManager.shared.removeItem(id: lowFreqItem.id, from: targetCat.id)
+    ConfigManager.shared.removeItem(id: itemAlphaA.id, from: targetCat.id)
+    ConfigManager.shared.removeItem(id: itemAlphaZ.id, from: targetCat.id)
 
     print("      ✓ Auto App Discovery, Tombstone, Folder Nesting, Hotkeys, Quick Slots & Usage Frequency verified.")
 

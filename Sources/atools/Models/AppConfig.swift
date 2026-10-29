@@ -139,6 +139,22 @@ public enum ShelfTrackpadGesture: String, Codable, CaseIterable {
     }
 }
 
+public enum ShelfSortPolicy: String, Codable, CaseIterable {
+    case manual = "manual"                     // 手动自定义
+    case frequency = "frequency"               // 按使用频次
+    case nameAscending = "nameAscending"       // 按名称升序 (A-Z / 拼音)
+    case recentlyAdded = "recentlyAdded"       // 按最近添加
+
+    public var title: String {
+        switch self {
+        case .manual: return "手动自定义 (推荐)"
+        case .frequency: return "按使用频次"
+        case .nameAscending: return "按应用名称 (A-Z)"
+        case .recentlyAdded: return "按最近添加"
+        }
+    }
+}
+
 public enum CategoryOrientation: String, Codable {
     case horizontal
     case vertical
@@ -323,6 +339,8 @@ public struct AtoolsConfig: Codable {
     // 单项快捷启动与智能排序 (Quick Slots & Smart Usage)
     public var enableQuickSlots: Bool
     public var smartFavoritesMode: Bool
+    public var trackLaunchFrequency: Bool
+    public var shelfSortPolicy: ShelfSortPolicy
 
     public func rules(for mode: AutoQuitMode) -> [String] {
         switch mode {
@@ -403,7 +421,9 @@ public struct AtoolsConfig: Codable {
         knownAppBundleIds: [String] = [],
         lastAutoAppScanTimestamp: Double = 0,
         enableQuickSlots: Bool = true,
-        smartFavoritesMode: Bool = true
+        smartFavoritesMode: Bool = true,
+        trackLaunchFrequency: Bool = true,
+        shelfSortPolicy: ShelfSortPolicy = .manual
     ) {
         self.version = version
         self.shelfHotkey = shelfHotkey
@@ -472,6 +492,8 @@ public struct AtoolsConfig: Codable {
         self.lastAutoAppScanTimestamp = lastAutoAppScanTimestamp
         self.enableQuickSlots = enableQuickSlots
         self.smartFavoritesMode = smartFavoritesMode
+        self.trackLaunchFrequency = trackLaunchFrequency
+        self.shelfSortPolicy = shelfSortPolicy
     }
 
     enum CodingKeys: String, CodingKey {
@@ -488,7 +510,7 @@ public struct AtoolsConfig: Codable {
         case autoPasteOnSummonAfterCopy
         case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds, enableAutoQuitUndoHUD
         case enableAutoAddInstalledApps, autoAddPolicyMode, autoAddTargetCategoryId, autoAddInboxCategoryName, ignoredAutoAddBundleIds, knownAppBundleIds, lastAutoAppScanTimestamp
-        case enableQuickSlots, smartFavoritesMode
+        case enableQuickSlots, smartFavoritesMode, trackLaunchFrequency, shelfSortPolicy
         // v1 legacy keys
         case globalHotkeyKey, globalHotkeyModifiers, hotkeyDescription
     }
@@ -580,6 +602,8 @@ public struct AtoolsConfig: Codable {
         self.lastAutoAppScanTimestamp = (try? container.decode(Double.self, forKey: .lastAutoAppScanTimestamp)) ?? 0
         self.enableQuickSlots = (try? container.decode(Bool.self, forKey: .enableQuickSlots)) ?? true
         self.smartFavoritesMode = (try? container.decode(Bool.self, forKey: .smartFavoritesMode)) ?? true
+        self.trackLaunchFrequency = (try? container.decode(Bool.self, forKey: .trackLaunchFrequency)) ?? true
+        self.shelfSortPolicy = (try? container.decode(ShelfSortPolicy.self, forKey: .shelfSortPolicy)) ?? .manual
 
         if let shelf = try? container.decode(HotkeyBinding.self, forKey: .shelfHotkey) {
             self.shelfHotkey = shelf
@@ -656,5 +680,7 @@ public struct AtoolsConfig: Codable {
         try container.encode(lastAutoAppScanTimestamp, forKey: .lastAutoAppScanTimestamp)
         try container.encode(enableQuickSlots, forKey: .enableQuickSlots)
         try container.encode(smartFavoritesMode, forKey: .smartFavoritesMode)
+        try container.encode(trackLaunchFrequency, forKey: .trackLaunchFrequency)
+        try container.encode(shelfSortPolicy, forKey: .shelfSortPolicy)
     }
 }

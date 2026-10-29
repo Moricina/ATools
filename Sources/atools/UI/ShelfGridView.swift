@@ -12,6 +12,7 @@ public protocol ShelfGridDelegate: AnyObject {
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView)
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView)
     func shelfGridDidRequestSortByFrequency(_ grid: ShelfGridView)
+    func shelfGrid(_ grid: ShelfGridView, didRequestSortBy policy: ShelfSortPolicy)
     func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String])
     func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int)
     func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int)
@@ -32,6 +33,7 @@ public extension ShelfGridDelegate {
     func shelfGridDidRequestCreateItem(_ grid: ShelfGridView) {}
     func shelfGridDidRequestCleanMissingItems(_ grid: ShelfGridView) {}
     func shelfGridDidRequestSortByFrequency(_ grid: ShelfGridView) {}
+    func shelfGrid(_ grid: ShelfGridView, didRequestSortBy policy: ShelfSortPolicy) {}
     func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int) {}
     func shelfGrid(_ grid: ShelfGridView, didSwipeCategoryBy offset: Int) {}
     func shelfGridDidBeginDrag(_ grid: ShelfGridView) {}
@@ -1486,10 +1488,26 @@ public final class ShelfGridView: NSView {
         createItem.target = self
         menu.addItem(createItem)
 
-        let sortItem = NSMenuItem(title: "按使用频次重新排序", action: #selector(contextSortByFrequency), keyEquivalent: "")
-        sortItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
-        sortItem.target = self
-        menu.addItem(sortItem)
+        let sortMenu = NSMenu(title: "SortSubmenu")
+        let sortFreqItem = NSMenuItem(title: "按使用频次 (高频优先)", action: #selector(contextSortByFrequency), keyEquivalent: "")
+        sortFreqItem.image = ThumbnailPipeline.shared.symbolIcon(name: "chart.bar", pointSize: 12)
+        sortFreqItem.target = self
+        sortMenu.addItem(sortFreqItem)
+
+        let sortNameItem = NSMenuItem(title: "按应用名称 (A → Z)", action: #selector(contextSortByName), keyEquivalent: "")
+        sortNameItem.image = ThumbnailPipeline.shared.symbolIcon(name: "textformat.abc", pointSize: 12)
+        sortNameItem.target = self
+        sortMenu.addItem(sortNameItem)
+
+        let sortDateItem = NSMenuItem(title: "按添加时间 (最新优先)", action: #selector(contextSortByDate), keyEquivalent: "")
+        sortDateItem.image = ThumbnailPipeline.shared.symbolIcon(name: "clock", pointSize: 12)
+        sortDateItem.target = self
+        sortMenu.addItem(sortDateItem)
+
+        let sortParentItem = NSMenuItem(title: "重新排序", action: nil, keyEquivalent: "")
+        sortParentItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
+        sortParentItem.submenu = sortMenu
+        menu.addItem(sortParentItem)
 
         let missingCount = ConfigManager.shared.scanMissingItems().count
         let cleanTitle = missingCount > 0 ? "一键清理失效项 (\(missingCount))" : "一键清理失效项"
@@ -1542,7 +1560,16 @@ public final class ShelfGridView: NSView {
     }
 
     @objc private func contextSortByFrequency() {
+        delegate?.shelfGrid(self, didRequestSortBy: .frequency)
         delegate?.shelfGridDidRequestSortByFrequency(self)
+    }
+
+    @objc private func contextSortByName() {
+        delegate?.shelfGrid(self, didRequestSortBy: .nameAscending)
+    }
+
+    @objc private func contextSortByDate() {
+        delegate?.shelfGrid(self, didRequestSortBy: .recentlyAdded)
     }
 
     @objc private func contextTogglePin() {

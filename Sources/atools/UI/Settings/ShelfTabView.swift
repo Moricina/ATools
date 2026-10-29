@@ -20,6 +20,8 @@ public final class ShelfTabView: NSView {
     private var autoAddInstalledAppsSwitch: NSSwitch!
     private var autoAddPolicyPopUp: SettingsLiquidPopUpButton!
     private var quickSlotsSwitch: NSSwitch!
+    private var shelfSortPolicyPopUp: SettingsLiquidPopUpButton!
+    private var trackLaunchFrequencySwitch: NSSwitch!
     private var shelfMissingItemsRow: SettingsRowView!
     private var shelfCleanMissingBtn: SettingsPillButton!
     public var headerView: SettingsHeaderView!
@@ -373,6 +375,34 @@ public final class ShelfTabView: NSView {
         )
         card3.addRow(rowQuickSlots)
 
+        shelfSortPolicyPopUp = SettingsLiquidPopUpButton(frame: .zero, pullsDown: false)
+        shelfSortPolicyPopUp.translatesAutoresizingMaskIntoConstraints = false
+        shelfSortPolicyPopUp.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        for policy in ShelfSortPolicy.allCases {
+            shelfSortPolicyPopUp.addItem(withTitle: policy.title)
+            shelfSortPolicyPopUp.lastItem?.representedObject = policy
+        }
+        shelfSortPolicyPopUp.target = self
+        shelfSortPolicyPopUp.action = #selector(shelfSortPolicyChanged(_:))
+        let rowSortPolicy = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down"),
+            title: "默认排序方式",
+            subtitle: "选择抽屉分类内应用排列方式，推荐手动自定义保持自由布局习惯",
+            accessory: shelfSortPolicyPopUp
+        )
+        card3.addRow(rowSortPolicy)
+
+        trackLaunchFrequencySwitch = NSSwitch()
+        trackLaunchFrequencySwitch.target = self
+        trackLaunchFrequencySwitch.action = #selector(toggleTrackLaunchFrequency(_:))
+        let rowTrackFreq = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "chart.bar.xaxis"),
+            title: "记录应用启动频次",
+            subtitle: "本地统计软件启动次数与最近启动时间，用于智能推荐与频次排序 (隐私可控)",
+            accessory: trackLaunchFrequencySwitch
+        )
+        card3.addRow(rowTrackFreq)
+
         shelfCleanMissingBtn = SettingsPillButton(title: "一键清理失效项", target: self, action: #selector(cleanShelfMissingItemsClicked))
         shelfMissingItemsRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "exclamationmark.triangle"),
@@ -484,6 +514,14 @@ public final class ShelfTabView: NSView {
 
         quickSlotsSwitch.isEnabled = enabled
         quickSlotsSwitch.state = cfg.enableQuickSlots ? .on : .off
+
+        shelfSortPolicyPopUp.isEnabled = enabled
+        if let idx = ShelfSortPolicy.allCases.firstIndex(of: cfg.shelfSortPolicy) {
+            shelfSortPolicyPopUp.selectItem(at: idx)
+        }
+
+        trackLaunchFrequencySwitch.isEnabled = enabled
+        trackLaunchFrequencySwitch.state = cfg.trackLaunchFrequency ? .on : .off
 
         let missingCount = ConfigManager.shared.scanMissingItems().count
         if missingCount == 0 {
@@ -610,6 +648,17 @@ public final class ShelfTabView: NSView {
 
     @objc private func toggleQuickSlots(_ sender: NSSwitch) {
         ConfigManager.shared.updateEnableQuickSlots(sender.state == .on)
+    }
+
+    @objc private func shelfSortPolicyChanged(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard index >= 0 && index < ShelfSortPolicy.allCases.count else { return }
+        let policy = ShelfSortPolicy.allCases[index]
+        ConfigManager.shared.updateShelfSortPolicy(policy)
+    }
+
+    @objc private func toggleTrackLaunchFrequency(_ sender: NSSwitch) {
+        ConfigManager.shared.updateTrackLaunchFrequency(sender.state == .on)
     }
 
     @objc private func cleanShelfMissingItemsClicked() {

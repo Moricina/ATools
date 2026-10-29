@@ -740,6 +740,9 @@ public final class ConfigManager {
         let insertIndex = min(destinationIndex, items.count)
         items.insert(movedItem, at: insertIndex)
         self.config.categories[catIdx].items = items
+        if self.config.shelfSortPolicy != .manual {
+            self.config.shelfSortPolicy = .manual
+        }
         save()
     }
 
@@ -752,6 +755,9 @@ public final class ConfigManager {
               items.indices.contains(indexB) else { return }
         items.swapAt(indexA, indexB)
         self.config.categories[catIdx].items = items
+        if self.config.shelfSortPolicy != .manual {
+            self.config.shelfSortPolicy = .manual
+        }
         save()
     }
 
@@ -892,9 +898,26 @@ public final class ConfigManager {
         return folder
     }
 
-    // MARK: - 启动频次统计与智能常用推荐
+    // MARK: - 启动频次统计、智能常用推荐与多策略重排序
+
+    public func updateTrackLaunchFrequency(_ enabled: Bool) {
+        self.config.trackLaunchFrequency = enabled
+        save()
+    }
+
+    public func updateShelfSortPolicy(_ policy: ShelfSortPolicy) {
+        self.config.shelfSortPolicy = policy
+        if policy != .manual {
+            for cat in self.config.categories where !cat.isFavorites {
+                sortItems(in: cat.id, by: policy, shouldSaveAndNotify: false)
+            }
+        }
+        save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
 
     public func recordItemLaunch(itemId: UUID) {
+        guard config.trackLaunchFrequency else { return } // 🔒 隐私控制：关闭时不记录
         var didUpdate = false
         for catIdx in 0..<config.categories.count {
             if let itemIdx = config.categories[catIdx].items.firstIndex(where: { $0.id == itemId }) {
@@ -931,8 +954,14 @@ public final class ConfigManager {
 
     /// 按启动频次（launchCount 降序，相同按 lastLaunchedAt 降序）重新排序指定分类内的项目
     public func sortItemsByFrequency(in categoryId: UUID) {
+        sortItems(in: categoryId, by: .frequency)
+    }
+
+    /// 按照指定策略（频次 / 名称 A-Z / 最近添加）重新排序指定分类内的项目
+    public func sortItems(in categoryId: UUID, by policy: ShelfSortPolicy, shouldSaveAndNotify: Bool = true) {
         guard let idx = self.config.categories.firstIndex(where: { $0.id == categoryId }) else { return }
         guard !self.config.categories[idx].isFavorites else { return }
+        guard policy != .manual else { return }
 
         let items = self.config.categories[idx].items
         guard items.count > 1 else { return }
@@ -948,36 +977,69 @@ public final class ConfigManager {
             }
         }
 
-        let rootItems = items.filter { $0.parentId == nil }
-        let sortedRoots = rootItems.sorted { a, b in
-            let scoreA = effectiveScore(of: a)
-            let scoreB = effectiveScore(of: b)
-            if scoreA.count != scoreB.count {
-                return scoreA.count > scoreB.count
+        func effectiveAddedAt(of item: LauncherItem) -> Double {
+            if item.isVirtualGroup {
+                let children = items.filter { $0.parentId == item.id }
+                let maxChild = children.map { effectiveAddedAt(of: $0) }.max() ?? 0
+                if maxChild > 0 { return maxChild }
+                return item.addedAt ?? 0
             }
-            if scoreA.lastTime != scoreB.lastTime {
-                return scoreA.lastTime > scoreB.lastTime
+            if let at = item.addedAt, at > 0 {
+                return at
             }
-            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: item.target),
+               let date = attrs[.creationDate] as? Date {
+                return date.timeIntervalSince1970
+            }
+            return 0
         }
+
+        let comparator: (LauncherItem, LauncherItem) -> Bool = { a, b in
+            switch policy {
+            case .frequency:
+                let scoreA = effectiveScore(of: a)
+                let scoreB = effectiveScore(of: b)
+                if scoreA.count != scoreB.count {
+                    return scoreA.count > scoreB.count
+                }
+                if scoreA.lastTime != scoreB.lastTime {
+                    return scoreA.lastTime > scoreB.lastTime
+                }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+
+            case .nameAscending:
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+
+            case .recentlyAdded:
+                let timeA = effectiveAddedAt(of: a)
+                let timeB = effectiveAddedAt(of: b)
+                if timeA != timeB {
+                    return timeA > timeB
+                }
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+
+            case .manual:
+                return false
+            }
+        }
+
+        let rootItems = items.filter { $0.parentId == nil }
+        let sortedRoots = rootItems.sorted(by: comparator)
 
         var newOrderedItems: [LauncherItem] = []
         for root in sortedRoots {
             newOrderedItems.append(root)
             if root.isVirtualGroup {
-                let children = items.filter { $0.parentId == root.id }.sorted { a, b in
-                    if a.launchCount != b.launchCount {
-                        return a.launchCount > b.launchCount
-                    }
-                    return (a.lastLaunchedAt ?? 0) > (b.lastLaunchedAt ?? 0)
-                }
+                let children = items.filter { $0.parentId == root.id }.sorted(by: comparator)
                 newOrderedItems.append(contentsOf: children)
             }
         }
 
         self.config.categories[idx].items = newOrderedItems
-        save()
-        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+        if shouldSaveAndNotify {
+            save()
+            NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+        }
     }
 
     // MARK: - 新安装应用自动入库 (Auto App Discovery & Onboarding)
@@ -1088,6 +1150,9 @@ public final class ConfigManager {
         config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
 
         if newlyAddedCount > 0 {
+            if config.shelfSortPolicy != .manual {
+                sortItems(in: config.categories[targetIndex].id, by: config.shelfSortPolicy, shouldSaveAndNotify: false)
+            }
             save()
             NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
             runtimeLog("[AutoDiscovery] Successfully auto-added \(newlyAddedCount) new app(s) to category: \(config.categories[targetIndex].name)")

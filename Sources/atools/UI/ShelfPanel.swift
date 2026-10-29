@@ -1090,8 +1090,12 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func shelfGridDidRequestSortByFrequency(_ grid: ShelfGridView) {
+        shelfGrid(grid, didRequestSortBy: .frequency)
+    }
+
+    public func shelfGrid(_ grid: ShelfGridView, didRequestSortBy policy: ShelfSortPolicy) {
         guard let cat = selectedCategory else { return }
-        ConfigManager.shared.sortItemsByFrequency(in: cat.id)
+        ConfigManager.shared.sortItems(in: cat.id, by: policy)
         loadData()
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }

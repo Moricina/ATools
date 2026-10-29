@@ -4032,3 +4032,42 @@
   - `./Scripts/build.sh --test` 全套 15 大项诊断 **100% PASSED 全部通过**。
 
 
+---
+
+### [2026-10-29] 第 117 项：抽屉多策略智能排序（频次/名称/添加时间）、启动频次隐私控制与手动拖拽自愈保护
+
+- **需求背景与痛点**：
+  - 用户对抽屉排序存在多重诉求：有用户希望保持肌肉记忆手动自由排列，有用户希望启动高频应用自动浮在前面，有用户习惯按拼音/英文 A-Z 检索，也有隐私敏感用户不希望记录启动统计；
+  - 经专有技术审核子代理（军师）严格技术层核验，指出两项关键加固措施：
+    1. `LauncherItem` 缺乏项目添加时间戳，需补充 `addedAt` 字段并落实历史数据兼容 fallback；
+    2. 若用户选择自动排序模式，一旦发生手动拖拽换位，系统需自动将排序策略切回 `.manual`，杜绝用户的拖拽结果被后续自动逻辑冲掉。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/Models/LauncherItem.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/LauncherItem.swift)：
+     - 新增 `public var addedAt: Double?`；
+     - `init` 默认赋当前时间戳，解码时带 `decodeIfPresent` 容错；老项目解码为 nil 时在排序时自动回退提取目标文件的物理创建时间 `creationDate`，保证 100% 向后兼容。
+  2. [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：
+     - 新增 `ShelfSortPolicy` 枚举（`.manual`、`.frequency`、`.nameAscending`、`.recentlyAdded`）；
+     - `AtoolsConfig` 增加 `trackLaunchFrequency: Bool`（默认 true）与 `shelfSortPolicy: ShelfSortPolicy`（默认 .manual）；
+     - 显式接入 `CodingKeys` 与 `encode(to:)`，确保配置持久化完全不丢字段。
+  3. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - 新增 `updateTrackLaunchFrequency` 与 `updateShelfSortPolicy`；
+     - `recordItemLaunch` 接入 `trackLaunchFrequency` 隐私拦截；
+     - 提炼通用排序算法 `sortItems(in:by:shouldSaveAndNotify:)`，采用 macOS 原生 `localizedStandardCompare` 支持中文拼音与英文自然混排；保持虚拟文件夹子项层级完整并优先按文件夹最新活跃度权重；
+     - 在 `moveItem` 与 `swapItems` 手动拖拽操作中，检测若当前策略不为 `.manual`，自动将其重置为 `.manual`，捍卫用户拖拽意图。
+  4. [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift)：
+     - 在设置面板「分类与视觉排版」卡片中增设「默认排序方式」下拉选单与「记录应用启动频次」隐私控制开关，与配置保持双向实时绑定。
+  5. [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)、[`Sources/atools/UI/CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift) 与 [`Sources/atools/UI/CategoryBarView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryBarView.swift)：
+     - 统一升级右键菜单为「重新排序」二级子菜单：
+       * `按使用频次 (高频优先)`
+       * `按应用名称 (A → Z)`
+       * `按添加时间 (最新优先)`
+  6. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 测试 `[14]` 增设频次降序、名称 A-Z 拼音升序、添加时间降序、手动拖拽自动切回 `.manual` 及隐私开关拦截的全套断言。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **151.11 MB**，零显存膨胀与性能劣化。
+
+
+

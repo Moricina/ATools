@@ -494,10 +494,26 @@ public final class CategoryPillView: NSView {
         menu.addItem(deleteItem)
 
         if !category.isFavorites {
-            let sortItem = NSMenuItem(title: "按使用频次重新排序", action: #selector(contextSortByFrequency), keyEquivalent: "")
-            sortItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
-            sortItem.target = self
-            menu.addItem(sortItem)
+            let sortMenu = NSMenu(title: "CategorySortSubmenu")
+            let sortFreqItem = NSMenuItem(title: "按使用频次 (高频优先)", action: #selector(contextSortByFrequency), keyEquivalent: "")
+            sortFreqItem.image = ThumbnailPipeline.shared.symbolIcon(name: "chart.bar", pointSize: 12)
+            sortFreqItem.target = self
+            sortMenu.addItem(sortFreqItem)
+
+            let sortNameItem = NSMenuItem(title: "按应用名称 (A → Z)", action: #selector(contextSortByName), keyEquivalent: "")
+            sortNameItem.image = ThumbnailPipeline.shared.symbolIcon(name: "textformat.abc", pointSize: 12)
+            sortNameItem.target = self
+            sortMenu.addItem(sortNameItem)
+
+            let sortDateItem = NSMenuItem(title: "按添加时间 (最新优先)", action: #selector(contextSortByDate), keyEquivalent: "")
+            sortDateItem.image = ThumbnailPipeline.shared.symbolIcon(name: "clock", pointSize: 12)
+            sortDateItem.target = self
+            sortMenu.addItem(sortDateItem)
+
+            let sortParentItem = NSMenuItem(title: "重新排序", action: nil, keyEquivalent: "")
+            sortParentItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
+            sortParentItem.submenu = sortMenu
+            menu.addItem(sortParentItem)
         }
 
         menu.addItem(NSMenuItem.separator())
@@ -555,7 +571,17 @@ public final class CategoryPillView: NSView {
     }
 
     @objc private func contextSortByFrequency() {
-        ConfigManager.shared.sortItemsByFrequency(in: category.id)
+        ConfigManager.shared.sortItems(in: category.id, by: .frequency)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
+    @objc private func contextSortByName() {
+        ConfigManager.shared.sortItems(in: category.id, by: .nameAscending)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
+    @objc private func contextSortByDate() {
+        ConfigManager.shared.sortItems(in: category.id, by: .recentlyAdded)
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }
 

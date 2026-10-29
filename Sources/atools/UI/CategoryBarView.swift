@@ -405,10 +405,26 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
         if let currentCatId = selectedCategoryId,
            let currentCat = categories.first(where: { $0.id == currentCatId }),
            !currentCat.isFavorites {
-            let sortItem = NSMenuItem(title: "当前分类按使用频次重新排序", action: #selector(contextSortCurrentCategoryByFrequency), keyEquivalent: "")
-            sortItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
-            sortItem.target = self
-            menu.addItem(sortItem)
+            let sortMenu = NSMenu(title: "BarSortSubmenu")
+            let sortFreqItem = NSMenuItem(title: "按使用频次 (高频优先)", action: #selector(contextSortCurrentCategoryByFrequency), keyEquivalent: "")
+            sortFreqItem.image = ThumbnailPipeline.shared.symbolIcon(name: "chart.bar", pointSize: 12)
+            sortFreqItem.target = self
+            sortMenu.addItem(sortFreqItem)
+
+            let sortNameItem = NSMenuItem(title: "按应用名称 (A → Z)", action: #selector(contextSortCurrentCategoryByName), keyEquivalent: "")
+            sortNameItem.image = ThumbnailPipeline.shared.symbolIcon(name: "textformat.abc", pointSize: 12)
+            sortNameItem.target = self
+            sortMenu.addItem(sortNameItem)
+
+            let sortDateItem = NSMenuItem(title: "按添加时间 (最新优先)", action: #selector(contextSortCurrentCategoryByDate), keyEquivalent: "")
+            sortDateItem.image = ThumbnailPipeline.shared.symbolIcon(name: "clock", pointSize: 12)
+            sortDateItem.target = self
+            sortMenu.addItem(sortDateItem)
+
+            let sortParentItem = NSMenuItem(title: "当前分类重新排序", action: nil, keyEquivalent: "")
+            sortParentItem.image = ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down", pointSize: 13)
+            sortParentItem.submenu = sortMenu
+            menu.addItem(sortParentItem)
         }
 
         if let jumpSubmenuItem = makeJumpToCategoryMenuItem() {
@@ -455,7 +471,19 @@ public final class CategoryBarView: NSView, CategoryPillDelegate {
 
     @objc private func contextSortCurrentCategoryByFrequency() {
         guard let currentCatId = selectedCategoryId else { return }
-        ConfigManager.shared.sortItemsByFrequency(in: currentCatId)
+        ConfigManager.shared.sortItems(in: currentCatId, by: .frequency)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
+    @objc private func contextSortCurrentCategoryByName() {
+        guard let currentCatId = selectedCategoryId else { return }
+        ConfigManager.shared.sortItems(in: currentCatId, by: .nameAscending)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
+    }
+
+    @objc private func contextSortCurrentCategoryByDate() {
+        guard let currentCatId = selectedCategoryId else { return }
+        ConfigManager.shared.sortItems(in: currentCatId, by: .recentlyAdded)
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default)
     }
 

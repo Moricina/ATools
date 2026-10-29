@@ -111,6 +111,7 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
     public var isVirtualGroup: Bool
     public var launchCount: Int
     public var lastLaunchedAt: Double?
+    public var addedAt: Double?
 
     public init(
         id: UUID = UUID(),
@@ -125,7 +126,8 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         sortWeight: Int = 0,
         isVirtualGroup: Bool = false,
         launchCount: Int = 0,
-        lastLaunchedAt: Double? = nil
+        lastLaunchedAt: Double? = nil,
+        addedAt: Double? = Date().timeIntervalSince1970
     ) {
         self.id = id
         self.parentId = parentId
@@ -140,11 +142,12 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         self.isVirtualGroup = isVirtualGroup
         self.launchCount = launchCount
         self.lastLaunchedAt = lastLaunchedAt
+        self.addedAt = addedAt
     }
 
     enum CodingKeys: String, CodingKey {
         case id, parentId, name, itemType, target, executionContext, customIconPath, hotkey, tags, sortWeight, isVirtualGroup
-        case launchCount, lastLaunchedAt
+        case launchCount, lastLaunchedAt, addedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -162,6 +165,7 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         self.isVirtualGroup = (try? container.decode(Bool.self, forKey: .isVirtualGroup)) ?? false
         self.launchCount = (try? container.decode(Int.self, forKey: .launchCount)) ?? 0
         self.lastLaunchedAt = try? container.decode(Double.self, forKey: .lastLaunchedAt)
+        self.addedAt = try? container.decode(Double.self, forKey: .addedAt)
     }
 
     /// 检测目标路径是否已失效（对标 GlassDesk IsTargetMissing）
