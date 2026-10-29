@@ -207,8 +207,8 @@ public final class CategoryPillView: NSView {
         NSAnimationContext.current.timingFunction = CAMediaTimingFunction(name: .easeOut)
         NSAnimationContext.current.allowsImplicitAnimation = true
 
-        let primaryTextColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0)
-        let secondaryTextColor = isDark ? NSColor(white: 1.0, alpha: 0.88) : NSColor(white: 0.15, alpha: 0.78)
+        let primaryTextColor = isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.05, green: 0.05, blue: 0.06, alpha: 1.0)
+        let secondaryTextColor = isDark ? NSColor(white: 1.0, alpha: 0.88) : NSColor(srgbRed: 0.08, green: 0.08, blue: 0.09, alpha: 0.92)
 
         let px = physicalOnePixel
         if interactionActive && isSpringLoadingHovered {
@@ -261,9 +261,9 @@ public final class CategoryPillView: NSView {
         } else {
             if isNativeLiquidTheme {
                 let sh = NSShadow()
-                sh.shadowColor = NSColor.white.withAlphaComponent(0.65)
+                sh.shadowColor = NSColor.white.withAlphaComponent(0.75)
                 sh.shadowOffset = NSSize(width: 0, height: 0.5)
-                sh.shadowBlurRadius = 1.0
+                sh.shadowBlurRadius = 0.5
                 titleLabel.shadow = sh
             } else {
                 // 磨砂玻璃 (浅色)：在纯白白瓷浮动胶囊上，取消白色光晕阴影，呈现最为纯净锐利的黑字印刷质感

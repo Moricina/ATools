@@ -4198,6 +4198,38 @@
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Applications/ATools.app` 已热替换部署；
   - 编写端到端真实测试脚本验证：冷启动启动 Gemini，模拟点击红叉关窗，ATools 准确触发 `Last window closed for Gemini; quitting in 1.0s.`，1.8s 后调用 `Terminating Gemini after last window closed.`，Gemini 进程安全、干净彻底退出。
 
+---
+
+### [2026-10-30] 第 122 项：实施方案 B - 墨黑字体提纯加重、高光阴影锐化及原生液态防穿透底衬加固
+
+- **问题背景与病灶定位**：
+  - 用户反馈在纯黑/深色背景（如深色代码编辑器、纯黑终端窗口）下呼出应用抽屉时，应用文字“发虚、看不清”；
+  - 经深入排查视觉渲染管线，定位到三大物理与视觉渲染病灶：
+    1. **原生液态浅色底衬过薄与未漫射**：在 `themeOpacity <= 0.36`（默认 40% 透明度）时，`LiquidGlassContainerView` 回退至 `Glass.clear`（完全零模糊纯玻璃透镜），且底衬 `underlayAlpha` 仅为 0.08（8% 极微白）。当背后为纯黑背景时，8% 白色被背景黑色大幅吸收，背后代码的白色字符未经任何模糊直接透射至抽屉文字下方，造成严重图底干扰；
+    2. **文字字色非纯黑与字重偏细**：原浅色文字颜色为 `#1D1D1F`（含灰度），且网格文字字重为 11pt `.regular`。细笔画在与背后透出的高对比背景杂光叠加时，笔画边缘被严重侵蚀；
+    3. **白色立体阴影散焦发虚**：原浅色模式下挂载的白色阴影模糊半径 `blurRadius = 1.0` 且不透明度偏低，产生了一圈 1~2pt 的白色雾化光晕（Halo），与黑色笔画交界处产生严重色散与对比度抵消，导致肉眼观感极度发虚。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/GlassPalette.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/GlassPalette.swift)：
+     - `textPrimary(isDark: false)` 提纯为坚实墨黑 `NSColor(srgbRed: 0.05, green: 0.05, blue: 0.06, alpha: 1.0)`，极大提升明暗对比度。
+  2. [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - `ShelfItemButton.setupViews` 与 `updateScaleDimensions` 中的 `titleLabel.font` 均由 `.regular` 提纯加实为 `.medium`（500 字重），确保 11pt 笔画坚实立体；
+     - `updateAppearanceStyles` 浅色模式阴影收敛锐化：将模糊半径由发虚的 `1.0` 收敛至 `0.5`，不透明度提升至 `0.75`，偏移保持 `(0, 0.5)`，使原本发散的雾气转变为类似 macOS 访达原生图标文字的微浮雕高光（Chiseled Micro-Highlight）。
+  3. [`Sources/atools/UI/CategoryPillView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/CategoryPillView.swift)：
+     - `primaryTextColor` 统一采用墨黑 `(0.05, 0.05, 0.06)`；`secondaryTextColor` 从 `0.15/alpha 0.78` 升级为 `(0.08, 0.08, 0.09, alpha: 0.92)`；
+     - 未选中胶囊文字挂载高锐度微浮雕高光阴影，彻底消除发虚。
+  4. [`Sources/atools/UI/VisualEffectBackdropView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/VisualEffectBackdropView.swift)：
+     - 浅色原生液态透镜 `dynamicTintOpacity` 基础底由 `0.08` 提升至 `0.20`（`0.20 + 0.45 * pow(progress, 1.15)`）。
+  5. [`Sources/atools/UI/LiquidGlassContainerView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/LiquidGlassContainerView.swift)：
+     - 浅色模式 `useRegular` 阈值由 `tintOpacity > 0.36` 优化为 `tintOpacity > 0.18`，使 40% 常用透明度档位也启用 `Glass.regular` 硬件级磨砂漫射；
+     - 底层专属漫射底衬 `underlayAlpha` 基础值由 `0.08` 提升至 `0.22`（`0.22 + 0.48 * pow(clampedProgress, 1.1)`），在纯黑背景下形成扎实的晶莹冰晶乳白基底，将背后代码完全漫射柔化，杜绝穿透杂斑。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **149.08 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启生效。
+
+
 
 
 

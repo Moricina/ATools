@@ -299,7 +299,7 @@ private struct LiquidGlassRoot: View {
                 // 深色模式：低透明度（40%~55%）动态切入纯水滴透镜 (Glass.clear) 纯净折射底层，且始终保留基准暗色底衬 (underlayAlpha >= 0.24) 塑造纯正深色底蕴；
                 // 高透明度（60%~100%）动态切换为 Glass.regular 漫射与强化暗色底衬 (0.58~0.68)，遮蔽背景杂色。
                 let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                let useRegular = (isDark && tintOpacity > 0.36) || (!isDark && tintOpacity > 0.36 && usesRegularGlass)
+                let useRegular = (isDark && tintOpacity > 0.36) || (!isDark && tintOpacity > 0.18)
                 ZStack {
                     // 1. 系统硬件级液态水滴玻璃主体
                     Color.clear
@@ -313,7 +313,7 @@ private struct LiquidGlassRoot: View {
 
                     // 1.5 专属底衬（遮蔽杂色并随透明度动态联动）：
                     // - 深色模式：深邃黑曜石暗色底衬 (underlayAlpha: 0.24 ~ 0.68)
-                    // - 浅色模式：纯白水滴微熏透光底衬 (underlayAlpha: 0.08 ~ 0.68)
+                    // - 浅色模式：纯白水滴微熏漫射底衬 (underlayAlpha: 0.22 ~ 0.70)，杜绝纯黑背景穿透发虚
                     if isDark {
                         let clampedProgress = max(0.0, min(1.0, (tintOpacity - 0.22) / (0.72 - 0.22)))
                         let underlayAlpha = 0.24 + 0.44 * pow(clampedProgress, 1.1)
@@ -321,8 +321,8 @@ private struct LiquidGlassRoot: View {
                             .fill(Color(red: 0.06, green: 0.07, blue: 0.10).opacity(underlayAlpha))
                             .allowsHitTesting(false)
                     } else if tintOpacity > 0.001 {
-                        let clampedProgress = max(0.0, min(1.0, (tintOpacity - 0.08) / (0.65 - 0.08)))
-                        let underlayAlpha = 0.08 + 0.60 * pow(clampedProgress, 1.1)
+                        let clampedProgress = max(0.0, min(1.0, (tintOpacity - 0.18) / (0.65 - 0.18)))
+                        let underlayAlpha = 0.22 + 0.48 * pow(clampedProgress, 1.1)
                         shape
                             .fill(Color.white.opacity(underlayAlpha))
                             .allowsHitTesting(false)

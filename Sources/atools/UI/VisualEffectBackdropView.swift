@@ -111,10 +111,10 @@ public final class VisualEffectBackdropView: NSView {
                 effectView.tintOpacity = dynamicTintOpacity
             } else {
                 // 原生液态 (浅色)：纯白水滴透光透镜，联动 themeOpacity 滑块 (40% ~ 100%)
-                // 40% 时保留 0.08 基础纯白水滴通透折射 (Glass.clear)，白底晶莹通透，透出底层桌面与应用窗口；
+                // 40% 时保留 0.20 基础纯白水滴通透折射，配合微光漫射底衬，既晶莹通透，又能消除黑色背景下的字迹发虚
                 // 100% 时浓度平滑升至 0.65，配合 Glass.regular 漫射与纯白底衬，有效遮蔽杂乱背景，确保文字高对比度与清晰度
                 let progress = max(0.0, min(1.0, (ConfigManager.shared.config.themeOpacity - 0.40) / 0.60))
-                let dynamicTintOpacity = CGFloat(0.08 + 0.57 * pow(progress, 1.15))
+                let dynamicTintOpacity = CGFloat(0.20 + 0.45 * pow(progress, 1.15))
                 effectView.tintColor = NSColor.white
                 effectView.tintOpacity = dynamicTintOpacity
             }

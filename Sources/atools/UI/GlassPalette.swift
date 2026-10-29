@@ -12,7 +12,7 @@ enum GlassPalette {
     static let lightPressedFill = NSColor(white: 0.0, alpha: 0.11)
 
     static func textPrimary(isDark: Bool) -> NSColor {
-        return isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.114, green: 0.114, blue: 0.122, alpha: 1.0) // #1D1D1F
+        return isDark ? NSColor(white: 1.0, alpha: 1.0) : NSColor(srgbRed: 0.05, green: 0.05, blue: 0.06, alpha: 1.0) // 墨黑强化，杜绝发虚
     }
 
     static func textSecondary(isDark: Bool) -> NSColor {

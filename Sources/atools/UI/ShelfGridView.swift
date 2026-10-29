@@ -317,7 +317,7 @@ public final class ShelfItemButton: NSControl {
 
         let initialFontSize = max(10, min(14, round(11.0 * scale)))
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = NSFont.systemFont(ofSize: initialFontSize, weight: .regular)
+        titleLabel.font = NSFont.systemFont(ofSize: initialFontSize, weight: .medium)
         titleLabel.alignment = .center
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.maximumNumberOfLines = 1
@@ -481,7 +481,7 @@ public final class ShelfItemButton: NSControl {
         iconWidthConstraint?.constant = iconSize
         iconHeightConstraint?.constant = iconSize
         iconTopConstraint?.constant = topPadding
-        titleLabel.font = NSFont.systemFont(ofSize: fontSize, weight: .regular)
+        titleLabel.font = NSFont.systemFont(ofSize: fontSize, weight: .medium)
     }
 
     internal func updateAppearanceStyles() {
@@ -601,10 +601,10 @@ public final class ShelfItemButton: NSControl {
             textShadow.shadowOffset = NSSize(width: 0, height: -1.0)
             textShadow.shadowBlurRadius = 1.5
         } else {
-            // 浅色模式：超微纯白漫射背光衬底，消除高饱和彩色壁纸/亮色杂色粘连，对比度稳定突破 5.2:1（WCAG 2.1 AA 达标）
-            textShadow.shadowColor = NSColor.white.withAlphaComponent(0.65)
+            // 浅色模式：微浮雕白高光（收敛模糊半径至 0.5，消除外散发虚，保持黑字笔画清晰锐利）
+            textShadow.shadowColor = NSColor.white.withAlphaComponent(0.75)
             textShadow.shadowOffset = NSSize(width: 0, height: 0.5)
-            textShadow.shadowBlurRadius = 1.0
+            textShadow.shadowBlurRadius = 0.5
         }
 
         if isSelected {
