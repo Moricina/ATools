@@ -370,6 +370,23 @@ public final class AutoQuitManager {
                     }
                 }
 
+                // 特殊排除：AuraPane 等现代化 AppKit 应用关闭后，通过 orderOut: 移出屏幕常驻的设置底板与欢迎底板
+                let isAuraPane = ownerName.contains("AuraPane")
+                if isAuraPane {
+                    let defaultAuraPaneOffscreenTitles: Set<String> = [
+                        "设置", "Settings", "Preferences", "偏好设置"
+                    ]
+                    if defaultAuraPaneOffscreenTitles.contains(trimmedName) || trimmedName.isEmpty {
+                        continue
+                    }
+                }
+
+                // 特殊排除：通用 AppKit 应用在用户关闭设置窗口后，orderOut 移出屏幕但未销毁的离屏设置底板
+                let isGenericSettingsResidual = (trimmedName == "设置" || trimmedName == "偏好设置" || trimmedName == "Settings" || trimmedName == "Preferences")
+                if isGenericSettingsResidual {
+                    continue
+                }
+
                 // 核心保活与无名离屏底板精细判定：
                 // 1) 若拥有明确的业务窗口标题且尺寸有效（!trimmedName.isEmpty && width > 160 && height > 100），确认为跨 Space 在活业务窗口；
                 // 2) 若标题为空（未授予屏幕录制权限，或属于 AppKit orderOut 机制隐藏的离屏底板）：

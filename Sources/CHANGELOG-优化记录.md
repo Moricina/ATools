@@ -3776,3 +3776,31 @@
     * 修复前：`wsCount = 1`（有录屏权限时命中有标题离屏）/ `wsCount = 3`（致盲模式时命中无标题离屏大底板），导致退出失败；
     * 修复后：`wsCount = 0`，与 `axCount = 0` 达成双向确诊零窗，即刻触发毫秒级安全延迟退出；
   - **现场构建与热加载部署**：已通过 `./Scripts/package_app.sh` 编译并签名 `ATools.app (v1.3.33 build 59)`，完成单例平滑重载。
+
+
+
+---
+
+### [2026-10-29] 第 110 项：修复 AuraPane 及 AppKit 应用离屏设置底板（760x606 "设置"等）阻碍 AutoQuit 自动退出缺陷
+
+- **故障背景与根因定位**：
+  - **用户反馈**：“AuraPane 点击红叉又没退出”；
+  - **现场数据抓取与根因确诊**：
+    1. **AX 辅助功能树层面**：AuraPane 主窗口关闭后，AX 树确证窗口数为 0（`AX count: 0`）；
+    2. **WindowServer 离屏设置残余底板死锁**：AuraPane（SwiftUI / AppKit 架构）在用户打开并关闭设置界面后，底层 AppKit 默认机制调用 `orderOut:` 移出屏幕隐藏，而未销毁 `NSWindow` 实例。在 WindowServer 中常驻了 1 个移出屏幕的离屏隐藏窗口（`wid: 996, layer: 0, bounds: 760x606, isOnScreen: false`），该离屏窗口带有真实标题 **`"设置"`**；
+    3. **双重权威防线触发超时撤销**：在 `windowServerStandardWindowCount` 中，此前针对离屏无标题底板的单实例豁免仅覆盖了 `trimmedName.isEmpty`（360x300 欢迎底板），而带有真实标题 `"设置"` 且尺寸达到 760x606 的离屏窗口被误判为跨 Space 在活业务窗口，导致 $\text{wsCount} = 1$。终审时命中了 `app is active and has window`（因用户点击红叉后 AuraPane 仍处于活跃前台），彻底撤销了退出调度（`Aborted quit for AuraPane`）。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **AuraPane 专属离屏底板精细排除**：在 `windowServerStandardWindowCount` 的离屏分支（`isOnScreen == false`）中，加入 AuraPane（`ownerName.contains("AuraPane")`）专属过滤规则，涵盖预置离屏设置标题（`"设置"`, `"Settings"`, `"Preferences"`, `"偏好设置"`）与无名底板；
+     - **通用 AppKit 离屏设置底板安全排除**：对离屏状态下所有符合通用标准设置标题（`"设置"`, `"偏好设置"`, `"Settings"`, `"Preferences"`）的残留窗口予以全局排除，杜绝 AppKit 原生应用 orderOut 设置面板阻碍退出的通用痛点；
+     - **跨 Space 保活零破损**：其它 Space 真实打开并处于在活状态的设置面板在 AX 树上全局穿透可见，AX 首道防线（`axCount >= 1`）毫秒级直接放行保活，绝无误杀风险。
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) & [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - 版本号自增至 `v1.3.34 (build 60)`。
+
+- **验证与测试结果**：
+  - **诊断测试回归**：执行 `./Scripts/build.sh --test`，全套 13 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **WindowServer 计数实测验证**：
+    * 修复前：`wsCount = 1`（命中有标题离屏 "设置" 760x606），导致终审拦截；
+    * 修复后：`wsCount = 0`，与 `axCount = 0` 达成双向权威确诊零窗，即刻触发延迟退出；
+  - **实机部署与热重载**：已编译签名 `ATools.app (v1.3.34 build 60)` 并部署更新。
