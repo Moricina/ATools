@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.37}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-63}"
+VERSION="${ATOOLS_VERSION:-1.3.38}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-64}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -113,7 +113,26 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 综合体验大版本更新说明
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 核心体验优化与架构解耦更新说明
+
+### 🛡️ 关窗即退与新应用自动入库架构彻底解耦 (Architecture Decoupling)
+1. **关窗即退 (AutoQuit) 以用户名单为最高准绳**：
+   - 白名单模式（\`onlyListed\`）：彻底解除常规窗口应用限制，无论目标是否包含菜单栏图标或属于托盘小工具，只要在用户名单内，窗口关闭确认无窗时绝对触发退出；
+   - 全局退出模式（\`allApps\`）：严密维持系统常规应用守卫，杜绝误退未纳管的无窗后台守护；
+   - 伴生 Helper 联动退出闭环：针对如 Google Gemini 等双进程应用（主窗口 + 独立状态栏 Launcher Helper），在主窗口终审退出时，严格基于物理宿主包含关系安全联动终止其伴生 Helper，彻底消灭状态栏孤儿托盘残留；
+   - 设置界面列表清洗与权威去重：重构 \`allSelectableApps\`，彻底阻断 CoreServices 系统后台守护与纯系统底座，引入物理路径权重机制按 \`bundleId\` 权威唯一去重，彻底消除 macOS Cryptex 镜像投影导致的 Safari 重复、Siri 双份等问题。
+
+---
+
+### 📦 新安装应用自动入库与动态基线协同 (Auto Discovery & Dynamic Baseline)
+1. **全面接纳 \`LSUIElement\` 独立菜单栏/小工具应用**：
+   - 抽屉自动入库判定切换为独立的 \`isShelfEligible\`，全面支持 Paste、MonitorControl、Bob、Snipaste 等独立菜单栏工具自动入库至指定分类；
+   - 保持 7 重安全防护闭环，严禁无界面纯后台守护进程（\`LSBackgroundOnly\`）、系统底座与未落地残包混入。
+2. **动态基线同步修剪（Pruning 机制）**：
+   - 扫描基线与物理磁盘存活实时同步，彻底解决应用卸载清理失效项后重新安装无法被感知自动入库的问题；
+   - 物理磁盘持续存活但未放入抽屉的历史既有应用持续锁定在基线中，绝对保障历史旧应用不误报、不批量灌水。
+
+---
 
 ### ✨ 原生液态水滴微缩文件夹与视觉晶体质感重构 (Folder & Crystal Architecture)
 1. **1:1 复刻设置页原生液态水滴胶囊 (NativeLiquidButtonBackdrop)**：
@@ -160,24 +179,7 @@ NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 综合体验大版本更新
    - 抽屉激活时原生支持 \`⌘1\` ~ \`⌘9\` 直出秒启当前分类前 9 个应用。
 5. **橡皮筋框选多选与批量原子操作 (Marquee Batch Actions)**：
    - 抽屉空白处按住鼠标拖拽拉出液态虚线半透明选框，支持 \`⌘\`/\`⇧\` 连续增减选；
-   - 选中项呈现 Accent 蓝底白字药丸与液态底衬；支持 \`⌫\` (Delete) 快捷键或右键批量移除入墓碑、批量原子搬移至指定分类、批量新建文件夹。
-
----
-
-### 🛡️ 关窗退出 (AutoQuit) 现代化架构重构与深度应用适配
-1. **适配 Google Gemini 等关窗隐藏应用**：
-   - 针对 Gemini、Catalyst 等关窗时仅隐藏至后台而非销毁窗口的特殊行为，实施失焦事件竞争解耦与终审放行闭环；
-2. **全面剥离录屏权限依赖（向 SwiftQuit 看齐）**：
-   - 彻底移除 \`CGPreflightScreenCaptureAccess\`，仅需系统「辅助功能 (Accessibility)」授权即可无缝工作；
-   - 权限与职责严格隔离：AX 语义负责窗口列表与角色，WindowServer 仅核验零隐私权限公开几何数据。
-3. **声明式规则库与通用幽灵图层过滤引擎 (AutoQuitQuirks)**：
-   - 解耦写死的硬编码名单，建立集中式规则引擎；
-   - 自动化清洗系统代理视图、CEF 缓冲画布、通用设置/偏好窗口 orderOut 残余与微型光标。
-4. **原生液态毛玻璃可撤销倒计时 HUD**：
-   - 退出前在屏幕底部弹出轻柔倒计时胶囊与「取消」按钮，撤销后当次会话智能抑制；
-   - 零按键拦截、零常驻显存，退出后即刻释放 Window Backing Store。
-5. **决策诊断流水线与设置页检查器 (Trace & Inspector)**：
-   - 纯值类型环形缓冲区记录最近 50 条裁决，设置页增设「诊断与决策历史」独立面板，支持一键导出排障报告。"
+   - 选中项呈现 Accent 蓝底白字药丸与液态底衬；支持 \`⌫\` (Delete) 快捷键或右键批量移除入墓碑、批量原子搬移至指定分类、批量新建文件夹。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

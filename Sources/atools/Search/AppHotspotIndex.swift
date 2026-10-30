@@ -13,13 +13,15 @@ public struct IndexedApp {
     public let pinyins: [String]
     public let pinyinAbbrs: [String]
     public let isRegularApp: Bool
+    public let isShelfEligible: Bool
 
-    public init(name: String, localizedName: String, path: String, bundleId: String?, isRegularApp: Bool = true, additionalAliases: [String] = []) {
+    public init(name: String, localizedName: String, path: String, bundleId: String?, isRegularApp: Bool = true, isShelfEligible: Bool = true, additionalAliases: [String] = []) {
         self.name = name
         self.localizedName = localizedName
         self.path = path
         self.bundleId = bundleId
         self.isRegularApp = isRegularApp
+        self.isShelfEligible = isShelfEligible
 
         var allAliases = Set<String>()
         allAliases.insert(name)
@@ -211,6 +213,7 @@ public final class AppHotspotIndex {
                         let isExcluded = metadata.bundleIdentifier.map { AutoQuitManager.systemExcludedBundleIDs.contains($0) || $0 == "cc.atools.app" || $0 == "cc.atools.app.dev" } ?? true
                         let isPrefPane = fullPath.hasSuffix(".prefPane")
                         let isRegular = !isPrefPane && !metadata.isUIElement && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
+                        let isShelfEligible = !isPrefPane && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
 
                         let indexed = IndexedApp(
                             name: baseName,
@@ -218,6 +221,7 @@ public final class AppHotspotIndex {
                             path: fullPath,
                             bundleId: metadata.bundleIdentifier,
                             isRegularApp: isRegular,
+                            isShelfEligible: isShelfEligible,
                             additionalAliases: aliases
                         )
                         results.append(indexed)
@@ -277,6 +281,51 @@ public final class AppHotspotIndex {
         appsLock.lock()
         defer { appsLock.unlock() }
         return apps.filter { $0.isRegularApp }
+    }
+
+    /// 所有可供用户在设置页选择纳管的已安装应用快照：
+    /// 1. 包含常规窗口应用与小工具/菜单栏应用（如 Paste, MonitorControl）；
+    /// 2. 彻底过滤掉 CoreServices 非应用系统后台守护进程（如 AirPlayUIAgent）与系统底座（Dock, Finder, ControlCenter 等）；
+    /// 3. 基于 bundleId 进行权威去重（路径权重：/Applications > ~/Applications > /System/Applications 等），杜绝 Cryptex 等底层投影产生的重复项。
+    public var allSelectableApps: [IndexedApp] {
+        appsLock.lock()
+        defer { appsLock.unlock() }
+
+        let validApps = apps.filter { app in
+            guard let bid = app.bundleId, !bid.isEmpty else { return false }
+            guard !app.path.hasSuffix(".prefPane") else { return false }
+            guard !AutoQuitManager.systemExcludedBundleIDs.contains(bid) else { return false }
+            guard bid != "cc.atools.app" && bid != "cc.atools.app.dev" else { return false }
+            guard bid != "com.apple.controlcenter" && bid != "com.apple.wallpaper.agent" && bid != "com.apple.UserNotificationCenter" else { return false }
+            // 过滤 /System/Library/CoreServices 下的非应用后台守护
+            let isCoreServicesDaemon = app.path.contains("/System/Library/CoreServices") && !app.path.contains("/System/Library/CoreServices/Applications")
+            guard !isCoreServicesDaemon else { return false }
+            return true
+        }
+
+        func pathPriority(_ path: String) -> Int {
+            if path.hasPrefix("/Applications/") { return 5 }
+            let home = NSHomeDirectory()
+            if path.hasPrefix("\(home)/Applications/") { return 4 }
+            if path.hasPrefix("/System/Applications/Utilities/") { return 3 }
+            if path.hasPrefix("/System/Applications/") { return 2 }
+            if path.hasPrefix("/System/Library/CoreServices/Applications/") { return 1 }
+            return 0
+        }
+
+        var dedupedByBid: [String: IndexedApp] = [:]
+        for app in validApps {
+            guard let bid = app.bundleId else { continue }
+            if let existing = dedupedByBid[bid] {
+                if pathPriority(app.path) > pathPriority(existing.path) {
+                    dedupedByBid[bid] = app
+                }
+            } else {
+                dedupedByBid[bid] = app
+            }
+        }
+
+        return dedupedByBid.values.sorted { $0.localizedName.localizedStandardCompare($1.localizedName) == .orderedAscending }
     }
 
     public func search(_ query: String) -> [IndexedApp] {

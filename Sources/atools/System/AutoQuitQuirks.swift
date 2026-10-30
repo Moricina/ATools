@@ -29,6 +29,8 @@ public struct AppQuirkRule: Sendable {
     public let offscreenTitles: Set<String>
     public let ghostSizes: [GhostWindowSize]
     public let isVirtualizationOrContainer: Bool
+    public let companionBundleIDs: [String]
+    public let terminateHelpersInBundle: Bool
 
     public init(
         id: String,
@@ -37,7 +39,9 @@ public struct AppQuirkRule: Sendable {
         ownerNameKeywords: [String] = [],
         offscreenTitles: Set<String> = [],
         ghostSizes: [GhostWindowSize] = [],
-        isVirtualizationOrContainer: Bool = false
+        isVirtualizationOrContainer: Bool = false,
+        companionBundleIDs: [String] = [],
+        terminateHelpersInBundle: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -46,6 +50,8 @@ public struct AppQuirkRule: Sendable {
         self.offscreenTitles = Set(offscreenTitles.map { $0.lowercased() })
         self.ghostSizes = ghostSizes
         self.isVirtualizationOrContainer = isVirtualizationOrContainer
+        self.companionBundleIDs = companionBundleIDs
+        self.terminateHelpersInBundle = terminateHelpersInBundle
     }
 
     public func matches(bundleID: String?, ownerName: String?) -> Bool {
@@ -215,11 +221,25 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             offscreenTitles: ["gemini"],
             ghostSizes: [
                 GhostWindowSize(w: 500, h: 500, tolerance: 25)
-            ]
+            ],
+            companionBundleIDs: ["com.google.GeminiMacOS.launcher"],
+            terminateHelpersInBundle: true
         )
     ]
 
     private init() {}
+
+    /// 获取主应用显式声明的伴生 Helper Bundle ID 集合
+    public func companionBundleIDs(for bundleID: String?, ownerName: String?) -> [String] {
+        guard let rule = matchRule(bundleID: bundleID, ownerName: ownerName) else { return [] }
+        return rule.companionBundleIDs
+    }
+
+    /// 获取主应用是否允许联动清理其 Bundle 内的伴生 Helper
+    public func shouldTerminateHelpersInBundle(for bundleID: String?, ownerName: String?) -> Bool {
+        guard let rule = matchRule(bundleID: bundleID, ownerName: ownerName) else { return false }
+        return rule.terminateHelpersInBundle
+    }
 
     /// 判断应用是否属于受保护的虚拟化/模拟器/容器类应用
     public func isProtectedVirtualizationApp(bundleID: String?, ownerName: String? = nil) -> Bool {

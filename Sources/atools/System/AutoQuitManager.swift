@@ -214,14 +214,18 @@ public final class AutoQuitManager {
         rules: [String]
     ) -> Bool {
         guard !isSelf else { return false }
-        guard activationPolicy == .regular else { return false }
         guard isFinishedLaunching else { return false }
         guard let bid = bundleID, !bid.isEmpty else { return false }
         guard !systemExcludedBundleIDs.contains(bid) else { return false }
         guard !isProtectedVirtualizationApp(bundleID: bid) else { return false }
         switch mode {
-        case .allApps: return !rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
-        case .onlyListed: return rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
+        case .allApps:
+            // 全局退出模式（黑名单）：只退出标准常规窗口应用，防止误退未在排除名单的系统后台/小工具
+            guard activationPolicy == .regular else { return false }
+            return !rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
+        case .onlyListed:
+            // 仅退出名单内应用（白名单）：以用户名单为绝对准绳，只要在名单内，无论是否带菜单栏图标或属于小工具，均绝对触发
+            return rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
         }
     }
 
@@ -935,6 +939,35 @@ public final class AutoQuitManager {
         )
         runtimeLog("[AutoQuit] Terminating \(app.localizedName ?? "pid \(pid)") after last window closed.")
         app.terminate()
+        terminateCompanionHelpers(for: app)
+    }
+
+    /// 伴生 Helper 联动退出：针对如 Gemini 等双进程应用（主窗口 + 独立状态栏 Launcher Helper），
+    /// 在主窗口进程退出时，根据物理路径宿主包含与 Quirks 声明，安全联动终止其伴生 Helper，
+    /// 杜绝状态栏残留孤儿图标。物理路径必须严格位于主 App Bundle 的 Contents/ 内部。
+    private func terminateCompanionHelpers(for mainApp: NSRunningApplication) {
+        guard let mainBundlePath = mainApp.bundleURL?.path else { return }
+        let mainBid = mainApp.bundleIdentifier ?? ""
+        let mainOwner = mainApp.localizedName ?? ""
+        let companions = Set(AutoQuitQuirks.shared.companionBundleIDs(for: mainBid, ownerName: mainOwner))
+        let terminateInBundle = AutoQuitQuirks.shared.shouldTerminateHelpersInBundle(for: mainBid, ownerName: mainOwner)
+
+        guard !companions.isEmpty || terminateInBundle else { return }
+
+        for running in NSWorkspace.shared.runningApplications {
+            guard running.processIdentifier != mainApp.processIdentifier, !running.isTerminated else { continue }
+            guard let helperPath = running.bundleURL?.path else { continue }
+            let helperBid = running.bundleIdentifier ?? ""
+
+            // 核心安全守卫：必须满足以下两项之一，且物理路径严格位于主 App 的 Contents/ 内部
+            let isExplicitCompanion = !helperBid.isEmpty && companions.contains(helperBid)
+            let isPhysicallyInsideBundle = helperPath.hasPrefix(mainBundlePath + "/Contents/")
+
+            if (isExplicitCompanion || terminateInBundle) && isPhysicallyInsideBundle {
+                runtimeLog("[AutoQuit] Terminating companion helper \(running.localizedName ?? helperBid) (pid: \(running.processIdentifier)) inside \(mainApp.localizedName ?? mainBid)")
+                running.terminate()
+            }
+        }
     }
 
     private func cancelPendingRecheckLocked(_ pid: pid_t) {

@@ -4328,21 +4328,81 @@
 
 ---
 
-### [2026-10-30] 第 127 项：微缩文件夹标题文本像素级绝对垂直居中对齐校准
+### [2026-10-31] 第 128 项：关窗即退与新应用自动入库架构彻底解耦及菜单栏小工具（LSUIElement）自动发现与纳管支持
 
 - **问题背景与用户诉求**：
-  - 用户反馈微缩文件夹中的标题文本“有点靠上，没有在正中央，请调整到正中央”，并提供了实测截图；
-  - 排查定位：在 Retina (@2x) 渲染分析下，`TitleCapsuleContainerView` 高度 28pt（56px），`titleField`（Semibold 15pt）由于 macOS Cocoa `NSTextField` 默认排版中基线（Baseline）及西文字体 ascender 预留偏移，导致未加偏移时上边距仅 11px（5.5pt），下边距为 17px（8.5pt），视觉上显著偏上 1.5pt（3px）。
+  - 用户反馈在 Mac App Store 下载安装了新软件（如 `Paste.app`），位于 `/Applications` 应用程序库中，并在设置中指定了自动放入「其他」分类，但应用抽屉始终未自动添加入库；
+  - 深度排查发现：
+    1. `Paste.app`（以及常见的菜单栏/剪贴板工具如 MonitorControl、Bob、Snipaste 等）的 `Info.plist` 中声明了 `LSUIElement = 1`；
+    2. `AppHotspotIndex.swift` 将包含 `LSUIElement` 的应用硬编码标记为 `isRegularApp = false`；
+    3. `ConfigManager.handleAppIndexUpdated` 在处理抽屉新安装应用时，错误复用了关窗即退的 `guard app.isRegularApp else { continue }`，导致所有菜单栏独立实用程序被完全误伤过滤；
+    4. 同时，在「关窗即退」模块中，设置页选择器仅向用户开放 `allRegularApps`，且底层 `AutoQuitManager.shouldWatch` 硬编码拦截了非 regular 应用，剥夺了用户主动对菜单栏工具应用配置关窗即退的权利。
 
 - **实施与加固详情**：
-  1. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
-     - **精确垂直居中补偿**：将 `titleField.centerYAnchor` 相对 `titleCapsuleView.centerYAnchor` 的对齐约束增加 `constant: 1.5`；
-     - **多语种对称性严格实测**：针对中文字符（如「虚拟机」、「办公」）、英文字符（如「Chrome」、「codex」、「AI」）进行位图采样，顶部与底部边距完全达到 **14px 对 14px（7.0pt 对 7.0pt，差异为 0）** 的绝对对称；编辑激活态（选中高光）亦保持 **9px 对 9px** 绝对对称，彻底消灭视觉上浮感。
+  1. [`Sources/atools/Search/AppHotspotIndex.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/AppHotspotIndex.swift)：
+     - **业务概念彻底解耦**：在 `IndexedApp` 中分离 `isRegularApp`（标准窗口应用）与 `isShelfEligible`（抽屉合规入库应用），保持 `init` 构造参数默认值向后兼容；
+     - **入库合规准则**：`isShelfEligible` 仅阻断偏好面板（`.prefPane`）、无界面纯后台守护进程（`LSBackgroundOnly`）、系统非应用核心守护及系统排除项，全面接纳拥有合法 Bundle ID 的 `LSUIElement` 菜单栏常驻独立应用；
+     - **新增全量可选应用快照**：新增 `allSelectableApps` 属性，供设置页等需要枚举全部合规应用的 UI 纳管使用。
+  2. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - **抽屉入库守卫解绑**：在 `handleAppIndexUpdated(apps:)` 中，将基线采集及增量入库的过滤守卫从 `app.isRegularApp` 全面切换为独立的 `app.isShelfEligible`；
+     - **多重安全护城河**：完整保留临时卷隔离（`/Volumes/` 过滤）、二进制执行体落地完整性校验（`Bundle.executablePath` 存在性检验）及 Tombstone 墓碑防死灰复燃防护。
+  3. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **用户名单绝对最高准绳**：在 `shouldWatch` 中实现模式细分：
+       - `allApps` 全局退出模式：维持 `activationPolicy == .regular` 守卫，杜绝误退未纳管的无窗系统后台服务；
+       - `onlyListed` 白名单模式：完全以用户在设置中的名单为绝对法则，只要应用被用户显式列入，即使具备 `.accessory` 或菜单栏小工具属性，当窗口关闭且确诊无窗时均绝对触发退出。
+  4. [`Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift)：
+     - **开放完整应用纳管清单**：数据源升级为 `AppHotspotIndex.shared.allSelectableApps`，让用户能够在列表中自由搜索并配置任意希望纳管的实用工具应用。
+  5. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - **断言与回归套件强化**：
+       - 增加 `allSelectableApps` 集合与超集校验；
+       - 增加 `shouldWatch` 在 `onlyListed` 模式下精准纳管 `.accessory` 应用（如 `com.wiheads.paste`）及在 `allApps` 模式下保守隔离的断言；
+       - 增加 `isShelfEligible = true, isRegularApp = false` 菜单栏小工具自动发现入库端到端断言。
 
 - **验证与测试结果**：
-  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
-  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效；
-  - **版本发布与签名**：版本号正式自增至 `v1.3.37 (build 63)`，完成 Ed25519 签名与 GitHub Release 正式发布。
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**：
+    - `[7/7] Physical Footprint: 149.91 MB`；
+    - `[12.1] allRegularApps UI filtering & dual AutoQuit rule lists: PASSED`；
+    - `[14] Auto App Discovery, Tombstone, Folder Nesting, Hotkeys, Quick Slots: PASSED`；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 打包完成。
+
+---
+
+### [2026-10-31] 第 129 项：伴生 Helper 联动退出闭环、CoreServices 底座清洗权威去重与动态基线协同 Pruning 机制
+
+- **问题背景与用户诉求**：
+  1. 用户反馈 Google Gemini 关窗红叉后提示退出，但状态栏依然常驻其菜单栏图标；
+  2. 关窗退出设置列表中出现了大量系统级守护进程（如 `AirDropUI`、`ControlCenter` 等），且存在同名重复应用（如 Safari 在 Cryptex 镜像与 `/Applications` 分别出现）；
+  3. 用户卸载 Paste 并一键清理失效图标后重新从 App Store 下载，抽屉指定分类未能自动感知添加（而全新下载的 Essayist 可以感知）。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - 在 `AppQuirkRule` 中新增 `companionBundleIDs: [String]` 与 `terminateHelpersInBundle: Bool` 伴生属性；
+     - 在 Gemini 规则中正式声明 `companionBundleIDs: ["com.google.GeminiMacOS.launcher"]` 并开启 Bundle 内联动退出。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - 实现 `terminateCompanionHelpers(for mainApp:)` 伴生 Helper 联动退出机制：
+     - **严密物理路径宿主包含校验**：伴生进程必须满足 `helperPath.hasPrefix(mainBundlePath + "/Contents/")`，坚决严禁泛前缀强杀，确保绝对不会波及 Chrome、Google Drive 等同厂商独立应用。
+  3. [`Sources/atools/Search/AppHotspotIndex.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/AppHotspotIndex.swift)：
+     - 重构 `allSelectableApps` 计算属性：
+       - 接入 `!isCoreServicesDaemon` 彻底排除 `/System/Library/CoreServices` 非 Applications 下的底层守护进程；
+       - 硬拦截 Dock、Finder、Spotlight、ControlCenter 等不可关窗退出的纯系统底座 UI；
+       - 引入物理路径权重机制（`/Applications` > `~/Applications` > `/System/Applications`），对所有扫描项基于 `bundleId` 进行权威单一去重并按本地化名称稳定排序，彻底解决 Safari、Siri 等镜像投影重复问题。
+  4. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - **动态基线同步修剪（Pruning 机制）**：在 `handleAppIndexUpdated(apps:)` 中引入 `knownSet = knownSet.filter { scannedValidBids.contains($0) }`。凡是从磁盘物理卸载的应用，自动从基线中释放。用户重新下载时即刻被准确捕获为“新安装应用”自动入库；
+     - **失效清理联动修剪**：在 `removeAllMissingItems()` 一键清理失效项中，联动反查并修剪被删除应用的 Bundle ID 历史记录；
+     - **“旧应用不误报”绝对防护**：物理磁盘持续存活但用户未放入抽屉的历史既有应用持续锁定在基线中，绝对不会被误灌入抽屉。
+  5. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 增加 `allSelectableApps` 唯一去重与 CoreServices 守护拦截断言；
+     - 增加 AutoQuitQuirks Gemini 伴生 Helper 声明断言；
+     - 增加已卸载应用从 `knownAppBundleIds` 动态修剪释放的单元测试。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**：
+    - `[7/7] Physical Footprint: 146.75 MB`；
+  - `./Scripts/package_app.sh` 生产构建、签名及打包顺利完成；
+  - 生产环境热重启部署后实测：**Paste.app 已即时被自动发现机制精准捕获，自动归入用户指定的「其他」分类中**；
+  - **版本发布与签名**：版本号正式自增至 `v1.3.38 (build 64)`，完成 Ed25519 签名与 GitHub Release 正式发布。
+
+
 
 
 

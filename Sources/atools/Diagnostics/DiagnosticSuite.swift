@@ -2054,6 +2054,8 @@ public enum DiagnosticSuite {
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, ["com.apple.TextEdit"]) == true, "onlyListed mode treats rules as inclusions")
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, ["com.apple.textedit"]) == true, "onlyListed mode handles case-insensitive bundle IDs")
         TestAssertions.expect(watch("com.apple.TextEdit", .regular, true, false, .onlyListed, []) == false, "onlyListed mode ignores unlisted apps")
+        TestAssertions.expect(watch("com.wiheads.paste", .accessory, true, false, .onlyListed, ["com.wiheads.paste"]) == true, "onlyListed mode strictly watches user-specified apps even with accessory policy")
+        TestAssertions.expect(watch("com.wiheads.paste", .accessory, true, false, .allApps, []) == false, "allApps mode never automatically watches unlisted accessory apps")
 
         // 零窗判定：AX 查询失败（nil）绝不能视为零窗，否则误杀
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(0) == true, "0 windows confirmed must schedule quit")
@@ -2107,9 +2109,26 @@ public enum DiagnosticSuite {
         // AppHotspotIndex regular apps filtering
         let allApps = AppHotspotIndex.shared.allApps
         let regularApps = AppHotspotIndex.shared.allRegularApps
+        let selectableApps = AppHotspotIndex.shared.allSelectableApps
         TestAssertions.expect(!allApps.isEmpty, "allApps should not be empty")
         TestAssertions.expect(!regularApps.isEmpty, "allRegularApps should not be empty")
-        TestAssertions.expect(regularApps.count <= allApps.count, "regularApps should be a subset of allApps")
+        TestAssertions.expect(!selectableApps.isEmpty, "allSelectableApps should not be empty")
+
+        // 验证 selectableApps 权威去重与底座守护过滤
+        var seenSelectableBids = Set<String>()
+        for app in selectableApps {
+            if let bid = app.bundleId {
+                TestAssertions.expect(!seenSelectableBids.contains(bid), "allSelectableApps must be strictly deduped by bundleId: \(bid)")
+                seenSelectableBids.insert(bid)
+            }
+            let isDaemon = app.path.contains("/System/Library/CoreServices") && !app.path.contains("/System/Library/CoreServices/Applications")
+            TestAssertions.expect(!isDaemon, "CoreServices daemons must not be in selectableApps: \(app.path)")
+        }
+
+        // 验证 AutoQuitQuirks Gemini 伴生退出配置
+        let geminiCompanions = AutoQuitQuirks.shared.companionBundleIDs(for: "com.google.GeminiMacOS", ownerName: "Gemini")
+        TestAssertions.expect(geminiCompanions.contains("com.google.GeminiMacOS.launcher"), "Gemini companion helper must be declared in Quirks")
+        TestAssertions.expect(AutoQuitQuirks.shared.shouldTerminateHelpersInBundle(for: "com.google.GeminiMacOS", ownerName: "Gemini") == true, "Gemini must allow bundle helper termination")
 
         // Exclusions verified: no prefPanes, no system-excluded daemons/Dock/Finder/Spotlight, no empty bundleIDs
         for app in regularApps {
@@ -2392,6 +2411,12 @@ public enum DiagnosticSuite {
         let reappeared = ConfigManager.shared.config.categories.lazy.flatMap(\.items).first(where: { $0.target == testAppPath })
         TestAssertions.expect(reappeared == nil, "已记录在 Tombstone 的应用不应当被自动扫盘加回 (防死灰复燃)")
     }
+
+    // 验证动态基线同步修剪（Pruning）：彻底卸载的应用必须从 knownAppBundleIds 中修剪，再次安装时能成功重新入库
+    ConfigManager.shared.updateKnownAppBundleIds(["com.apple.calculator", "com.deleted.uninstalled.app"])
+    ConfigManager.shared.handleAppIndexUpdated(apps: [testApp])
+    TestAssertions.expect(!ConfigManager.shared.config.knownAppBundleIds.contains("com.deleted.uninstalled.app"),
+                          "已卸载的应用必须从 knownAppBundleIds 中修剪释放，以便重装时能再次被识别为新应用")
 
     // (b) Test Folder / Virtual Group & Sub-items
     let folderId = UUID()

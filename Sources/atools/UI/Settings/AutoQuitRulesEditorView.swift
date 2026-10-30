@@ -136,23 +136,23 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         guard !isDataLoaded else { return }
         isDataLoaded = true
         AppHotspotIndex.shared.refreshIfStale()
-        apps = AppHotspotIndex.shared.allRegularApps
+        apps = AppHotspotIndex.shared.allSelectableApps
         if apps.isEmpty {
             // 冷启动边缘：应用刚启动、索引首扫尚未完成。扫描结束后自动重载一次。
             AppHotspotIndex.shared.refreshIndex { [weak self] in
                 DispatchQueue.main.async {
                     guard let self = self, self.window != nil, self.apps.isEmpty else { return }
-                    self.apps = AppHotspotIndex.shared.allRegularApps
+                    self.apps = AppHotspotIndex.shared.allSelectableApps
                     self.rebuildFiltered()
                     self.tableView.reloadData()
-                    runtimeLog("[AutoQuit] rules data reloaded after index scan: \(self.filtered.count) regular apps")
+                    runtimeLog("[AutoQuit] rules data reloaded after index scan: \(self.filtered.count) selectable apps")
                 }
             }
         }
         rebuildFiltered()
         tableView.reloadData()
         updateCountLabel()
-        runtimeLog("[AutoQuit] rules data loaded: \(filtered.count) regular apps")
+        runtimeLog("[AutoQuit] rules data loaded: \(filtered.count) selectable apps")
     }
 
     private func rebuildFiltered() {

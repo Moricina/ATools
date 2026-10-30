@@ -1108,10 +1108,10 @@ public final class ConfigManager {
         var knownSet = Set(config.knownAppBundleIds)
         let isFirstBaselineSetup = knownSet.isEmpty
 
-        // 收集本次扫描中所有合规本地应用的 Bundle ID
+        // 收集本次扫描中所有合规本地应用的 Bundle ID（解耦：面向应用抽屉上架，支持菜单栏小工具等实用程序）
         var scannedValidBids = Set<String>()
         for app in apps {
-            guard app.isRegularApp else { continue }
+            guard app.isShelfEligible else { continue }
             let path = app.path
             guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { continue }
             if path.hasPrefix("/Volumes/") { continue }
@@ -1127,6 +1127,14 @@ public final class ConfigManager {
             save()
             runtimeLog("[AutoDiscovery] Established baseline snapshot with \(config.knownAppBundleIds.count) known app(s). Zero apps injected.")
             return
+        }
+
+        // 动态基线同步与修剪（Pruning）：
+        // 只有当前真正存活在物理磁盘上的应用 Bundle ID，才被保留在已知集合中。
+        // 若某个应用已从物理磁盘彻底删除（卸载），将其从 knownSet 中修剪，
+        // 这样一旦用户未来重新从 App Store / DMG 下载安装该应用，就能被精准识别为全新安装并自动入库！
+        knownSet = knownSet.filter { bid in
+            scannedValidBids.contains(bid)
         }
 
         var targetCatIdx: Int?
@@ -1166,7 +1174,7 @@ public final class ConfigManager {
         var newlyAddedCount = 0
 
         for app in apps {
-            guard app.isRegularApp else { continue }
+            guard app.isShelfEligible else { continue }
             let path = app.path
             guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { continue }
             if path.hasPrefix("/Volumes/") { continue }
@@ -1332,6 +1340,20 @@ public final class ConfigManager {
         for item in removedItems {
             removeManagedIconIfUnused(item.customIconPath)
             ThumbnailPipeline.shared.invalidateIcon(forItem: item)
+
+            // 当用户一键清理失效项时，说明该应用已被物理卸载并确认放弃。
+            // 联动从 knownAppBundleIds 和 ignoredAutoAddBundleIds 中修剪掉该应用的历史记录，
+            // 确保如果用户未来重新从 App Store / DMG 下载安装该应用，能被当作“新安装应用”再次自动入库！
+            let targetPath = item.target
+            let appBaseName = (targetPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
+            if !appBaseName.isEmpty {
+                self.config.knownAppBundleIds.removeAll { bid in
+                    bid.localizedCaseInsensitiveContains(appBaseName)
+                }
+                self.config.ignoredAutoAddBundleIds.removeAll { bid in
+                    bid.localizedCaseInsensitiveContains(appBaseName)
+                }
+            }
         }
         save()
         NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
