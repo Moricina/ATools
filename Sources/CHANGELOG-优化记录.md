@@ -4283,6 +4283,32 @@
   - 物理常驻内存 Footprint 维持在 **150.91 MB**；
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
 
+---
+
+### [2026-10-30] 第 125 项：微缩文件夹重命名胶囊 1:1 复刻设置页原生液态水滴质感
+
+- **问题背景与用户诉求**：
+  - 用户提供设置中快捷键录制框截图，提出：“能不能做成设置中的质感”；
+  - 深入排查设置组件架构，设置中标志性的通透水滴胶囊质感来自 [`NativeLiquidButtonBackdrop`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift#L808)（涵盖 Apple 硬件级 `.glassEffect` 折射、顶部天光微弧张力反光、0.75pt 镜面双色发丝切边高光与全圆角半圆两端形态）。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
+     - **底层换装 `NativeLiquidButtonBackdrop`**：将 `TitleCapsuleContainerView` 底板全面换装为 `NativeLiquidButtonBackdrop(cornerRadius: 14)`，1:1 复刻设置中顶部天光微反光与发丝切边高光；
+     - **全圆角自适应弹性胶囊（Dynamic Wrapping）**：
+       - 高度锁定 28pt，两端呈现完美半圆；
+       - 依据文字宽度动态伸缩计算：`clamp(ceil(textWidth) + 36, min: 96, max: 200)`，短名称紧凑饱满，长名称优雅延伸，与右侧关闭按钮保留 >=70pt 安全护城河；
+     - **三态联动与焦点强化**：
+       - 常态：清透水滴胶囊；
+       - 悬停态：鼠标滑过时自然点亮天光层与发丝高光，光标切为 `pointingHand`；
+       - 编辑态：`backdrop.isPrimary = true`，并挂载 1.25pt 系统强调色聚焦高光；
+     - **全场景自愈防护**：启动网格项（`handleItemClicked`）与右键菜单项操作前优先触发 `dismissEditingIfNeeded()`，杜绝悬挂输入光标；增加 `viewDidChangeEffectiveAppearance()` 实现深浅色主题无缝秒级跟随。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **147.05 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
+
+
 
 
 

@@ -26,6 +26,27 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     private let gridContentView = FlippedGridView()
     private var subItemButtons: [ShelfItemButton] = []
     private var isCancellingTitleEdit = false
+    private var capsuleWidthConstraint: NSLayoutConstraint?
+
+    private func calculateCapsuleWidth(for text: String) -> CGFloat {
+        let font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        let textWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        let desired = ceil(textWidth) + 36
+        return max(96, min(200, desired))
+    }
+
+    private func updateCapsuleWidth(for text: String, animated: Bool) {
+        let newWidth = calculateCapsuleWidth(for: text)
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                capsuleWidthConstraint?.animator().constant = newWidth
+            }
+        } else {
+            capsuleWidthConstraint?.constant = newWidth
+        }
+    }
 
     override public var mouseDownCanMoveWindow: Bool { false }
 
@@ -36,6 +57,13 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     override public func resetCursorRects() {
         super.resetCursorRects()
         addCursorRect(bounds, cursor: .arrow)
+    }
+
+    override public func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        titleCapsuleView.isDark = glassIsDark
+        titleField.textColor = GlassPalette.textPrimary(isDark: glassIsDark)
+        closeButton.contentTintColor = GlassPalette.textSecondary(isDark: glassIsDark)
     }
 
     public init(folderItem: LauncherItem, subItems: [LauncherItem], categoryId: UUID, frame: NSRect = .zero) {
@@ -133,8 +161,10 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         let heightConstraint = cardContainer.heightAnchor.constraint(equalToConstant: 240)
         heightConstraint.priority = .defaultHigh
 
-        let capsuleWidth = titleCapsuleView.widthAnchor.constraint(equalToConstant: 200)
+        let initialWidth = calculateCapsuleWidth(for: folderItem.name.isEmpty ? "未命名文件夹" : folderItem.name)
+        let capsuleWidth = titleCapsuleView.widthAnchor.constraint(equalToConstant: initialWidth)
         capsuleWidth.priority = .defaultHigh
+        capsuleWidthConstraint = capsuleWidth
 
         NSLayoutConstraint.activate([
             dimBackdropView.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -248,18 +278,21 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     }
 
     @objc private func contextOpenItem(_ sender: NSMenuItem) {
+        dismissEditingIfNeeded()
         if let item = sender.representedObject as? LauncherItem {
             delegate?.folderOverlay(self, didSelectItem: item)
         }
     }
 
     @objc private func contextRemoveItem(_ sender: NSMenuItem) {
+        dismissEditingIfNeeded()
         if let item = sender.representedObject as? LauncherItem {
             delegate?.folderOverlay(self, didRemoveItemFromFolder: item.id, folderId: folderItem.id)
         }
     }
 
     @objc private func handleItemClicked(_ sender: ShelfItemButton) {
+        dismissEditingIfNeeded()
         delegate?.folderOverlay(self, didSelectItem: sender.item)
     }
 
@@ -288,6 +321,7 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             isCancellingTitleEdit = true
             titleField.stringValue = folderItem.name
+            updateCapsuleWidth(for: folderItem.name, animated: true)
             window?.makeFirstResponder(nil)
             titleField.isEditable = false
             titleField.isSelectable = false
@@ -339,9 +373,11 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         if !newTitle.isEmpty && newTitle != folderItem.name {
             folderItem.name = newTitle
             titleField.stringValue = newTitle
+            updateCapsuleWidth(for: newTitle, animated: true)
             delegate?.folderOverlay(self, didRenameFolder: folderItem.id, to: newTitle)
         } else {
             titleField.stringValue = folderItem.name
+            updateCapsuleWidth(for: folderItem.name, animated: true)
         }
     }
 
@@ -362,7 +398,7 @@ final class TitleCapsuleContainerView: NSView {
     }
     var isHovered: Bool = false {
         didSet {
-            if oldValue != isHovered && !isEditing {
+            if oldValue != isHovered {
                 updateAppearance(animated: true)
             }
         }
@@ -373,14 +409,25 @@ final class TitleCapsuleContainerView: NSView {
         }
     }
 
+    private let backdrop = NativeLiquidButtonBackdrop(cornerRadius: 14)
     private var trackingArea: NSTrackingArea?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 14
         layer?.masksToBounds = false
         toolTip = "双击以重命名"
+
+        backdrop.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backdrop.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backdrop.topAnchor.constraint(equalTo: topAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClick))
         doubleClick.numberOfClicksRequired = 2
         addGestureRecognizer(doubleClick)
@@ -435,64 +482,41 @@ final class TitleCapsuleContainerView: NSView {
 
     override func layout() {
         super.layout()
-        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 8, cornerHeight: 8, transform: nil)
+        let r = bounds.height / 2
+        layer?.cornerRadius = r
+        backdrop.cornerRadius = r
     }
 
     func updateAppearance(animated: Bool) {
+        backdrop.isDark = isDark
+        backdrop.isHovered = isHovered
+        backdrop.isPrimary = isEditing
+
         guard let layer = self.layer else { return }
 
-        let targetBgColor: CGColor
         let targetBorderColor: CGColor
         let targetBorderWidth: CGFloat
-        let targetShadowOpacity: Float
 
         if isEditing {
-            if isDark {
-                targetBgColor = NSColor(white: 0.16, alpha: 0.90).cgColor
-                targetBorderColor = NSColor.controlAccentColor.withAlphaComponent(0.80).cgColor
-            } else {
-                targetBgColor = NSColor.white.withAlphaComponent(0.92).cgColor
-                targetBorderColor = NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
-            }
-            targetBorderWidth = 1.5
-            targetShadowOpacity = 0.16
-        } else if isHovered {
-            if isDark {
-                targetBgColor = NSColor.white.withAlphaComponent(0.08).cgColor
-                targetBorderColor = NSColor.white.withAlphaComponent(0.18).cgColor
-            } else {
-                targetBgColor = NSColor.black.withAlphaComponent(0.05).cgColor
-                targetBorderColor = NSColor.black.withAlphaComponent(0.10).cgColor
-            }
-            targetBorderWidth = 1.0
-            targetShadowOpacity = 0.0
+            targetBorderColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
+            targetBorderWidth = 1.25
         } else {
-            targetBgColor = NSColor.clear.cgColor
             targetBorderColor = NSColor.clear.cgColor
             targetBorderWidth = 0.0
-            targetShadowOpacity = 0.0
         }
-
-        layer.shadowColor = NSColor.black.cgColor
-        layer.shadowOffset = CGSize(width: 0, height: -2)
-        layer.shadowRadius = 6
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.16
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                layer.backgroundColor = targetBgColor
                 layer.borderColor = targetBorderColor
                 layer.borderWidth = targetBorderWidth
-                layer.shadowOpacity = targetShadowOpacity
             }
         } else {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            layer.backgroundColor = targetBgColor
             layer.borderColor = targetBorderColor
             layer.borderWidth = targetBorderWidth
-            layer.shadowOpacity = targetShadowOpacity
             CATransaction.commit()
         }
     }
