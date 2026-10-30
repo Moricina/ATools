@@ -21,7 +21,7 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     private let backdrop = VisualEffectBackdropView()
     private let titleField = NSTextField()
     private let closeButton = NSButton()
-    private let scrollView = NSScrollView()
+    let scrollView = ModernScrollView()
     private let gridContentView = FlippedGridView()
     private var subItemButtons: [ShelfItemButton] = []
     private var isCancellingTitleEdit = false
@@ -107,7 +107,11 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         // 滚动与网格区
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.hasVerticalScroller = true
+        scrollView.verticalScroller = KnobOnlyScroller()
         scrollView.hasHorizontalScroller = false
+        scrollView.horizontalScrollElasticity = .none
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.documentView = gridContentView
         cardContainer.addSubview(scrollView)
@@ -175,6 +179,11 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         layoutGrid()
     }
 
+    override public func layout() {
+        super.layout()
+        layoutGrid()
+    }
+
     private func layoutGrid() {
         let cols = 3
         let itemWidth: CGFloat = 96
@@ -182,20 +191,25 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         let spacingX: CGFloat = 10
         let spacingY: CGFloat = 10
 
+        let availableWidth = scrollView.bounds.width > 0 ? scrollView.bounds.width : 316
+        let contentWidth = max(316, availableWidth)
+        let totalGridWidth = CGFloat(cols) * itemWidth + CGFloat(cols - 1) * spacingX
+        let offsetX = max(0, (contentWidth - totalGridWidth) / 2)
+
         var curX: CGFloat = 0
         var curY: CGFloat = 0
 
         for (i, btn) in subItemButtons.enumerated() {
             let col = i % cols
             let row = i / cols
-            curX = CGFloat(col) * (itemWidth + spacingX)
+            curX = offsetX + CGFloat(col) * (itemWidth + spacingX)
             curY = CGFloat(row) * (itemHeight + spacingY)
             btn.frame = NSRect(x: curX, y: curY, width: itemWidth, height: itemHeight)
         }
 
         let totalRows = (subItemButtons.count + cols - 1) / cols
         let totalHeight = max(160, CGFloat(totalRows) * (itemHeight + spacingY))
-        gridContentView.frame = NSRect(x: 0, y: 0, width: 310, height: totalHeight)
+        gridContentView.frame = NSRect(x: 0, y: 0, width: contentWidth, height: totalHeight)
     }
 
     private func makeContextMenu(for item: LauncherItem) -> NSMenu {

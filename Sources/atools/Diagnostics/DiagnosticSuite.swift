@@ -2429,6 +2429,12 @@ public enum DiagnosticSuite {
     let testFolder = LauncherItem(id: UUID(), name: "测试浮层隔离", itemType: .application, target: "", isVirtualGroup: true)
     suspendPanel.shelfViewController.shelfGrid(suspendGrid, didRequestOpenFolder: testFolder, subItems: [subItemA])
     TestAssertions.expect(suspendPanel.shelfViewController.activeFolderOverlay != nil, "打开文件夹浮层后 activeFolderOverlay 不应为 nil")
+    if let overlay = suspendPanel.shelfViewController.activeFolderOverlay {
+        TestAssertions.expect(overlay.scrollView.verticalScroller is KnobOnlyScroller, "微缩文件夹内必须使用 KnobOnlyScroller 晶体微胶囊滚动条")
+        TestAssertions.expect(overlay.scrollView.scrollerStyle == .overlay, "微缩文件夹滚动条必须锁定为 .overlay 模式")
+        TestAssertions.expect(overlay.scrollView.autohidesScrollers == true, "微缩文件夹滚动条必须开启 autohidesScrollers 自动隐匿")
+        TestAssertions.expect(overlay.scrollView.horizontalScrollElasticity == .none, "微缩文件夹滚动条必须禁用横向微晃弹性")
+    }
     TestAssertions.expect(suspendGrid.isInteractionSuspended == true, "浮层打开时底座网格必须处于交互挂起状态")
 
     let dummyReturnEvent = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)!

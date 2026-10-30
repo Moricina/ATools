@@ -4229,6 +4229,32 @@
   - 物理常驻内存 Footprint 维持在 **149.08 MB**；
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启生效。
 
+---
+
+### [2026-10-30] 第 123 项：微缩文件夹展开浮层滚动条无槽化现代化重构与对齐
+
+- **问题背景与病灶定位**：
+  - 用户反馈在微缩文件夹展开浮层（`ShelfFolderPopover`）中，右侧一直常驻一个粗大白色柱条（如图 1 所示），即使文件夹内仅有 2 个子应用且完全不需要滚动时也死死挂在右边；
+  - 经排查定位到根因：
+    1. **使用原生裸 `NSScrollView` 且缺失 Overlay 锁定**：未设置 `scrollerStyle = .overlay`，且未配置 `autohidesScrollers = true`；
+    2. **macOS 系统降级至 Legacy 槽道模式**：在外接鼠标或系统偏好设置下，AppKit 强制分配宽度达 15~16pt 的传统白色滚动槽（Track Slot），不仅常驻占位，且侵占了卡片右侧的有效内容宽度；
+    3. **内容未溢出却常驻占位**：子项 <= 6 个（1~2 行）时内容高度远低于可视高度，但缺乏自动隐藏与比例守卫，导致白色粗条破坏了高斯毛玻璃界面的纯净通透感。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
+     - **全面换装 `ModernScrollView` + `KnobOnlyScroller`**：彻底覆写 `drawKnobSlot` 抹去所有白色/灰色背景槽、边框与凹槽，收敛为 4.5pt 宽的悬浮圆角晶体微胶囊；
+     - **严密自动隐匿（Autohide Guard）**：启用 `autohidesScrollers = true`，当文件夹内容无需滚动时（<= 6 个应用），滚动条 100% 隐藏，0 像素占位，零可见；内容超长需滚动时，仅在滚动或悬停时微淡入，停止操作后自动隐匿；
+     - **防触控板误晃微弹性锁定**：显式设置 `horizontalScrollElasticity = .none` 与 `hasHorizontalScroller = false`，杜绝横向微晃漂移；
+     - **内容区域对称居中调优**：在 `layoutGrid()` 中根据容器可用宽度动态计算水平偏移 `offsetX`，3 列应用图标在 316pt 内容区内实现严格居中对称，并在 `layout()` 中响应尺寸变化。
+  2. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在测试 `[14]` 中增加断言：验证打开文件夹浮层后其内部滚动条必须为 `KnobOnlyScroller` 实例、`scrollerStyle == .overlay`、`autohidesScrollers == true` 且 `horizontalScrollElasticity == .none`。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 稳定在 **147.74 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
+
+
 
 
 
