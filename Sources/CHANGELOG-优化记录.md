@@ -4341,7 +4341,8 @@
 
 - **验证与测试结果**：
   - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
-  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效；
+  - **版本发布与签名**：版本号正式自增至 `v1.3.37 (build 63)`，完成 Ed25519 签名与 GitHub Release 正式发布。
 
 
 

@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.36}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-62}"
+VERSION="${ATOOLS_VERSION:-1.3.37}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-63}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -101,12 +101,47 @@ else
     ./Scripts/package_app.sh
 fi
 
+if [ -z "${GH_TOKEN:-}" ]; then
+    KEYCHAIN_TOKEN=$(security find-generic-password -s "gh:github.com" -w 2>/dev/null || true)
+    if [[ "$KEYCHAIN_TOKEN" == go-keyring-base64:* ]]; then
+        export GH_TOKEN=$(echo "${KEYCHAIN_TOKEN#go-keyring-base64:}" | base64 -d)
+    fi
+fi
+
 GH_BIN="$HOME/bin/gh"
 if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
 NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 综合体验大版本更新说明
+
+### ✨ 原生液态水滴微缩文件夹与视觉晶体质感重构 (Folder & Crystal Architecture)
+1. **1:1 复刻设置页原生液态水滴胶囊 (NativeLiquidButtonBackdrop)**：
+   - 微缩文件夹重命名胶囊全面换装原生液态水滴底衬，涵盖 Apple 硬件级 \`.glassEffect\` 折射、顶部天光微弧张力反光与 0.75pt 镜面双色发丝切边高光；
+   - 移除生硬蓝色外边框，编辑态交由纯粹晶体微光收口，保持与设置页一致的浑然一体纯净质感；
+   - **全圆角自适应弹性胶囊**：两端呈现完美半圆，依据文字宽度动态弹性伸缩，与右侧关闭按钮保留 >=70pt 黄金护城河。
+2. **像素级绝对垂直居中校准**：
+   - 针对 macOS Cocoa \`NSTextField\` 基线偏移增加 \`+1.5pt\` 垂直补偿；
+   - 在 Retina 屏针对中文字符（如「虚拟机」、「办公」）与英文字符（如「Chrome」、「codex」）实现 **14px 对 14px（7.0pt 对 7.0pt，差异为 0）** 的绝对物理对称，彻底消灭视觉上浮感。
+3. **内联改名状态机与空白失焦自愈**：
+   - 双击文件夹标题直接原地切入内联编辑，回车即时保存，Esc 撤销还原，点击空白或关闭按钮平滑收起；
+   - 搭载自动去除首尾空白与防空串自愈回退机制，操作前自动收口悬挂光标，深浅色外观秒级动态跟随。
+4. **浮层滚动条无槽化与对称居中重构**：
+   - 彻底移除展开浮层原生灰色滑槽底衬，换装无槽化原生悬浮滑块；左右内边距绝对居中对齐。
+5. **文件夹浮层全面交互隔离**：
+   - 点击浮层严格拦截事件穿透至底层抽屉面板，禁止误拖拽抽屉窗口；
+   - 加固多应用拖拽合并灵敏度（中心区域判定与吸附动画）、文件夹专属右键菜单与空文件夹自愈清理。
+
+---
+
+### 🎨 视觉深度提纯方案 B (Pure Ink Theme & Visual Contrast)
+1. **浅色模式墨黑字体提纯加重**：
+   - 针对浅色毛玻璃文字可读性重构，文字颜色提纯为深邃墨黑（#1A1A1A / 纯黑），消除强对比背景下的发灰发白感；
+   - 分类胶囊与网格项文字粗细微调加重，配合微投影强化，在任何明亮桌面或窗口前均清晰锐利。
+2. **原生液态防穿透底衬加固**：
+   - 全面加固防穿透底衬与高光阴影双色切边，彻底杜绝复杂壁纸下的视觉噪点与穿透干扰。
+
+---
 
 ### 🚀 抽屉启动器多维体验升级 (Shelf Evolution)
 1. **多策略智能排序与偏好方案选择 (Multi-Policy Sorting)**：
@@ -118,34 +153,31 @@ NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 综合体验大版本更新
    - 偏好设置新增「记录应用启动频次」开关，关闭后本地不再统计启动计次与时间戳，彻底尊重用户隐私。
 3. **新装应用静默感知与自动入库 (Auto Discovery & Tombstone)**：
    - 基于 FSEvents 深度防抖感知应用安装与变动，零额外常驻守护进程消耗；
-   - 自动校验应用 Bundle 完整性与可执行路径，自动入库至工作分类；
+   - 自动校验应用 Bundle 完整性与可执行路径，自动入库至指定分类；
    - 搭载 Tombstone 墓碑机制：用户手动移除某应用后，该应用 ID 立即记入墓碑，防止后续再次自动复活入库。
-4. **多应用拖拽合并文件夹与液态毛玻璃浮层 (Folder Nesting)**：
-   - 拖拽图标至另一图标中心区域悬停 0.45 秒即可合并建文件夹；
-   - 原生液态毛玻璃弹层展示文件夹子应用，支持 2x2 四宫格微缩图、内联重命名、右键移出与空文件夹自愈清理。
-5. **单项全局快捷键与 ⌘1~⌘9 抽屉秒启**：
+4. **单项全局快捷键与 ⌘1~⌘9 抽屉秒启**：
    - 深度编辑弹窗支持为任意单独应用/脚本/网址配置独占全局快捷键；
    - 抽屉激活时原生支持 \`⌘1\` ~ \`⌘9\` 直出秒启当前分类前 9 个应用。
-6. **橡皮筋框选多选与批量原子操作 (Marquee Batch Actions)**：
+5. **橡皮筋框选多选与批量原子操作 (Marquee Batch Actions)**：
    - 抽屉空白处按住鼠标拖拽拉出液态虚线半透明选框，支持 \`⌘\`/\`⇧\` 连续增减选；
    - 选中项呈现 Accent 蓝底白字药丸与液态底衬；支持 \`⌫\` (Delete) 快捷键或右键批量移除入墓碑、批量原子搬移至指定分类、批量新建文件夹。
 
 ---
 
-### 🛡️ 关窗退出 (AutoQuit) 现代化架构重构
-1. **全面剥离录屏权限依赖（向 SwiftQuit 看齐）**：
+### 🛡️ 关窗退出 (AutoQuit) 现代化架构重构与深度应用适配
+1. **适配 Google Gemini 等关窗隐藏应用**：
+   - 针对 Gemini、Catalyst 等关窗时仅隐藏至后台而非销毁窗口的特殊行为，实施失焦事件竞争解耦与终审放行闭环；
+2. **全面剥离录屏权限依赖（向 SwiftQuit 看齐）**：
    - 彻底移除 \`CGPreflightScreenCaptureAccess\`，仅需系统「辅助功能 (Accessibility)」授权即可无缝工作；
    - 权限与职责严格隔离：AX 语义负责窗口列表与角色，WindowServer 仅核验零隐私权限公开几何数据。
-2. **声明式规则库与通用幽灵图层过滤引擎 (AutoQuitQuirks)**：
+3. **声明式规则库与通用幽灵图层过滤引擎 (AutoQuitQuirks)**：
    - 解耦写死的硬编码名单，建立集中式规则引擎；
    - 自动化清洗系统代理视图、CEF 缓冲画布、通用设置/偏好窗口 orderOut 残余与微型光标。
-3. **原生液态毛玻璃可撤销倒计时 HUD**：
+4. **原生液态毛玻璃可撤销倒计时 HUD**：
    - 退出前在屏幕底部弹出轻柔倒计时胶囊与「取消」按钮，撤销后当次会话智能抑制；
    - 零按键拦截、零常驻显存，退出后即刻释放 Window Backing Store。
-4. **决策诊断流水线与设置页检查器 (Trace & Inspector)**：
-   - 纯值类型环形缓冲区记录最近 50 条裁决，设置页增设「诊断与决策历史」独立面板，支持一键导出排障报告。
-5. **OPPO 互联等 Electron 应用 \`win.hide()\` 离屏层专项根治**：
-   - 准确过滤隐藏至托盘或后台的离屏窗口残余，双向权威确诊零窗，点击红叉即刻安全退出。"
+5. **决策诊断流水线与设置页检查器 (Trace & Inspector)**：
+   - 纯值类型环形缓冲区记录最近 50 条裁决，设置页增设「诊断与决策历史」独立面板，支持一键导出排障报告。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
