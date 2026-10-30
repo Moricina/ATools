@@ -19,6 +19,7 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     private let dimBackdropView = FolderDimBackdropView()
     private let cardContainer = FolderCardContainerView()
     private let backdrop = VisualEffectBackdropView()
+    let titleCapsuleView = TitleCapsuleContainerView()
     private let titleField = NSTextField()
     private let closeButton = NSButton()
     let scrollView = ModernScrollView()
@@ -71,13 +72,24 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         cardContainer.layer?.shadowOffset = CGSize(width: 0, height: -4)
         cardContainer.layer?.shadowRadius = 16
         cardContainer.translatesAutoresizingMaskIntoConstraints = false
+        cardContainer.onBlankClicked = { [weak self] in
+            self?.dismissEditingIfNeeded()
+        }
         addSubview(cardContainer)
 
         // 液态毛玻璃背景
         backdrop.translatesAutoresizingMaskIntoConstraints = false
         cardContainer.addSubview(backdrop)
 
-        // 顶部标题（默认纯文本，双击进入内联重命名）
+        // 顶部标题晶体输入胶囊（双击改名唤醒聚焦环，悬停微光手形）
+        titleCapsuleView.translatesAutoresizingMaskIntoConstraints = false
+        titleCapsuleView.isDark = glassIsDark
+        titleCapsuleView.onDoubleClicked = { [weak self] in
+            self?.beginEditingTitle()
+        }
+        cardContainer.addSubview(titleCapsuleView)
+
+        // 顶部标题（放入胶囊内部，垂直绝对居中锁定基线）
         titleField.translatesAutoresizingMaskIntoConstraints = false
         titleField.stringValue = folderItem.name.isEmpty ? "未命名文件夹" : folderItem.name
         titleField.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
@@ -92,7 +104,7 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         let doubleClickGesture = NSClickGestureRecognizer(target: self, action: #selector(handleTitleDoubleClicked))
         doubleClickGesture.numberOfClicksRequired = 2
         titleField.addGestureRecognizer(doubleClickGesture)
-        cardContainer.addSubview(titleField)
+        titleCapsuleView.addSubview(titleField)
 
         // 关闭按钮
         closeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -121,6 +133,9 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         let heightConstraint = cardContainer.heightAnchor.constraint(equalToConstant: 240)
         heightConstraint.priority = .defaultHigh
 
+        let capsuleWidth = titleCapsuleView.widthAnchor.constraint(equalToConstant: 200)
+        capsuleWidth.priority = .defaultHigh
+
         NSLayoutConstraint.activate([
             dimBackdropView.leadingAnchor.constraint(equalTo: leadingAnchor),
             dimBackdropView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -139,17 +154,23 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
             backdrop.topAnchor.constraint(equalTo: cardContainer.topAnchor),
             backdrop.bottomAnchor.constraint(equalTo: cardContainer.bottomAnchor),
 
-            titleField.topAnchor.constraint(equalTo: cardContainer.topAnchor, constant: 14),
-            titleField.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor, constant: 40),
-            titleField.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -40),
+            titleCapsuleView.topAnchor.constraint(equalTo: cardContainer.topAnchor, constant: 11),
+            titleCapsuleView.centerXAnchor.constraint(equalTo: cardContainer.centerXAnchor),
+            titleCapsuleView.heightAnchor.constraint(equalToConstant: 28),
+            capsuleWidth,
+            titleCapsuleView.widthAnchor.constraint(lessThanOrEqualTo: cardContainer.widthAnchor, constant: -80),
+
+            titleField.leadingAnchor.constraint(equalTo: titleCapsuleView.leadingAnchor, constant: 8),
+            titleField.trailingAnchor.constraint(equalTo: titleCapsuleView.trailingAnchor, constant: -8),
+            titleField.centerYAnchor.constraint(equalTo: titleCapsuleView.centerYAnchor),
             titleField.heightAnchor.constraint(equalToConstant: 22),
 
-            closeButton.centerYAnchor.constraint(equalTo: titleField.centerYAnchor),
+            closeButton.centerYAnchor.constraint(equalTo: titleCapsuleView.centerYAnchor),
             closeButton.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -14),
             closeButton.widthAnchor.constraint(equalToConstant: 20),
             closeButton.heightAnchor.constraint(equalToConstant: 20),
 
-            scrollView.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 10),
+            scrollView.topAnchor.constraint(equalTo: titleCapsuleView.bottomAnchor, constant: 9),
             scrollView.leadingAnchor.constraint(equalTo: cardContainer.leadingAnchor, constant: 12),
             scrollView.trailingAnchor.constraint(equalTo: cardContainer.trailingAnchor, constant: -12),
             scrollView.bottomAnchor.constraint(equalTo: cardContainer.bottomAnchor, constant: -12)
@@ -247,10 +268,20 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     }
 
     public func beginEditingTitle() {
+        guard !titleCapsuleView.isEditing else { return }
+        titleCapsuleView.isEditing = true
         titleField.isEditable = true
         titleField.isSelectable = true
         window?.makeFirstResponder(titleField)
         titleField.currentEditor()?.selectAll(nil)
+    }
+
+    public func dismissEditingIfNeeded() {
+        guard titleCapsuleView.isEditing else { return }
+        if window?.firstResponder === titleField || window?.firstResponder === titleField.currentEditor() {
+            window?.makeFirstResponder(nil)
+        }
+        finishEditingTitle()
     }
 
     public func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -260,18 +291,21 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
             window?.makeFirstResponder(nil)
             titleField.isEditable = false
             titleField.isSelectable = false
+            titleCapsuleView.isEditing = false
             isCancellingTitleEdit = false
             return true
         } else if commandSelector == #selector(NSResponder.insertNewline(_:)) {
             window?.makeFirstResponder(nil)
             titleField.isEditable = false
             titleField.isSelectable = false
+            titleCapsuleView.isEditing = false
             return true
         }
         return false
     }
 
     public func prepareForClose() {
+        titleCapsuleView.isEditing = false
         if window?.firstResponder === titleField || window?.firstResponder === titleField.currentEditor() {
             window?.makeFirstResponder(nil)
         }
@@ -297,9 +331,14 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
         guard !isCancellingTitleEdit else { return }
         titleField.isEditable = false
         titleField.isSelectable = false
-        let newTitle = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        titleCapsuleView.isEditing = false
+        var newTitle = titleField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if newTitle.count > 24 {
+            newTitle = String(newTitle.prefix(24))
+        }
         if !newTitle.isEmpty && newTitle != folderItem.name {
             folderItem.name = newTitle
+            titleField.stringValue = newTitle
             delegate?.folderOverlay(self, didRenameFolder: folderItem.id, to: newTitle)
         } else {
             titleField.stringValue = folderItem.name
@@ -311,10 +350,160 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
     }
 }
 
+final class TitleCapsuleContainerView: NSView {
+    override var mouseDownCanMoveWindow: Bool { false }
+    var onDoubleClicked: (() -> Void)?
+    var isEditing: Bool = false {
+        didSet {
+            if oldValue != isEditing {
+                updateAppearance(animated: true)
+            }
+        }
+    }
+    var isHovered: Bool = false {
+        didSet {
+            if oldValue != isHovered && !isEditing {
+                updateAppearance(animated: true)
+            }
+        }
+    }
+    var isDark: Bool = false {
+        didSet {
+            updateAppearance(animated: false)
+        }
+    }
+
+    private var trackingArea: NSTrackingArea?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        layer?.masksToBounds = false
+        toolTip = "双击以重命名"
+        let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(handleDoubleClick))
+        doubleClick.numberOfClicksRequired = 2
+        addGestureRecognizer(doubleClick)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    @objc private func handleDoubleClick() {
+        onDoubleClicked?()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = trackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        isHovered = true
+        if !isEditing {
+            NSCursor.pointingHand.set()
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        isHovered = false
+        if !isEditing {
+            NSCursor.arrow.set()
+        }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        if !isEditing && isHovered {
+            NSCursor.pointingHand.set()
+        } else {
+            super.cursorUpdate(with: event)
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.shadowPath = CGPath(roundedRect: bounds, cornerWidth: 8, cornerHeight: 8, transform: nil)
+    }
+
+    func updateAppearance(animated: Bool) {
+        guard let layer = self.layer else { return }
+
+        let targetBgColor: CGColor
+        let targetBorderColor: CGColor
+        let targetBorderWidth: CGFloat
+        let targetShadowOpacity: Float
+
+        if isEditing {
+            if isDark {
+                targetBgColor = NSColor(white: 0.16, alpha: 0.90).cgColor
+                targetBorderColor = NSColor.controlAccentColor.withAlphaComponent(0.80).cgColor
+            } else {
+                targetBgColor = NSColor.white.withAlphaComponent(0.92).cgColor
+                targetBorderColor = NSColor.controlAccentColor.withAlphaComponent(0.75).cgColor
+            }
+            targetBorderWidth = 1.5
+            targetShadowOpacity = 0.16
+        } else if isHovered {
+            if isDark {
+                targetBgColor = NSColor.white.withAlphaComponent(0.08).cgColor
+                targetBorderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+            } else {
+                targetBgColor = NSColor.black.withAlphaComponent(0.05).cgColor
+                targetBorderColor = NSColor.black.withAlphaComponent(0.10).cgColor
+            }
+            targetBorderWidth = 1.0
+            targetShadowOpacity = 0.0
+        } else {
+            targetBgColor = NSColor.clear.cgColor
+            targetBorderColor = NSColor.clear.cgColor
+            targetBorderWidth = 0.0
+            targetShadowOpacity = 0.0
+        }
+
+        layer.shadowColor = NSColor.black.cgColor
+        layer.shadowOffset = CGSize(width: 0, height: -2)
+        layer.shadowRadius = 6
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.16
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer.backgroundColor = targetBgColor
+                layer.borderColor = targetBorderColor
+                layer.borderWidth = targetBorderWidth
+                layer.shadowOpacity = targetShadowOpacity
+            }
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer.backgroundColor = targetBgColor
+            layer.borderColor = targetBorderColor
+            layer.borderWidth = targetBorderWidth
+            layer.shadowOpacity = targetShadowOpacity
+            CATransaction.commit()
+        }
+    }
+}
+
 private final class FolderCardContainerView: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
+    var onBlankClicked: (() -> Void)?
+
     override func mouseDown(with event: NSEvent) {
-        // 阻止点击空白区域冒泡到上层 ShelfRootView 触发窗口拖动
+        onBlankClicked?()
     }
 }
 

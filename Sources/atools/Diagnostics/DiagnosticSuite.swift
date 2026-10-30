@@ -2434,6 +2434,11 @@ public enum DiagnosticSuite {
         TestAssertions.expect(overlay.scrollView.scrollerStyle == .overlay, "微缩文件夹滚动条必须锁定为 .overlay 模式")
         TestAssertions.expect(overlay.scrollView.autohidesScrollers == true, "微缩文件夹滚动条必须开启 autohidesScrollers 自动隐匿")
         TestAssertions.expect(overlay.scrollView.horizontalScrollElasticity == .none, "微缩文件夹滚动条必须禁用横向微晃弹性")
+        TestAssertions.expect(overlay.titleCapsuleView.isEditing == false, "初始打开时重命名胶囊应处于非编辑态")
+        overlay.beginEditingTitle()
+        TestAssertions.expect(overlay.titleCapsuleView.isEditing == true, "beginEditingTitle 后重命名胶囊应进入编辑激活态")
+        overlay.dismissEditingIfNeeded()
+        TestAssertions.expect(overlay.titleCapsuleView.isEditing == false, "dismissEditingIfNeeded 后重命名胶囊应退出编辑态")
     }
     TestAssertions.expect(suspendGrid.isInteractionSuspended == true, "浮层打开时底座网格必须处于交互挂起状态")
 

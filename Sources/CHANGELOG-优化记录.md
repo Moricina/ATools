@@ -4254,6 +4254,36 @@
   - 物理常驻内存 Footprint 稳定在 **147.74 MB**；
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
 
+---
+
+### [2026-10-30] 第 124 项：微缩文件夹双击重命名晶体输入胶囊 (Glass Input Capsule) 质感重构
+
+- **问题背景与病灶定位**：
+  - 用户反馈微缩文件夹点开后，双击标题改名的样子“给人感受不强”，仅文本被系统浅蓝矩形高亮，缺少输入框感知与现代拟物交互质感；
+  - 排查定位出三大细节病灶：
+    1. **容器边界缺失**：原标题为裸 `NSTextField`，双击编辑时无任何外框、底衬与聚焦环，仅文字自身产生系统选中蓝条，形似不小心划词而非进入编辑；
+    2. **示能性（Affordance）缺失**：常态下无悬停提示与手势引导，用户难以直观发现双击改名功能；
+    3. **空白点击失焦提交死角**：原 `FolderCardContainerView` 拦截了所有 `mouseDown` 但未触发 `window?.makeFirstResponder(nil)`，导致编辑中随手点击卡片空白区无法自动保存并退出编辑态，违背 macOS 访达交互习惯。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
+     - **构建 `TitleCapsuleContainerView` 复合容器**：
+       - **常态（静置）**：保持高斯毛玻璃纯净通透，文字垂直绝对居中锁定基线（0 像素跳动）；
+       - **悬停态（Hover 示能引导）**：鼠标滑过时浮现 0.08 alpha 极浅晶体微光与指示手形，气泡提示 `双击以重命名`，大幅扩展有效双击命中热区至 200pt 居中胶囊；
+       - **编辑态（聚焦唤醒）**：伴随 0.16s 柔和淡入动画唤醒晶体输入胶囊。浅色模式采用纯白水滴微熏漫射底（`white 88%`），深色模式采用深黑曜石微透底（`white 16% alpha 90%`），并搭载 1.5pt 系统强调色（`controlAccentColor`）聚焦高光光晕；
+       - **性能优化**：显式预设 `layer.shadowPath` 贝塞尔圆角路径，杜绝在毛玻璃背景上发生离屏渲染与毛刺残影；
+     - **交互闭环与死角自愈**：
+       - `FolderCardContainerView` 增加 `onBlankClicked`，点击卡片内任意空白区域立即调用 `dismissEditingIfNeeded()`，平滑失焦并提交重命名；
+       - 统一状态机收口：双击进入编辑、回车提交、Esc 撤销还原、点击遮罩或关闭按钮时统一平滑收起胶囊并同步数据。
+  2. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在测试 `[14]` 中增加断言：验证打开文件夹浮层后 `titleCapsuleView` 初始为非编辑态、调用 `beginEditingTitle()` 后正确进入编辑态、调用 `dismissEditingIfNeeded()` 后平滑退出编辑态。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **150.91 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
+
+
 
 
 
