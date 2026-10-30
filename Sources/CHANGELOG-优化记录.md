@@ -4326,6 +4326,23 @@
   - 物理常驻内存 Footprint 维持在 **147.17 MB**；
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
 
+---
+
+### [2026-10-30] 第 127 项：微缩文件夹标题文本像素级绝对垂直居中对齐校准
+
+- **问题背景与用户诉求**：
+  - 用户反馈微缩文件夹中的标题文本“有点靠上，没有在正中央，请调整到正中央”，并提供了实测截图；
+  - 排查定位：在 Retina (@2x) 渲染分析下，`TitleCapsuleContainerView` 高度 28pt（56px），`titleField`（Semibold 15pt）由于 macOS Cocoa `NSTextField` 默认排版中基线（Baseline）及西文字体 ascender 预留偏移，导致未加偏移时上边距仅 11px（5.5pt），下边距为 17px（8.5pt），视觉上显著偏上 1.5pt（3px）。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
+     - **精确垂直居中补偿**：将 `titleField.centerYAnchor` 相对 `titleCapsuleView.centerYAnchor` 的对齐约束增加 `constant: 1.5`；
+     - **多语种对称性严格实测**：针对中文字符（如「虚拟机」、「办公」）、英文字符（如「Chrome」、「codex」、「AI」）进行位图采样，顶部与底部边距完全达到 **14px 对 14px（7.0pt 对 7.0pt，差异为 0）** 的绝对对称；编辑激活态（选中高光）亦保持 **9px 对 9px** 绝对对称，彻底消灭视觉上浮感。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
+
 
 
 

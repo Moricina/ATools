@@ -192,7 +192,7 @@ public final class ShelfFolderOverlayView: NSView, NSTextFieldDelegate {
 
             titleField.leadingAnchor.constraint(equalTo: titleCapsuleView.leadingAnchor, constant: 8),
             titleField.trailingAnchor.constraint(equalTo: titleCapsuleView.trailingAnchor, constant: -8),
-            titleField.centerYAnchor.constraint(equalTo: titleCapsuleView.centerYAnchor),
+            titleField.centerYAnchor.constraint(equalTo: titleCapsuleView.centerYAnchor, constant: 1.5),
             titleField.heightAnchor.constraint(equalToConstant: 22),
 
             closeButton.centerYAnchor.constraint(equalTo: titleCapsuleView.centerYAnchor),
