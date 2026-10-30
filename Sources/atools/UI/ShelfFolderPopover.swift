@@ -493,32 +493,8 @@ final class TitleCapsuleContainerView: NSView {
         backdrop.isPrimary = isEditing
 
         guard let layer = self.layer else { return }
-
-        let targetBorderColor: CGColor
-        let targetBorderWidth: CGFloat
-
-        if isEditing {
-            targetBorderColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
-            targetBorderWidth = 1.25
-        } else {
-            targetBorderColor = NSColor.clear.cgColor
-            targetBorderWidth = 0.0
-        }
-
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.16
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                layer.borderColor = targetBorderColor
-                layer.borderWidth = targetBorderWidth
-            }
-        } else {
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            layer.borderColor = targetBorderColor
-            layer.borderWidth = targetBorderWidth
-            CATransaction.commit()
-        }
+        layer.borderColor = NSColor.clear.cgColor
+        layer.borderWidth = 0.0
     }
 }
 

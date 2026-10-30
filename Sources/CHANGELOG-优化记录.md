@@ -4308,6 +4308,25 @@
   - 物理常驻内存 Footprint 维持在 **147.05 MB**；
   - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
 
+---
+
+### [2026-10-30] 第 126 项：移除微缩文件夹重命名编辑态外层蓝色边框，保持纯粹原生晶体质感
+
+- **问题背景与用户诉求**：
+  - 用户反馈在微缩文件夹重命名激活状态下，“不要外面那一圈蓝色”；
+  - 排查定位：在 `TitleCapsuleContainerView.updateAppearance()` 中，此前在 `isEditing = true` 时挂载了 `targetBorderColor = NSColor.controlAccentColor`（宽度 1.25pt）的强调色高光边框，在纯净水滴胶囊外围产生了一条突兀的深蓝色描边。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/UI/ShelfFolderPopover.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfFolderPopover.swift)：
+     - **彻底移除外围蓝色边框**：在 `TitleCapsuleContainerView.updateAppearance()` 中，彻底移除外层 `layer.borderColor` 和 `layer.borderWidth` 的蓝色绘制逻辑，始终保持 `clear` 和 `0.0`；
+     - **纯粹水滴晶体微光收口**：编辑态完全交由内部的 `NativeLiquidButtonBackdrop(isPrimary: true)` 呈现与设置页完全一致的顶部天光反射与 0.75pt 双色发丝切边高光，消灭生硬的高饱和外层蓝圈，保持浑然一体的纯净通透质感。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 全套 15 大项自动化诊断 **100% 全部 PASSED 通过**；
+  - 物理常驻内存 Footprint 维持在 **147.17 MB**；
+  - `./Scripts/package_app.sh` 编译打包与 Ed25519 签名验证通过，生产版 `/Users/aurora/Downloads/ATools/ATools.app` 已热重启部署生效。
+
+
 
 
 
