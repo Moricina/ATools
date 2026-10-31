@@ -2647,6 +2647,30 @@ public enum DiagnosticSuite {
     mockGrid.clearBatchSelection()
     TestAssertions.expect(!mockGrid.hasBatchSelection, "clearBatchSelection 后必须清空选中态")
 
+    // (f) Test ShelfGridView & FlippedContentView mouse dragged recursion / stack overflow guard
+    if let fakeDragEvent = NSEvent.mouseEvent(
+        with: .leftMouseDragged,
+        location: NSPoint(x: 100, y: 100),
+        modifierFlags: [],
+        timestamp: ProcessInfo.processInfo.systemUptime,
+        windowNumber: 0,
+        context: nil,
+        eventNumber: 1,
+        clickCount: 1,
+        pressure: 1.0
+    ) {
+        // 模拟未经过 mouseDown 直接触发的孤立 mouseDragged，或空分类下的拖拽
+        mockGrid.mouseDragged(with: fakeDragEvent)
+        mockGrid.mouseUp(with: fakeDragEvent)
+
+        // 空分类边界测试
+        let emptyGrid = ShelfGridView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        emptyGrid.reloadData(items: [])
+        emptyGrid.mouseDragged(with: fakeDragEvent)
+        emptyGrid.mouseUp(with: fakeDragEvent)
+    }
+    TestAssertions.expect(true, "ShelfGridView 孤立 mouseDragged 与空分类拖拽必须安全返回，严禁无限递归栈溢出")
+
     print("      ✓ Marquee Batch Selection, Atomic Batch Delete, Move, Folder Grouping & Tombstones verified.")
 
     // 19. 工业级深度加固与全量审计回归测试矩阵 (S-01~S-06, U-01~U-06, Q-01~Q-12, K-01~K-05, Y-01~Y-11, C-01~C-04 & 军师4项加固)

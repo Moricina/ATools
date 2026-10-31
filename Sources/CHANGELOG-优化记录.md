@@ -4606,3 +4606,48 @@
   - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**；
   - **正式打包与部署拉起**：发布 `v1.3.43 (build 69)`，替换至 `/Applications/ATools.app` 并拉起新版本进程。
 
+---
+
+### [2026-11-01] 第 135 项：彻底修复抽屉网格拖拽手势无限递归栈溢出 (Stack Overflow) 闪退缺陷 (v1.3.44 build 70)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：检查 ATools 为什么闪退了。
+  - **崩溃现场与日志实锤 (`~/Library/Logs/DiagnosticReports/ATools-2026-11-01-004634.ips`)**：
+    1. **异常类型**：`EXC_BAD_ACCESS (SIGSEGV)`，`KERN_PROTECTION_FAILURE at 0x000000016b49ffd0`；
+    2. **关键诊断信息**：`"Thread stack size exceeded due to excessive recursion"`；
+    3. **崩溃调用栈特征（主线程 Thread 0）**：
+       ```text
+       09: ATools FlippedContentView.mouseDragged(with:)
+       10: ATools ShelfGridView.mouseDragged(with:)
+       11: AppKit forwardMethod
+       12: AppKit forwardMethod
+       13: ATools FlippedContentView.mouseDragged(with:)
+       14: ATools ShelfGridView.mouseDragged(with:)
+       ...
+       20: AppKit -[NSWindow _handleMouseDraggedEvent:]
+       ```
+    4. **死穴根因分析**：
+       - 当用户在抽屉网格内拖拽时，若处于空分类（`items.isEmpty`）、修饰键移动窗口、或点击在未设定拖拽起点（`dragStartWindowPoint == nil`）的视图区域时，`FlippedContentView.mouseDragged` 原代码执行了 `super.mouseDragged(with: event)`；
+       - `FlippedContentView` 处于 `ShelfGridView -> NSScrollView -> NSClipView -> FlippedContentView` 的视图树中；
+       - `super.mouseDragged`（AppKit 默认实现）会顺着 Responder 链向上传递至父级视图 `ShelfGridView`；
+       - `ShelfGridView` 重写了 `mouseDragged(with:)` 并向子视图转发 `contentView.mouseDragged(with: event)`；
+       - 由此在 `ShelfGridView` 与 `FlippedContentView` 之间形成了闭环死循环调用，在瞬间递归成千上万次耗尽 macOS 主线程 8MB 调用栈，触碰 Stack Guard 触发 SIGSEGV 崩溃闪退。
+
+- **代码级加固与修复方案**：
+  1. [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：
+     - **切断响应链回环**：在 `FlippedContentView.mouseDragged` 中，当 `dragStartWindowPoint == nil` 时直接 `return`，坚决严禁调用 `super.mouseDragged(with: event)`；
+     - **修复空分类标记**：在 `FlippedContentView.mouseDown` 中处理 `items.isEmpty` 时同步标记 `isDraggingWindow = true`，防止后续拖动事件误入；
+     - **重构命中子视图转发**：在 `FlippedContentView.mouseDown` 中若命中具体子控件，仅对本视图内部子视图派发 `hit.mouseDown(with: event)`，不再调用 `super.mouseDown` 避免冒泡回旋；
+     - **重入保护锁（三层防御）**：为 `ShelfGridView` 的 `mouseDown`、`mouseDragged` 与 `mouseUp` 增加 `isDispatching*` 防重入保护标志，彻底免疫任何可能出现的事件冒泡死循环。
+  2. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在第 15 大项中新增孤立拖拽事件与空分类拖拽防重入与防递归回归测试，确保无 `mouseDown` 状态下的 `mouseDragged` 与 `mouseUp` 均能安全秒级返回。
+
+- **兼容性与边界防护策略**：
+  - **橡皮筋框选与移窗零破坏**：正常框选、拖拽合并与按住 Command/Option 移窗逻辑完全不受影响；
+  - **空分类与无拖拽态极速过滤**：未启动拖拽时的多余拖动事件在最底层直接快速返回，节省 CPU 周期；
+  - **双重防递归安全网**：子视图不向上乱抛未消费拖拽事件，父视图重入锁做兜底，双向杜绝任何形式的递归栈溢出。
+
+- **验证与部署结果**：
+  - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **正式打包与部署拉起**：发布 `v1.3.44 (build 70)`，替换至 `/Applications/ATools.app` 并拉起新版本进程。
+

@@ -832,14 +832,17 @@ private final class FlippedContentView: NSView {
         let localPoint = convert(event.locationInWindow, from: nil)
         let hit = hitTest(localPoint)
 
-        // 若命中具体控件（如 ShelfItemButton 等），交给父类分发
-        if hit != self && hit != nil && hit !== superview?.window?.contentView {
-            super.mouseDown(with: event)
+        // 若命中具体控件（如 ShelfItemButton 等），直接派发给具体控件，切勿调用 super.mouseDown 避免经 Responder 链递归
+        if let hit = hit, hit != self && hit !== superview?.window?.contentView {
+            if hit.isDescendant(of: self) {
+                hit.mouseDown(with: event)
+            }
             return
         }
 
         // 若分类内无任何图标（0 项保底），全域拖拽保持原生移窗
         if gridView?.items.isEmpty ?? true {
+            isDraggingWindow = true
             window?.performDrag(with: event)
             return
         }
@@ -861,7 +864,10 @@ private final class FlippedContentView: NSView {
         guard !(gridView?.isInteractionSuspended ?? false) else { return }
         guard !isDraggingWindow else { return }
         guard let startWindow = dragStartWindowPoint, let startContent = dragStartContentPoint else {
-            super.mouseDragged(with: event)
+            // 严禁调用 super.mouseDragged(with: event)！
+            // FlippedContentView 位于 ShelfGridView 的 subview 树中，AppKit 响应链向上追溯至 ShelfGridView。
+            // 若此处调用 super.mouseDragged，ShelfGridView.mouseDragged 会再度转发至 contentView.mouseDragged，
+            // 形成无法跳出的无限递归恶性循环，导致栈溢出（SIGSEGV / EXC_BAD_ACCESS）闪退。
             return
         }
 
@@ -947,8 +953,13 @@ public final class ShelfGridView: NSView {
         }
     }
 
+    private var isDispatchingMouseDown = false
     override public func mouseDown(with event: NSEvent) {
         guard !isInteractionSuspended else { return }
+        guard !isDispatchingMouseDown else { return }
+        isDispatchingMouseDown = true
+        defer { isDispatchingMouseDown = false }
+
         let localPoint = convert(event.locationInWindow, from: nil)
         let hit = hitTest(localPoint)
         if hit == self || hit == scrollView || hit == nil {
@@ -962,13 +973,21 @@ public final class ShelfGridView: NSView {
         }
     }
 
+    private var isDispatchingMouseDragged = false
     override public func mouseDragged(with event: NSEvent) {
         guard !isInteractionSuspended else { return }
+        guard !isDispatchingMouseDragged else { return }
+        isDispatchingMouseDragged = true
+        defer { isDispatchingMouseDragged = false }
         contentView.mouseDragged(with: event)
     }
 
+    private var isDispatchingMouseUp = false
     override public func mouseUp(with event: NSEvent) {
         guard !isInteractionSuspended else { return }
+        guard !isDispatchingMouseUp else { return }
+        isDispatchingMouseUp = true
+        defer { isDispatchingMouseUp = false }
         contentView.mouseUp(with: event)
     }
 
