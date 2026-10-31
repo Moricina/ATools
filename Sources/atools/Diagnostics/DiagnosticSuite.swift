@@ -2090,6 +2090,31 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.google.GeminiMacOS", ownerName: "Gemini", title: "", width: 500, height: 500, isOnScreen: false) == true, "Gemini offscreen auxiliary layer must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.TextEdit", ownerName: "TextEdit", title: "文档1", width: 800, height: 600, isOnScreen: true) == false, "Onscreen active document must never be cleaned")
 
+        // 验证腾讯元宝离屏底板与缩放/动态标题清洗（军师加固 1 & 2）
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.yuanbao", ownerName: "元宝", title: "元宝", width: 1200, height: 800, isOnScreen: false) == true, "Yuanbao default offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.yuanbao", ownerName: "元宝", title: "", width: 500, height: 500, isOnScreen: false) == true, "Yuanbao CEF ghost layer must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.yuanbao", ownerName: "元宝", title: "AI论文大纲 - 腾讯元宝", width: 1450, height: 920, isOnScreen: false) == true, "Yuanbao resized offscreen window with dynamic conversation title must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.yuanbao", ownerName: "元宝", title: "元宝", width: 1200, height: 800, isOnScreen: true) == false, "Yuanbao onscreen window must never be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.tencent.yuanbao", ownerName: "元宝", rawName: "元宝", width: 1200, height: 800, isOnScreen: false) == false, "Offscreen Yuanbao window must not be candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.tencent.yuanbao", ownerName: "元宝", rawName: "深度探讨 - 腾讯元宝", width: 1500, height: 950, isOnScreen: false) == false, "Offscreen resized Yuanbao window must not be candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.tencent.yuanbao", ownerName: "元宝", rawName: "元宝", width: 1200, height: 800, isOnScreen: true) == true, "Onscreen Yuanbao window must be candidate")
+
+        // 验证夸克及同系列单窗口桌面应用离屏全尺寸清洗
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark.desktop", ownerName: "夸克", title: "夸克网盘", width: 1200, height: 768, isOnScreen: false) == true, "Quark offscreen main window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark.desktop", ownerName: "夸克", title: "图片预览", width: 1200, height: 800, isOnScreen: false) == true, "Quark preview offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark.desktop", ownerName: "夸克", title: "", width: 1200, height: 768, isOnScreen: false) == true, "Quark untitled offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark.desktop", ownerName: "夸克", title: "", width: 1200, height: 768, isOnScreen: true) == false, "Quark onscreen window must never be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.quark.desktop", ownerName: "夸克", rawName: "夸克网盘", width: 1200, height: 768, isOnScreen: false) == false, "Offscreen Quark main window must not be candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.quark.desktop", ownerName: "夸克", rawName: "", width: 1200, height: 768, isOnScreen: false) == false, "Offscreen untitled Quark window must not be candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.quark.desktop", ownerName: "夸克", rawName: "夸克网盘", width: 1200, height: 768, isOnScreen: true) == true, "Onscreen Quark window must be candidate")
+
+        // 验证网易云音乐、微信读书、飞书、百度网盘、迅雷等同系列规则
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.netease.163music", ownerName: "网易云音乐", title: "网易云音乐", width: 1000, height: 670, isOnScreen: false) == true, "NeteaseMusic offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.weread", ownerName: "微信读书", title: "微信读书", width: 900, height: 600, isOnScreen: false) == true, "WeRead offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.electron.lark", ownerName: "飞书", title: "飞书", width: 1280, height: 800, isOnScreen: false) == true, "Lark offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.baidu.BaiduNetdiskMac", ownerName: "百度网盘", title: "百度网盘", width: 1000, height: 650, isOnScreen: false) == true, "BaiduNetdisk offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.xunlei.Thunder", ownerName: "迅雷", title: "迅雷", width: 1024, height: 700, isOnScreen: false) == true, "Thunder offscreen window must be cleaned")
+
         // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量
         let trace = AutoQuitDecisionTrace.shared
         trace.clear()

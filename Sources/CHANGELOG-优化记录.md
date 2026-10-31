@@ -4482,3 +4482,127 @@
   - **v1.3.32 客户端模拟实测**：提取 `v1.3.32` 原生二进制验签算法对新生成的 `ATools.dmg.sig` 与 `ATools.zip.sig` 进行逆向校验，全部输出 `v1.3.32 verification PASSED ✓`；
   - **最新客户端多模验签实测**：最新 `UpdateManager` 双向兼容多模校验全部输出 `HEAD verification PASSED ✓`；
   - **自动化测试回归**：执行 `./Scripts/build.sh --test`，全套 13 大项自动化测试 **100% 全部 PASSED 通过**。
+
+
+---
+
+### [2026-10-31] 第 132 项：彻底修复切换应用误退 Chrome/Chromium 与后台离屏大窗口漏计缺陷 (AutoQuitManager 加固)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：在日常使用中多次快速切换应用（未点击窗口红色关闭按钮）时，后台的 Google Chrome、夸克等浏览器被 ATools 异常强制退出。
+  - **现场排查与日志确证**：
+    - 调取 `~/Library/Logs/ATools/runtime.log` 运行日志，确凿捕获到：
+      ```text
+      [2026-10-31 12:57:34 +0000] [AutoQuit] Last window closed for Google Chrome; quitting in 1.0s.
+      [2026-10-31 12:57:36 +0000] [AutoQuit] Terminating Google Chrome after last window closed.
+      ```
+  - **全链路根因确认**：
+    1. **WindowServer 离屏窗口统计盲区**：在 `windowServerStandardWindowCount` 中，经过 `isGhostWindow` 清洗后仅统计 `isOnScreen == true` 的窗口。当应用失焦被遮挡、置于后台或处于其他 Space 时，WindowServer 将底层窗口标记为 `isOnScreen = false`（如 Chrome 1512x827 主窗口），导致 WindowServer 返回的业务窗口数被漏算为 0；
+    2. **Chromium 架构后台无障碍树（AX）归零**：Chrome、夸克等 Chromium 内核应用在失焦进入后台时，`kAXWindowsAttribute` 内部优化直接返回空数组（`axCount = 0`）；
+    3. **失焦瞬态临时浮层销毁伪造关窗事件**：切应用失焦瞬间，Chrome 销毁 Tooltip、下拉框或输入候选，发出 `kAXWindowClosedNotification`；`handleAXNotification` 未严密甄别销毁元素是否为主业务窗口，更新了 `lastCloseEventDate = Date()`，击穿了失焦防抖门禁；
+    4. **双重误判闭环引发误杀**：AX 与 WindowServer 双方均错误返回 0，系统判定为最后一个窗口已关闭，延迟 1 秒后执行 `app.terminate()`。
+
+- **代码级加固与修复方案（军师审定闭环）**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **离屏有效大窗口双特征判定与幽灵隔离**：提炼并实现 `isStandardWindowCandidate` 纯函数。针对 `isOnScreen == false` 窗口，在先行穿透 `AutoQuitQuirks.isGhostWindow` 幽灵底板清洗的前提下，精准识别特征 A（非空标题且 `width > 120 && height > 70`）与特征 B（Chromium 无标题大视窗 `width >= 400 && height >= 260`），累加计数，彻底消除后台被遮挡窗口漏算；同时保持 AuraPane 设置、WPS 首页、日历同名底板等离屏残留幽灵的精准剔除；
+     - **AX 关窗事件严密业务甄别**：在 `handleAXNotification` 中增设前置拦截：非已注册已知窗口在后台（`!isActive`）或前台已有已知窗口时直接丢弃；无已知窗口注册时在锁外执行 `isStandardBusinessWindow` 甄别，彻底杜绝 Tooltip / 下拉提示销毁伪造关窗时间戳；
+     - **失焦防抖恢复坚挺**：清除污染源后，`handleAppDeactivated` 与 `evaluateAppWindows` 中的失焦安全防抖正常生效，切应用时自动撤销任何误排队任务。
+  2. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增针对在屏/离屏 Chrome、Quark、以及 WPS、AuraPane、日历幽灵清洗的 8 项纯函数自动化断言，防范未来重构回退。
+
+- **兼容性与边界防护策略**：
+  - **真实关窗 100% 顺畅退出**：用户前台主动点红叉或按 ⌘W 关闭最后一个窗口时，仍会在设定延迟到期后确诊零窗并精准执行退出；
+  - **防误保活倒退（Anti-Regression）**：严格采纳军师技术边界矩阵，离屏非空标题微元或 < 400x260 的离屏无标题残片不予计入，保障 AuraPane、WPS、日历等依赖 orderOut 清洗机制的应用不会因误保活而退不出；
+  - **多 Space 与频繁切应用绝对保活**：Chrome、夸克等浏览器在后台被全屏遮挡或切换虚拟桌面时，受到 WindowServer 离屏特征识别与失焦防抖双重保护，绝不误退。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`：全套 19 大项自动化测试与诊断套件 **100% 全部 PASSED 通过**（编译 0 错误、0 警告）。
+
+---
+
+### [2026-10-31] 第 133 项：彻底修复腾讯元宝点击红叉不退出缺陷与单窗口 CEF 应用全尺寸离屏清洗加固 (v1.3.42 build 68)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：“元宝”（腾讯元宝桌面版，`com.tencent.yuanbao`）已在 AutoQuit 监视应用列表中，但点击主窗口左上角红叉关闭后，应用并未自动退出。
+  - **现场排查与日志确证**：
+    - 调取 `~/Library/Logs/ATools/runtime.log` 运行日志，确凿捕获到：
+      ```text
+      [2026-10-31 13:34:48 +0000] [AutoQuit] Last window closed for 元宝; quitting in 1.0s.
+      [2026-10-31 13:34:49 +0000] [AutoQuit] Aborted quit for 元宝: app is active and has window.
+      // 终审探测分支确证：
+      [AutoQuit] Aborted quit for 元宝: windows still present or unknown (AX=0, WS=1).
+      ```
+  - **全链路根因确认**：
+    1. **元宝关窗架构特性**：腾讯元宝采用 CEF / AppKit 单窗口架构。用户点击红叉时，应用并未调用 `terminate:` 退出进程，而是通过 `orderOut:` 将 1200x800 主界面离屏隐藏至后台（伴随 500x500 的 CEF 离屏底板）；
+    2. **AX 零窗确诊已触发退出计划**：在 AX 辅助功能树中，标准在屏窗口确已销毁归零（`axCount == 0`），AutoQuit 成功捕获并启动了 1.0s 退出倒计时；
+    3. **WindowServer 离屏误判定为有效候选**：在 1.0s 到期复核时，`AutoQuitQuirks.swift` 尚未注册针对元宝的兼容规则；而上一轮加固的 Chrome 离屏规则将带有标题（如 `"元宝"` 或会话名）且尺寸大（1200x800）的离屏窗口误判为实体在存业务窗口，导致 `wsCount == 1`；
+    4. **前台活跃与终审门禁双重拦截**：用户点击红叉后鼠标未切离元宝，`app.isActive == true`，被 `app.isActive && (wsCount > 0)` 拦截，输出 `Aborted quit: app is active and has window`，导致自动退出被阻断。
+
+- **代码级加固与修复方案（军师技术核验闭环）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **注册专属 `AppQuirkRule`**：为腾讯元宝注册专用规则 `id: "tencent_yuanbao"`（BundleID `com.tencent.yuanbao`），指定离屏特征与底板图层；
+     - **全尺寸离屏清洗开关 (`cleanAllOffscreenWindows`)**：针对元宝等单窗口离屏隐藏应用引入此配置，彻底免疫用户任意缩放窗口尺寸（如 1350x880、1400x900 等）造成的固定尺寸容差击穿；
+     - **标题包含模糊匹配升级**：在 `shouldCleanOffscreen` 中遍历 `offscreenTitles` 特征词进行包含匹配，彻底覆盖动态聊天会话标题（如 `"AI论文大纲 - 腾讯元宝"`、`"深度探讨 - 腾讯元宝"`）；
+     - **伴生 Helper 联动清理**：配置 `companionBundleIDs: ["com.tencent.yuanbao.helper"]` 与 `terminateHelpersInBundle: true`，主应用退出时协同清理渲染与 GPU 伴生进程，杜绝僵尸进程。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **详尽指标透明化**：在 `executePendingQuit` 的中止日志中显式输出 `(AX=\(axCount), WS=\(wsCount))`，实现全链路决策透明。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增元宝默认尺寸、动态会话标题、任意缩放尺寸在屏与离屏的 7 项幽灵清洗与候选判定自动化断言。
+
+- **验证与部署结果**：
+  - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **实机连续真实测试**：
+    - 元宝默认 1200x800 窗口：点击红叉后 1.0s 内精准触发 `Terminating 元宝 after last window closed` 退出；
+    - 元宝缩放至 1350x880 窗口：点击红叉后顺畅退出；
+    - 元宝缩放至 1400x900 窗口：点击红叉后顺畅退出；
+  - **正式打包与部署拉起**：发布 `v1.3.42 (build 68)`，更新至 `/Applications/ATools.app` 并拉起新进程（PID `24077`）。
+
+---
+
+### [2026-10-31] 第 134 项：彻底根治夸克及同系列单窗口桌面应用关窗不退出与吸附悬浮挂件阻断缺陷 (v1.3.43 build 69)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：在将“夸克”（夸克网盘，`com.quark.desktop` / `com.quark`）加入 AutoQuit 监视列表后，点击主界面红叉关闭窗口应用毫无反应，并未自动退出；要求将同系列单窗口桌面应用（腾讯元宝、网易云音乐、微信读书、百度网盘、迅雷、QQ音乐、钉钉、飞书等）的共性问题一并系统性根治。
+  - **现场排查与日志确证（夸克 PID 4142）**：
+    1. **死穴 1：AX 树被 40x40 桌面吸附悬浮挂件阻断**：
+       - 夸克在屏幕侧边吸附常驻一个 40x40 物理尺寸的悬浮挂件（悬浮球，`layer=28`）。在 macOS 辅助功能 AX 树上，该挂件暴露为 `title="", role=AXWindow, subrole=AXSystemDialog, size=40x40`；
+       - `AutoQuitManager.isStandardBusinessWindow` 原逻辑将 `AXSystemDialog` / `AXDialog` 作为无条件放行项，导致关窗后该 40x40 挂件持续被统计为有效标准业务窗口（`axCount 恒为 1`），永远无法判定零窗；
+    2. **死穴 2：离屏无标题大视窗与离屏底板击穿 WindowServer 门禁**：
+       - 夸克点击红叉后仅执行 `orderOut:` 隐藏到离屏后台，伴随 1200x768 主窗口及 1200x800 `"图片预览"` 离屏底板；
+       - 此前夸克未开启 `cleanAllOffscreenWindows`，被 WindowServer 离屏特征识别误算为实体业务窗口（`wsCount == 2`），触发终审双重拦截；
+    3. **共性问题扩散**：
+       - 百度网盘、迅雷、网易云音乐、微信读书、飞书、钉钉等单窗口客户端普遍存在关窗 `orderOut:` 隐藏离屏且带有伴生常驻辅助微元的问题，若未配置全尺寸离屏清洗与微元门禁，极易出现关窗不退出的现象。
+
+- **代码级加固与修复方案（军师审定通过）**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **第一层（AX 树微元门禁升级）**：
+       - 提炼 `isStandardBusinessWindow` 为 `public static func` 规范模型；
+       - 针对 `AXDialog` / `AXSystemDialog` / `AXSheet` 增设微元尺寸防护：若既无关闭按钮又无最小化按钮，且物理尺寸小于 `160x90`（如夸克 40x40 桌面悬浮球），坚决认定为桌面吸附挂件/悬浮微元，严禁计入标准业务窗口 (`return false`)；
+     - **第三层（引入关窗因果律与在屏窗口双检机制）**：
+       - 新增 `windowServerOnScreenWindowCount` 方法（仅统计 `isOnScreen == true` 的在屏有效图层）；
+       - 在 `evaluateAppWindows` 与 `executePendingQuit` 中引入关窗因果律（`recentlyHadCloseEvent = (now - lastCloseEvent < 3.0)`）：当且仅当发生过真实关窗且在屏有效窗口与在屏 AX 均已完全归零时，判定离屏底板为关窗后残余，放行退出；同时绝对不影响后台应用（Chrome/Quark）被其他窗口全屏遮挡或切 Space 时的防误杀保活。
+  2. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **第二层（全量纳入国内主流单窗口桌面应用矩阵）**：
+       - 一揽子升级并注册专用规则，全部开启 `cleanAllOffscreenWindows: true`、`terminateHelpersInBundle: true` 与模糊标题特征匹配：
+         - 夸克网盘 (`quark`)：`com.quark.desktop`, `com.quark`，清洗 `"图片预览"`、`"分享链接"` 等离屏底板；
+         - 腾讯元宝 (`tencent_yuanbao`)：`com.tencent.yuanbao`，伴生 Helper 联动清理；
+         - 网易云音乐 (`netease_music`)：`com.netease.163music`；
+         - 微信读书 (`weread`)：`com.tencent.weread`；
+         - 百度网盘 (`baidu_netdisk`)：`com.baidu.BaiduNetdiskMac`, `com.baidu.netdisk`；
+         - 迅雷 (`thunder`)：`com.xunlei.Thunder`, `com.xunlei.xlplayer`；
+         - QQ音乐 (`qq_music`)：`com.tencent.QQMusic`；
+         - 钉钉 (`dingtalk`)：`com.dingtalk.mac`, `com.alibaba.DingTalkMac`；
+         - 飞书 (`lark`)：`com.electron.lark`, `com.bytedance.ee.lark`；
+         - 腾讯文档 (`tencent_docs`)：`com.tencent.tencentdocs`。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 扩充单元诊断套件，全面覆盖夸克 40x40 桌面挂件过滤、无标题大视窗在屏/离屏清洗、以及元宝、网易云、微信读书、飞书等全矩阵规则校验。
+
+- **兼容性与边界防护策略**：
+  - **挂件与微元免误判**：40x40 悬浮球、取词微标、截图条等被严格判定为非标准业务窗口，不再阻碍主视窗关闭后的退出判定；
+  - **后台防误杀绝不退化**：严格维持上一轮针对 Chrome / Chromium 切应用后台与多 Space 遮挡的保活屏障，无真实关窗事件绝不触碰退出逻辑；
+  - **多矩阵单窗口统一闭环**：主流国产单窗口桌面应用统一享受全尺寸离屏清洗与渲染子进程协同清理。
+
+- **验证与部署结果**：
+  - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **正式打包与部署拉起**：发布 `v1.3.43 (build 69)`，替换至 `/Applications/ATools.app` 并拉起新版本进程。
+

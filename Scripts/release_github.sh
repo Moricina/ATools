@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.40}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-66}"
+VERSION="${ATOOLS_VERSION:-1.3.43}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-69}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,61 +114,29 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 深度架构加固与安全闭环更新说明
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 核心加固与单窗口应用关窗退出系统性根治更新说明
 
-### 🛡️ 数据安全与备份事务化升级 (Security & Data Integrity)
-1. **备份清单路径穿越彻底防御**：
-   - 引入严格单文件名白名单（禁止路径分隔符、父目录与隐藏前缀），结合 APFS Unicode NFC 规范化（\`precomposedStringWithCanonicalMapping\`）与 \`resolvingSymlinksInPath()\` 前缀校验，彻底杜绝恶意备份清单越界读写；
-   - 增加目标安全校验，严禁覆盖非备份目录或包含用户文件的目录；采用隔离临时目录事务化导出与 \`.bak\` 回滚缓冲；
-   - 完善自定义图标元数据映射（\`iconFileMap\`），精准支持非 PNG（\`.jpg\` / \`.icns\`）自定义图标跨机器自愈映射。
-2. **配置解码类型安全强化**：
-   - 解码器严格区分“旧版本缺键”与“字段存在但类型损坏”；当核心字段类型损坏时显式抛出异常并触发时间戳快照保全，坚决杜绝静默抹空持久化分类；
-   - 分类删除迁移强校验目标存在性与非自身，杜绝静默丢项；失效应用清理采用精确 Bundle ID 匹配杜绝模糊误伤。
-3. **Shell 启动项参数化安全改造**：
-   - 严格隔离脚本文件执行（内核直接传参）与命令行执行（\`[\"-c\", cmd, \"--\"] + extraArgs\`），杜绝命令注入与路径含空格切词 bug；
-   - 完整落地 \`ExecutionContext\` 的管理员提权（\`runAsAdmin\`）与终端模式（\`terminalMode\`）能力。
-
----
-
-### 🚀 软件更新生命周期与伴生安全脚本 (Update Lifecycle & Hardened Script)
-1. **更新代次令牌强拦截**：
-   - 引入全局唯一代次令牌（\`_currentSessionToken = UUID()\`），在所有下载与解压回调首行执行强断言，用户点击取消即刻作废令牌，杜绝取消后旧任务重入安装；
-   - 下载大文件拷贝解耦至独立后台操作队列（\`downloadDelegateQueue\`），彻底根除主线程 UI 冻结。
-2. **伴生重启脚本安全闭环**：
-   - 脚本顶部强制锁定系统安全环境（\`export PATH=\"/usr/bin:/bin:/usr/sbin:/sbin\"\`），所有工具全绝对路径调用；
-   - 废除无条件裸 PID 暴力 \`kill -9\`，接入进程路径真实身份核验（必须隶属 \`ATools.app\`），防止 PID 复用误杀无辜进程；
-   - Staging 目录采用目标 App 同卷隐藏工作目录 \`.atools_staging_<UUID>\`，实现系统内核 \`rename(2)\` 绝对原子替换与失败无损还原。
+### 🎯 AutoQuit 零窗守护立体加固与单窗口桌面应用矩阵全面闭环
+1. **彻底根治吸附悬浮挂件阻断缺陷（AX 树微元门禁升级）**：
+   - 深入重构 \`isStandardBusinessWindow\`，为 \`AXDialog\` / \`AXSystemDialog\` / \`AXSheet\` 增设物理微元尺寸门禁；
+   - 凡既无关闭按钮又无最小化按钮且物理尺寸小于 160x90 的吸附挂件（如夸克 40x40 桌面吸附悬浮球、截图栏、取词浮标），坚决不计入标准业务窗口，彻底消除假窗口阻断零窗退出。
+2. **离屏主视窗全尺寸清洗与伴生 Helper 联动清理**：
+   - 彻底解决腾讯元宝、夸克等单窗口应用点击红叉后仅通过 \`orderOut:\` 离屏隐藏导致 WindowServer 误判的问题；
+   - 引入 \`cleanAllOffscreenWindows: true\`，全面支持用户任意缩放窗口尺寸；支持动态会话标题模糊匹配；
+   - 主应用退出时联动终止 \`Helper (Renderer)\`、\`Helper (Player)\` 等伴生进程，杜绝僵尸进程常驻。
+3. **同系列单窗口桌面应用矩阵一揽子纳入**：
+   - 专用规则覆盖：夸克网盘、腾讯元宝、网易云音乐、微信读书、百度网盘、迅雷、QQ音乐、钉钉、飞书、腾讯文档；
+   - 统一享受全尺寸离屏清洗与渲染子进程协同清理。
+4. **关窗因果律与在屏双检终审机制**：
+   - 新增 \`windowServerOnScreenWindowCount\` 仅统计 \`isOnScreen == true\` 的在屏有效窗口；
+   - 引入关窗因果律（\`recentlyHadCloseEvent\`）：仅在用户真实点击红叉/⌘W 且在屏窗口归零时放行退出；
+   - 严格维持后台 Chromium / Chrome / 夸克在多 Space 遮挡或频繁切换应用时的坚挺保活，绝不误杀。
 
 ---
 
-### 🔍 搜索协调员并发安全、算法与边界防御 (Search Concurrency & Algorithms)
-1. **并发状态同步与漏投拦截**：
-   - \`SearchCoordinator\` 采用 \`stateLock\` 保证代次递增与取消线程安全；
-   - \`deliver\` 闭包首行强校验 \`currentGenerationId == generation\`，面板收起或快速键入时即刻取消待投递项，彻底消除旧结果冲刷界面；
-   - 新增轻量不可变载荷 \`RawSearchResultPayload\`，严格合规 Sendable 跨隔离区传递，跨入主线程后再绑定图片与交互动作。
-2. **检索算法与边界体验优化**：
-   - 扩大粗排候选池至 100 项，全量计算新鲜度与路径惩罚后再最终截断，修复高热度修改文件被提前丢弃的算法缺陷；
-   - 修复计算器 \`-2^2 == -4\` 负号幂运算优先级；支持 MDQuery 物理中断（\`MDQueryStop\`）；
-   - 搜索排除引擎与开发者排除开关独立解耦，全量接入 NFC 规范化路径匹配；搜索结果拖拽绑定稳定 ID，杜绝异步刷新动态行号错位。
-
----
-
-### ✨ 启动台交互、智能 Favorites 与多屏坐标 (Shelf & Interaction)
-1. **智能 Favorites 只读投影锁定**：
-   - 智能 Favorites 明确声明为只读投影（\`isReadOnlyProjection = true\`），硬拦截网格内拖拽排序与放置，彻底杜绝持久化索引污染与丢项；
-   - 跨分类文件夹合并事务化原子迁移；\`reloadData\` 彻底清空拖拽快照与合并定时器；去除频次排序双重代理调用；
-   - 协调器收拢面板禁用生命周期 Teardown；基于当前光标所在物理屏幕的真实高度精准计算 Quartz 翻转坐标；文件夹弹窗关闭时自动提交重命名。
-
----
-
-### ⚡ 系统服务与 AutoQuit 零窗守护 (System Actions & AutoQuit)
-1. **双零窗口权威校验 (Fail-Safe)**：
-   - \`isConfirmedZeroWindowCount\` 实行 AX 与 WindowServer 双重权威校验，未知状态（nil）或 >0 绝对不触发退出；
-   - 持锁期间仅做毫秒级内存快照，耗时 AX 属性查询与 WindowServer 扫描推送到后台并发队列异步执行，杜绝主线程卡死；
-   - 彻底清除所有 \`as!\` 强制类型转换崩溃点；
-2. **HUD 倒计时与进程身份绑定**：
-   - 倒计时 Timer 显式挂载到 \`RunLoop.main\` 的 \`.common\` 模式，基于绝对 Deadline 驱动，保证滑块或菜单展开期间倒计时不暂停且与底层 GCD 退出绝对步调一致；支持传入解析后的真实 PID；
-   - 单项全局快捷键与默认热键成对暂停/恢复，两阶段提交保障热键注册与持久化配置强一致。"
+### 🛡️ 架构质量与自动化诊断验证
+- 全套 19 大项综合诊断套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过；
+- 兼容性与边界防护严密闭环，编译零错误、零警告。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

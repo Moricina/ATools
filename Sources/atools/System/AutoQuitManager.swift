@@ -226,13 +226,45 @@ public final class AutoQuitManager {
         return ax == 0 && ws == 0
     }
 
+    /// 判断单个 WindowServer 窗口是否符合标准有效业务窗口（纯函数，供 windowServerStandardWindowCount 与单元测试共用）
+    public static func isStandardWindowCandidate(
+        bundleID: String?,
+        ownerName: String?,
+        rawName: String,
+        width: Double,
+        height: Double,
+        isOnScreen: Bool
+    ) -> Bool {
+        let quirks = AutoQuitQuirks.shared
+        if quirks.isGhostWindow(
+            bundleID: bundleID,
+            ownerName: ownerName,
+            title: rawName,
+            width: width,
+            height: height,
+            isOnScreen: isOnScreen
+        ) {
+            return false
+        }
+
+        if isOnScreen {
+            return (width > 120 && height > 70) || !rawName.isEmpty
+        } else {
+            // 军师审定方案：离屏窗口 (isOnScreen == false) 必须已通过 isGhostWindow 清洗
+            // 1. 特征 A（有明确业务标题）：非空标题且尺寸达到常规视窗 (width > 120 && height > 70)，
+            //    排除极小微元，认定为位于其他 Space、最小化或被遮挡的实体业务窗口；
+            // 2. 特征 B（Chromium 无标题大视窗）：Chromium 多进程架构下部分离屏主窗口标题为空，
+            //    必须满足主视窗级尺寸门槛 (width >= 400 && height >= 260)，且处于标准层 (0...15)。
+            return (!rawName.isEmpty && width > 120 && height > 70) || (width >= 400 && height >= 260)
+        }
+    }
+
     /// WindowServer 层面标准应用窗口计数（Layer 0...15，纯几何公开信息，结合 AutoQuitQuirks 规则清洗离屏幽灵）
     public static func windowServerStandardWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int? {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
-        let quirks = AutoQuitQuirks.shared
         let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
 
         var count = 0
@@ -249,21 +281,51 @@ public final class AutoQuitManager {
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
             let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
 
-            if quirks.isGhostWindow(
+            if isStandardWindowCandidate(
                 bundleID: resolvedBundleID,
                 ownerName: ownerName,
-                title: rawName,
+                rawName: rawName,
                 width: width,
                 height: height,
                 isOnScreen: isOnScreen
             ) {
-                continue
+                count += 1
             }
+        }
+        return count
+    }
 
-            if isOnScreen {
-                if (width > 120 && height > 70) || !rawName.isEmpty {
-                    count += 1
-                }
+    /// WindowServer 层面在屏标准窗口数（Layer 0...15，仅统计 isOnScreen == true 的有效在屏业务窗口）
+    public static func windowServerOnScreenWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int? {
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return nil
+        }
+        let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+
+        var count = 0
+        for w in list {
+            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
+            guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
+            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
+                  let width = bounds["Width"] as? Double,
+                  let height = bounds["Height"] as? Double,
+                  width > 40, height > 40 else { continue }
+
+            let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
+            let rawName = (w[kCGWindowName as String] as? String) ?? ""
+            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
+
+            if isOnScreen && isStandardWindowCandidate(
+                bundleID: resolvedBundleID,
+                ownerName: ownerName,
+                rawName: rawName,
+                width: width,
+                height: height,
+                isOnScreen: true
+            ) {
+                count += 1
             }
         }
         return count
@@ -545,7 +607,7 @@ public final class AutoQuitManager {
             // Y-02: 锁外执行 AX 与 WindowServer 查询
             let axCount = axWindows(of: axApp)?.count
             let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: bundleId)
-            let isBusiness = isStandardBusinessWindow(element)
+            let isBusiness = Self.isStandardBusinessWindow(element)
 
             if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 || isBusiness {
                 os_unfair_lock_lock(&lock)
@@ -559,12 +621,34 @@ public final class AutoQuitManager {
         } else if notificationName == (kAXWindowClosedNotification as String)
                     || notificationName == (kAXUIElementDestroyedNotification as String) {
             let isKnownWindow = entry.registeredWindowRefs.contains(where: { CFEqual($0, element) })
+            let isActive = entry.app.isActive
+            let hasRegisteredWindows = !entry.registeredWindowRefs.isEmpty
 
-            if notificationName == (kAXUIElementDestroyedNotification as String) && !isKnownWindow {
-                if !entry.app.isActive || !entry.registeredWindowRefs.isEmpty {
+            // 军师审定防线：
+            // 1. 若为非已知窗口且应用已处于后台，直接丢弃，严禁失焦销毁浮层（Tooltip/下拉菜单）伪造关窗
+            if !isKnownWindow && !isActive {
+                os_unfair_lock_unlock(&lock)
+                return
+            }
+
+            // 2. 若为非已知窗口且已有已注册的业务窗口，当前通知必定为临时浮层，直接丢弃
+            if !isKnownWindow && hasRegisteredWindows {
+                os_unfair_lock_unlock(&lock)
+                return
+            }
+
+            // 3. 若为非已知窗口且 registeredWindowRefs 为空（可能启动期未抓到引用）：
+            //    必须在锁外做 isStandardBusinessWindow 业务窗口核验，排除纯提示浮层
+            if !isKnownWindow {
+                os_unfair_lock_unlock(&lock)
+                let isBusiness = Self.isStandardBusinessWindow(element)
+                guard isBusiness else { return }
+                os_unfair_lock_lock(&lock)
+                guard isRunning, let currentEntry = watched[pid] else {
                     os_unfair_lock_unlock(&lock)
                     return
                 }
+                entry = currentEntry
             }
 
             entry.registeredWindowRefs.removeAll(where: { CFEqual($0, element) })
@@ -647,14 +731,18 @@ public final class AutoQuitManager {
         os_unfair_lock_unlock(&lock)
 
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
+        let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
+        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
 
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         guard isRunning, watched[pid] != nil else { return }
 
-        // Y-01: 严格要求 axCount == 0 且 wsCount == 0 双重确认才调度退出；
-        // 若 axCount == 0 但 wsCount > 0 或 wsCount == nil（状态未知），进入有限次数延迟复查，绝不贸然误退
-        if AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) {
+        // Y-01 & 军师第三层因果律防线：
+        // 1. 标准双零确认 (axCount == 0 && wsCount == 0)；
+        // 2. 真实关窗因果律确认：axCount == 0 且在屏窗口 wsOnscreen == 0 且刚刚发生真实关窗 (recentlyHadCloseEvent)。
+        //    说明当前屏幕上已没有任何可见窗口，残存的 wsCount 均为 orderOut: 离屏残余底板，放行调度！
+        if isZeroByCausality || AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) {
             recheckCounts.removeValue(forKey: pid)
             cancelPendingRecheckLocked(pid)
             scheduleQuitLocked(pid, app: app)
@@ -897,6 +985,8 @@ public final class AutoQuitManager {
         // Y-02: 锁外执行终审 AX 与 WindowServer 计数
         let axCount = axWindows(of: entrySnapshot.axApp)?.count
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
+        let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
+        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
 
         if app.isHidden {
             let hadCloseEvent = entrySnapshot.lastCloseEventDate != .distantPast
@@ -905,8 +995,8 @@ public final class AutoQuitManager {
             }
         }
 
-        if app.isActive && ((axCount ?? 0) > 0 || (wsCount ?? 0) > 0) {
-            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is active and has window.")
+        if app.isActive && !isZeroByCausality && ((axCount ?? 0) > 0 || (wsCount ?? 0) > 0) {
+            runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): app is active and has window (AX=\(axCount.map(String.init) ?? "nil"), WS=\(wsCount.map(String.init) ?? "nil")).")
             AutoQuitDecisionTrace.shared.record(
                 pid: pid,
                 bundleID: app.bundleIdentifier ?? "",
@@ -919,7 +1009,7 @@ public final class AutoQuitManager {
             return
         }
 
-        guard AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) else {
+        guard isZeroByCausality || AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) else {
             runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): windows still present or unknown (AX=\(axCount.map(String.init) ?? "nil"), WS=\(wsCount.map(String.init) ?? "nil")).")
             AutoQuitDecisionTrace.shared.record(
                 pid: pid,
@@ -1068,14 +1158,15 @@ public final class AutoQuitManager {
         if err != .success && result.isEmpty {
             return nil
         }
-        return result.filter { isStandardBusinessWindow($0) }
+        return result.filter { Self.isStandardBusinessWindow($0) }
     }
 
     /// Y-01 & Y-03：判断是否为有效业务窗口或对话框
     /// 1. 消除 `s as! AXValue` 强转，改用 `CFGetTypeID(s) == AXValueGetTypeID()` 安全解包；
-    /// 2. 具备关闭/最小化按钮或属于系统对话框/模态窗的窗口（无论尺寸大小，含偏好设置小面板、调色板等）一律优先认定为有效窗口；
-    /// 3. 仅对既无红绿灯控制按钮、又非对话框的无装饰悬浮挂件应用 `< 160x90` 的微型过滤。
-    private func isStandardBusinessWindow(_ w: AXUIElement) -> Bool {
+    /// 2. 具备关闭/最小化按钮或属于系统对话框/模态窗的窗口优先核验；
+    /// 3. 军师加固门禁：若既无关闭又无最小化按钮，且物理尺寸 < 160x90（如夸克 40x40 桌面吸附小挂件），
+    ///    判定为辅助悬浮挂件，严禁计入标准业务窗口！
+    public static func isStandardBusinessWindow(_ w: AXUIElement) -> Bool {
         var sizeVal: CFTypeRef?
         var size: CGSize = .zero
         if AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sizeVal) == .success,
@@ -1099,6 +1190,12 @@ public final class AutoQuitManager {
         AXUIElementCopyAttributeValue(w, kAXSubroleAttribute as CFString, &subroleVal)
         let subrole = (subroleVal as? String) ?? ""
         if subrole == "AXDialog" || subrole == "AXSystemDialog" || subrole == "AXSheet" {
+            // 军师门禁：真实系统对话框/模态面板必有正常视窗尺寸 (>= 160x90)；
+            // 若既无关闭按钮又无最小化按钮，且物理尺寸 < 160x90（如夸克 40x40 桌面小浮球/取词微元），
+            // 判定为辅助悬浮挂件，严禁计入标准业务窗口！
+            if !hasClose && !hasMin && size != .zero && (size.width < 160 || size.height < 90) {
+                return false
+            }
             return true
         }
 

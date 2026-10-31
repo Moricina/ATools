@@ -31,6 +31,7 @@ public struct AppQuirkRule: Sendable {
     public let isVirtualizationOrContainer: Bool
     public let companionBundleIDs: [String]
     public let terminateHelpersInBundle: Bool
+    public let cleanAllOffscreenWindows: Bool
 
     public init(
         id: String,
@@ -41,7 +42,8 @@ public struct AppQuirkRule: Sendable {
         ghostSizes: [GhostWindowSize] = [],
         isVirtualizationOrContainer: Bool = false,
         companionBundleIDs: [String] = [],
-        terminateHelpersInBundle: Bool = false
+        terminateHelpersInBundle: Bool = false,
+        cleanAllOffscreenWindows: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -52,6 +54,7 @@ public struct AppQuirkRule: Sendable {
         self.isVirtualizationOrContainer = isVirtualizationOrContainer
         self.companionBundleIDs = companionBundleIDs
         self.terminateHelpersInBundle = terminateHelpersInBundle
+        self.cleanAllOffscreenWindows = cleanAllOffscreenWindows
     }
 
     public func matches(bundleID: String?, ownerName: String?) -> Bool {
@@ -72,9 +75,20 @@ public struct AppQuirkRule: Sendable {
     }
 
     public func shouldCleanOffscreen(title: String, width: Double, height: Double) -> Bool {
-        let lowerTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !lowerTitle.isEmpty && offscreenTitles.contains(lowerTitle) {
+        if cleanAllOffscreenWindows {
             return true
+        }
+        let lowerTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !lowerTitle.isEmpty {
+            if offscreenTitles.contains(lowerTitle) {
+                return true
+            }
+            // 军师加固 1：遍历特征词进行包含模糊匹配，彻底覆盖单窗口应用动态会话标题（如 "会话 - 腾讯元宝"）
+            for keyword in offscreenTitles {
+                if !keyword.isEmpty && lowerTitle.contains(keyword) {
+                    return true
+                }
+            }
         }
         for size in ghostSizes {
             if size.matches(width: width, height: height) {
@@ -170,23 +184,85 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         AppQuirkRule(
             id: "quark",
             name: "夸克网盘",
-            bundleIDPrefixes: ["com.quark"],
+            bundleIDPrefixes: ["com.quark.desktop", "com.quark"],
             ownerNameKeywords: ["夸克", "quark"],
-            offscreenTitles: ["分享链接"]
+            offscreenTitles: ["夸克", "quark", "分享链接", "图片预览"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "tencent_docs",
             name: "腾讯文档",
             bundleIDPrefixes: ["com.tencent.tencentdocs"],
             ownerNameKeywords: ["qqexdoc", "tencentdocs"],
-            ghostSizes: [GhostWindowSize(w: 1366, h: 800, tolerance: 25)]
+            offscreenTitles: ["腾讯文档", "tencentdocs"],
+            ghostSizes: [GhostWindowSize(w: 1366, h: 800, tolerance: 25)],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "dingtalk",
             name: "钉钉",
-            bundleIDPrefixes: ["com.dingtalk.mac"],
+            bundleIDPrefixes: ["com.dingtalk.mac", "com.alibaba.DingTalkMac"],
             ownerNameKeywords: ["dingtalk", "钉钉"],
-            ghostSizes: [GhostWindowSize(w: 500, h: 372, tolerance: 15)]
+            offscreenTitles: ["钉钉", "dingtalk"],
+            ghostSizes: [GhostWindowSize(w: 500, h: 372, tolerance: 15)],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "netease_music",
+            name: "网易云音乐",
+            bundleIDPrefixes: ["com.netease.163music"],
+            ownerNameKeywords: ["网易云音乐", "163music", "neteasemusic"],
+            offscreenTitles: ["网易云音乐", "163music"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "weread",
+            name: "微信读书",
+            bundleIDPrefixes: ["com.tencent.weread"],
+            ownerNameKeywords: ["微信读书", "weread"],
+            offscreenTitles: ["微信读书", "weread"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "baidu_netdisk",
+            name: "百度网盘",
+            bundleIDPrefixes: ["com.baidu.BaiduNetdiskMac", "com.baidu.netdisk"],
+            ownerNameKeywords: ["百度网盘", "baidunetdisk"],
+            offscreenTitles: ["百度网盘", "baidunetdisk"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "thunder",
+            name: "迅雷",
+            bundleIDPrefixes: ["com.xunlei.Thunder", "com.xunlei.xlplayer"],
+            ownerNameKeywords: ["迅雷", "thunder"],
+            offscreenTitles: ["迅雷", "thunder"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "qq_music",
+            name: "QQ音乐",
+            bundleIDPrefixes: ["com.tencent.QQMusic"],
+            ownerNameKeywords: ["qq音乐", "qqmusic"],
+            offscreenTitles: ["qq音乐", "qqmusic"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "lark",
+            name: "飞书",
+            bundleIDPrefixes: ["com.electron.lark", "com.bytedance.ee.lark"],
+            ownerNameKeywords: ["飞书", "lark"],
+            offscreenTitles: ["飞书", "lark"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "aurapane",
@@ -224,6 +300,20 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             ],
             companionBundleIDs: ["com.google.GeminiMacOS.launcher"],
             terminateHelpersInBundle: true
+        ),
+        AppQuirkRule(
+            id: "tencent_yuanbao",
+            name: "腾讯元宝",
+            bundleIDPrefixes: ["com.tencent.yuanbao"],
+            ownerNameKeywords: ["元宝", "yuanbao"],
+            offscreenTitles: ["元宝", "yuanbao", "tencent yuanbao"],
+            ghostSizes: [
+                GhostWindowSize(w: 1200, h: 800, tolerance: 50),
+                GhostWindowSize(w: 500, h: 500, tolerance: 30)
+            ],
+            companionBundleIDs: ["com.tencent.yuanbao.helper"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         )
     ]
 
