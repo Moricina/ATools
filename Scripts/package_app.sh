@@ -11,8 +11,8 @@ NC='\033[0m'
 info()  { echo -e "${GREEN}[INFO]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-VERSION="${ATOOLS_VERSION:-1.3.39}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-65}"
+VERSION="${ATOOLS_VERSION:-1.3.40}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-66}"
 SCRATCH_PATH="${ATOOLS_SCRATCH_PATH:-$DIR/.build}"
 # 签名身份解析：
 # ① 显式指定（ATOOLS_SIGNING_IDENTITY="-" 可强制 ad-hoc，见 RELEASING.md 迁移说明）
@@ -177,13 +177,14 @@ hdiutil create -volname "ATools" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DI
 rm -rf "$DMG_STAGING"
 DMG_SIZE=$(du -h "$DIR/ATools.dmg" | cut -f1)
 
-echo "==> Signing release assets with Ed25519 (Raw SHA-256 for backward compatibility with v1.2.9-v1.3.31)..."
-swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" >/dev/null
-swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" >/dev/null
+RELEASE_TAG="v${VERSION#v}"
+echo "==> Signing release assets with Ed25519 (Canonical metadata binding for $RELEASE_TAG)..."
+swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" --version "$RELEASE_TAG" --asset-name "ATools.zip" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" sign "$UPDATE_SIGNING_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" --version "$RELEASE_TAG" --asset-name "ATools.dmg" >/dev/null
 
 PUBLIC_KEY=$(swift "$UPDATE_SIGNATURE_TOOL" public-key "$UPDATE_SIGNING_KEY")
-swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" >/dev/null
-swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.zip" "$DIR/ATools.zip.sig" --version "$RELEASE_TAG" --asset-name "ATools.zip" >/dev/null
+swift "$UPDATE_SIGNATURE_TOOL" verify "$PUBLIC_KEY" "$DIR/ATools.dmg" "$DIR/ATools.dmg.sig" --version "$RELEASE_TAG" --asset-name "ATools.dmg" >/dev/null
 
 echo "==> Successfully packaged ATools.app!"
 echo "    Binary size:  $BIN_SIZE"

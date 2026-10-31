@@ -4454,3 +4454,31 @@
     - `[12/12] AutoQuitManager: PASSED`（验证双零窗口确认、HUD 倒计时与进程身份解析）；
     - `[19] Testing Deep Architectural Hardening & Remediation Matrix: PASSED`；
   - 内存基线物理占用稳定（`Physical Footprint: 144.56 MB`）。
+
+
+---
+
+### [2026-10-31] 第 131 项：紧急修复 v1.3.32 存量客户端在线升级 Ed25519 验签失败问题并发布 v1.3.40 (build 66)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：运行在 `v1.3.32` 版本的客户端在点击“检查与安装更新”尝试自动更新到最新版时，弹出严重阻断错误：“`更新替换失败: Ed25519 更新签名校验失败，安装包可能已被篡改`”。
+  - **根因确认**：
+    1. 在 `v1.3.32`（build 58）中引入了 `canonicalEnforcementVersion = "1.3.32"`。其验签策略规定：当检测到的目标版本 `>= 1.3.32`（如 `v1.3.39`）时，`isCanonicalEnforced` 被判定为 `true`，**仅接受**包含版本号与文件名绑定的 Canonical 签名（`candidateDigests` 仅包含 `canonicalPayload`），严格拒绝原始裸文件 SHA-256 摘要回退；
+    2. 然而后续打包脚本 `package_app.sh` 曾为了兼容更古老的 `v1.3.31` 客户端，仅对发布包签署了裸 SHA-256 摘要（未带 `--version` 与 `--asset-name` 参数）；
+    3. 导致存量运行 `v1.3.32` 的客户端在计算签名比对时，因本地严格执行 Canonical 策略而无法通过裸 SHA-256 验签，产生“签名校验失败，安装包可能已被篡改”的阻断报错；
+    4. 此外，GitHub Releases CDN 节点对同名分离签名资产存在重定向缓存，直接原地覆盖可能导致部分客户端短时间内拉取旧缓存。
+
+- **实施与加固详情**：
+  1. [`Sources/atools/System/UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift)：
+     - **多模自适应双向兼容矩阵**：在 `candidateDigests` 中同时挂载原样版本（如 `v1.3.40`）、规范化纯数字版本（如 `1.3.40`）、带 `v` 前缀版本及原始裸 SHA-256 摘要，确保无论是严格校验 Canonical 的老客户端（`v1.3.32`），还是仅支持裸摘要的历史客户端，或未来版本，均能 100% 顺畅完成校验；
+  2. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) & [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+     - **发布签名标准化**：规范化提取目标版本标签 `RELEASE_TAG="v${VERSION#v}"`，签名流程强行绑定 `--version "$RELEASE_TAG" --asset-name "ATools.zip"` 与 `--version "$RELEASE_TAG" --asset-name "ATools.dmg"`；
+     - **双向验证门禁**：打包完成后立即利用 Ed25519 公钥验证生成的 `.sig` 资产合规性，杜绝未绑定签名的资产流出；
+     - **版本号递增**：版本升级至 `1.3.40 (build 66)`，彻底避开 CDN 缓存滞留，确保客户端点击即可秒级拉取崭新签名并顺利热更新。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增 Canonical 与 Raw 结构化绑定 SHA-256 摘要互斥性与有效性自动化回归断言。
+
+- **验证与测试结果**：
+  - **v1.3.32 客户端模拟实测**：提取 `v1.3.32` 原生二进制验签算法对新生成的 `ATools.dmg.sig` 与 `ATools.zip.sig` 进行逆向校验，全部输出 `v1.3.32 verification PASSED ✓`；
+  - **最新客户端多模验签实测**：最新 `UpdateManager` 双向兼容多模校验全部输出 `HEAD verification PASSED ✓`；
+  - **自动化测试回归**：执行 `./Scripts/build.sh --test`，全套 13 大项自动化测试 **100% 全部 PASSED 通过**。

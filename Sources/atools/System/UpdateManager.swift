@@ -623,10 +623,18 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
         let rawDigest = try UpdateManager.sha256(ofFileAt: assetURL)
 
-        // 构造候选验签摘要（双模自适应兼容：先验 Canonical 结构化绑定摘要，再回退验证原始文件 SHA-256 确保老客户端平滑兼容）
+        // 构造候选验签摘要（多模自适应兼容：Canonical 原样、Canonical 规范化、带 v 前缀与原始文件 SHA-256 全适配）
         var candidateDigests: [Data] = []
         if let ver = expectedVersion, !ver.isEmpty, let name = assetName, !name.isEmpty {
             candidateDigests.append(canonicalPayload(version: ver, assetName: name, fileDigest: rawDigest))
+            let normalizedVer = normalizedVersion(ver)
+            if normalizedVer != ver {
+                candidateDigests.append(canonicalPayload(version: normalizedVer, assetName: name, fileDigest: rawDigest))
+            }
+            let prefixedVer = ver.hasPrefix("v") || ver.hasPrefix("V") ? ver : "v\(ver)"
+            if prefixedVer != ver && prefixedVer != normalizedVer {
+                candidateDigests.append(canonicalPayload(version: prefixedVer, assetName: name, fileDigest: rawDigest))
+            }
         }
         candidateDigests.append(rawDigest)
 
