@@ -218,37 +218,75 @@ public final class ConfigManager {
     }
 
     private var pendingSaveWorkItem: DispatchWorkItem?
+    private let saveLock = NSLock()
+    private let persistenceQueue = DispatchQueue(label: "cc.atools.config.io", qos: .utility)
+    public private(set) var lastPersistenceError: Error?
 
     /// Coalesces writes: sliders, splitter drags and resize snapping used to encode and
     /// atomically rewrite config.json on the main thread for every mouse event.
     public func save() {
+        saveLock.lock()
         pendingSaveWorkItem?.cancel()
+        let snapshot = self.config
+        let targetURL = self.configURL
         let work = DispatchWorkItem { [weak self] in
-            self?.saveNow()
+            guard let self = self else { return }
+            self.saveLock.lock()
+            self.pendingSaveWorkItem = nil
+            self.saveLock.unlock()
+            self.persistenceQueue.async {
+                self.writeSnapshot(snapshot, to: targetURL)
+            }
         }
         pendingSaveWorkItem = work
+        saveLock.unlock()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     /// Writes immediately (used on termination and by `flushPendingSave`).
     public func saveNow() {
+        saveLock.lock()
         pendingSaveWorkItem?.cancel()
         pendingSaveWorkItem = nil
+        let snapshot = self.config
+        let targetURL = self.configURL
+        saveLock.unlock()
+        persistenceQueue.sync {
+            self.writeSnapshot(snapshot, to: targetURL)
+        }
+    }
+
+    private func writeSnapshot(_ snapshot: AtoolsConfig, to url: URL) {
         do {
+            let dir = url.deletingLastPathComponent()
+            if !fileManager.fileExists(atPath: dir.path) {
+                try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
             let encoder = JSONEncoder()
             encoder.outputFormatting = .prettyPrinted
-            let data = try encoder.encode(self.config)
-            try data.write(to: self.configURL, options: .atomic)
+            let data = try encoder.encode(snapshot)
+            try data.write(to: url, options: .atomic)
+            lastPersistenceError = nil
         } catch {
+            lastPersistenceError = error
             let msg = "[ConfigManager] Failed to save config: \(error)"
             print(msg)
             runtimeLog(msg)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .atoolsPersistenceDidFail, object: error)
+            }
         }
     }
 
     public func flushPendingSave() {
-        guard pendingSaveWorkItem != nil else { return }
-        saveNow()
+        saveLock.lock()
+        let hasPending = (pendingSaveWorkItem != nil)
+        saveLock.unlock()
+        if hasPending {
+            saveNow()
+        } else {
+            persistenceQueue.sync {}
+        }
     }
 
     /// 激活独立隔离的沙盒测试环境，完全不读写生产环境 config.json
@@ -331,7 +369,7 @@ public final class ConfigManager {
     }
 
     public func updateShelfIconScale(_ scale: Double) {
-        let clamped = max(0.70, min(1.10, scale))
+        let clamped = max(AppConstants.shelfIconScaleRange.lowerBound, min(AppConstants.shelfIconScaleRange.upperBound, scale))
         self.config.shelfIconScale = clamped
         if clamped <= 0.85 {
             self.config.shelfIconSize = .small
@@ -379,22 +417,24 @@ public final class ConfigManager {
     /// 规则：必须是存在的绝对路径目录；拒绝家目录及其祖先（防止单个目录吃掉全盘）；
     /// 拒绝与默认热目录或已有项重复/互相包含；拒绝废纸篓。
     public func validatedHotFolderPath(_ rawPath: String) -> String? {
-        let path = (rawPath as NSString).standardizingPath
+        let path = (rawPath as NSString).standardizingPath.precomposedStringWithCanonicalMapping
         guard path.hasPrefix("/") else { return nil }
 
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return nil }
 
         let home = FileManager.default.homeDirectoryForCurrentUser
+        let homePath = home.path.precomposedStringWithCanonicalMapping
         // 根路径特殊处理：path=="/" 时拼前缀是 "//"，会漏过祖先判断
         let prefix = path.hasSuffix("/") ? path : path + "/"
-        if home.path == path || home.path.hasPrefix(prefix) { return nil }
+        if homePath == path || homePath.hasPrefix(prefix) { return nil }
         if path.contains("/.Trash") { return nil }
 
         for name in SpotlightBridge.defaultHotFolders {
-            if home.appendingPathComponent(name).path == path { return nil }
+            if home.appendingPathComponent(name).path.precomposedStringWithCanonicalMapping == path { return nil }
         }
-        for existing in config.extraHotFolders {
+        for rawExisting in config.extraHotFolders {
+            let existing = rawExisting.precomposedStringWithCanonicalMapping
             if existing == path
                 || existing.hasPrefix(path + "/")
                 || path.hasPrefix(existing + "/") { return nil }
@@ -415,9 +455,9 @@ public final class ConfigManager {
     }
 
     public func removeHotFolder(_ rawPath: String) {
-        let path = (rawPath as NSString).standardizingPath
+        let path = (rawPath as NSString).standardizingPath.precomposedStringWithCanonicalMapping
         let before = config.extraHotFolders.count
-        config.extraHotFolders.removeAll { $0 == path }
+        config.extraHotFolders.removeAll { $0.precomposedStringWithCanonicalMapping == path }
         guard config.extraHotFolders.count != before else { return }
         save()
         SpotlightBridge.shared.setExtraHotFolders(config.extraHotFolders)
@@ -431,13 +471,13 @@ public final class ConfigManager {
     /// 校验自定义排除目录路径。合法返回标准化绝对路径，不合法返回 nil。
     /// 防御规则：必须为存在的绝对目录；禁止根目录 / 与家目录 ~（防止一键排除全盘或全部个人文件）；
     public func validatedExcludedFolderPath(_ rawPath: String) -> String? {
-        let path = (rawPath as NSString).standardizingPath
+        let path = (rawPath as NSString).standardizingPath.precomposedStringWithCanonicalMapping
         guard path.hasPrefix("/") else { return nil }
 
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return nil }
 
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let home = FileManager.default.homeDirectoryForCurrentUser.path.precomposedStringWithCanonicalMapping
         if path == "/" || path == home { return nil }
 
         return path
@@ -447,16 +487,17 @@ public final class ConfigManager {
     @discardableResult
     public func addCustomExcludedPath(_ rawPath: String) -> Bool {
         guard let path = validatedExcludedFolderPath(rawPath) else { return false }
-        guard !config.customExcludedPaths.contains(path) else { return false }
+        guard !config.customExcludedPaths.contains(where: { $0.precomposedStringWithCanonicalMapping == path }) else { return false }
 
         // 若已有路径是当前新路径的父级，则新路径已被覆盖，无需重复添加
-        for existing in config.customExcludedPaths {
+        for rawExisting in config.customExcludedPaths {
+            let existing = rawExisting.precomposedStringWithCanonicalMapping
             if path.hasPrefix(existing + "/") { return false }
         }
 
         // 若新路径是已有某些路径的父级，则自动吸收清理冗余的子路径
         config.customExcludedPaths.removeAll { existing in
-            existing.hasPrefix(path + "/")
+            existing.precomposedStringWithCanonicalMapping.hasPrefix(path + "/")
         }
 
         guard config.customExcludedPaths.count < Self.maxCustomExcludedPaths else { return false }
@@ -468,9 +509,9 @@ public final class ConfigManager {
     }
 
     public func removeCustomExcludedPath(_ rawPath: String) {
-        let path = (rawPath as NSString).standardizingPath
+        let path = (rawPath as NSString).standardizingPath.precomposedStringWithCanonicalMapping
         let before = config.customExcludedPaths.count
-        config.customExcludedPaths.removeAll { $0 == path }
+        config.customExcludedPaths.removeAll { $0.precomposedStringWithCanonicalMapping == path }
         guard config.customExcludedPaths.count != before else { return }
         save()
         SearchExclusionEngine.shared.recompile(config: config)
@@ -714,6 +755,7 @@ public final class ConfigManager {
         guard !added.isEmpty else { return [] }
         self.config.categories[idx].items.append(contentsOf: added)
         save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         return added
     }
 
@@ -892,15 +934,34 @@ public final class ConfigManager {
         NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
     }
 
-    /// 将选中的多项原子化打包合并为新文件夹（禁止文件夹嵌套）
+    /// 查找包含指定启动项 ID 的宿主分类（用于智能常用只读投影回溯真实分类）
+    public func categoryContainingItem(id: UUID) -> Category? {
+        return self.config.categories.first { cat in
+            !cat.isFavorites && cat.items.contains(where: { $0.id == id })
+        } ?? self.config.categories.first { cat in
+            cat.items.contains(where: { $0.id == id })
+        }
+    }
+
+    /// 将选中的多项原子化打包合并为新文件夹（禁止文件夹嵌套，支持同分类及跨分类事务合并 K-02）
     @discardableResult
     public func createFolderWithItems(itemIds: Set<UUID>, inCategoryId: UUID, folderName: String = "未命名文件夹") -> LauncherItem? {
         guard itemIds.count >= 2 else { return nil }
-        guard let catIdx = self.config.categories.firstIndex(where: { $0.id == inCategoryId }) else { return nil }
+        guard let targetCatIdx = self.config.categories.firstIndex(where: { $0.id == inCategoryId }) else { return nil }
+        // 禁止在智能常用动态投影上直接创建持久化文件夹
+        if self.config.categories[targetCatIdx].isFavorites && self.config.smartFavoritesMode {
+            return nil
+        }
 
-        let itemsToGroup = self.config.categories[catIdx].items.filter { itemIds.contains($0.id) }
-        // 严格防嵌套：已选项目中若包含虚拟组（文件夹），直接拒绝
-        if itemsToGroup.contains(where: { $0.isVirtualGroup }) { return nil }
+        // 跨全部分类定位所有请求的 itemIds，必须全部存在且均非虚拟文件夹
+        var locatedItems: [(catIdx: Int, item: LauncherItem)] = []
+        for cIdx in self.config.categories.indices {
+            for item in self.config.categories[cIdx].items where itemIds.contains(item.id) {
+                if item.isVirtualGroup { return nil }
+                locatedItems.append((cIdx, item))
+            }
+        }
+        guard locatedItems.count == itemIds.count else { return nil }
 
         let folder = LauncherItem(
             name: folderName,
@@ -909,15 +970,28 @@ public final class ConfigManager {
             isVirtualGroup: true
         )
 
-        let firstIdx = self.config.categories[catIdx].items.firstIndex(where: { itemIds.contains($0.id) }) ?? self.config.categories[catIdx].items.count
+        // 将不在目标分类中的跨分类源项目从原分类移除并迁入目标分类
+        var crossCategoryItems: [LauncherItem] = []
+        for entry in locatedItems where entry.catIdx != targetCatIdx {
+            var moved = entry.item
+            moved.parentId = folder.id
+            crossCategoryItems.append(moved)
+            self.config.categories[entry.catIdx].items.removeAll { $0.id == entry.item.id }
+        }
 
-        for i in 0..<self.config.categories[catIdx].items.count {
-            if itemIds.contains(self.config.categories[catIdx].items[i].id) {
-                self.config.categories[catIdx].items[i].parentId = folder.id
+        let firstIdx = self.config.categories[targetCatIdx].items.firstIndex(where: { itemIds.contains($0.id) }) ?? self.config.categories[targetCatIdx].items.count
+
+        for i in 0..<self.config.categories[targetCatIdx].items.count {
+            if itemIds.contains(self.config.categories[targetCatIdx].items[i].id) {
+                self.config.categories[targetCatIdx].items[i].parentId = folder.id
             }
         }
 
-        self.config.categories[catIdx].items.insert(folder, at: firstIdx)
+        self.config.categories[targetCatIdx].items.insert(folder, at: firstIdx)
+        if !crossCategoryItems.isEmpty {
+            let insertAfterFolder = min(firstIdx + 1, self.config.categories[targetCatIdx].items.count)
+            self.config.categories[targetCatIdx].items.insert(contentsOf: crossCategoryItems, at: insertAfterFolder)
+        }
         save()
         NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         return folder
@@ -1133,9 +1207,11 @@ public final class ConfigManager {
         // 只有当前真正存活在物理磁盘上的应用 Bundle ID，才被保留在已知集合中。
         // 若某个应用已从物理磁盘彻底删除（卸载），将其从 knownSet 中修剪，
         // 这样一旦用户未来重新从 App Store / DMG 下载安装该应用，就能被精准识别为全新安装并自动入库！
+        let countBeforePrune = knownSet.count
         knownSet = knownSet.filter { bid in
             scannedValidBids.contains(bid)
         }
+        let didPruneKnownBids = (knownSet.count != countBeforePrune)
 
         var targetCatIdx: Int?
 
@@ -1205,7 +1281,9 @@ public final class ConfigManager {
             newlyAddedCount += 1
         }
 
-        config.knownAppBundleIds = Array(knownSet).sorted()
+        let updatedKnownList = Array(knownSet).sorted()
+        let knownChanged = (updatedKnownList != config.knownAppBundleIds) || didPruneKnownBids
+        config.knownAppBundleIds = updatedKnownList
         config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
 
         if newlyAddedCount > 0 {
@@ -1215,6 +1293,8 @@ public final class ConfigManager {
             save()
             NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
             runtimeLog("[AutoDiscovery] Successfully auto-added \(newlyAddedCount) new app(s) to category: \(config.categories[targetIndex].name)")
+        } else if knownChanged {
+            save()
         }
     }
 
@@ -1240,18 +1320,20 @@ public final class ConfigManager {
         }
     }
 
-    /// 若托管在 icons/ 目录下的自定义图标不再被任何启动项引用，则将其从磁盘清理
+    /// 若托管在 icons/ 目录下的自定义图标不再被任何启动项引用，则将其从磁盘清理（含 NFC 规范化与路径穿越防御）
     public func removeManagedIconIfUnused(_ iconPath: String?, excludingItemId: UUID? = nil) {
         guard let rawPath = iconPath?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawPath.isEmpty else { return }
-        let standardized = (rawPath as NSString).standardizingPath
-        let managedPrefix = (iconsDirectoryURL.path as NSString).standardizingPath + "/"
+        let standardized = URL(fileURLWithPath: rawPath).standardizedFileURL.resolvingSymlinksInPath().path.precomposedStringWithCanonicalMapping
+        let managedBase = iconsDirectoryURL.standardizedFileURL.resolvingSymlinksInPath().path.precomposedStringWithCanonicalMapping
+        let managedPrefix = managedBase.hasSuffix("/") ? managedBase : (managedBase + "/")
         guard standardized.hasPrefix(managedPrefix) else { return }
 
         let stillReferenced = config.categories.contains { cat in
             cat.items.contains { item in
                 guard item.id != excludingItemId, let custom = item.customIconPath else { return false }
-                return (custom as NSString).standardizingPath == standardized
+                let itemStd = URL(fileURLWithPath: custom).standardizedFileURL.resolvingSymlinksInPath().path.precomposedStringWithCanonicalMapping
+                return itemStd == standardized
             }
         }
         if !stillReferenced {
@@ -1341,18 +1423,11 @@ public final class ConfigManager {
             removeManagedIconIfUnused(item.customIconPath)
             ThumbnailPipeline.shared.invalidateIcon(forItem: item)
 
-            // 当用户一键清理失效项时，说明该应用已被物理卸载并确认放弃。
-            // 联动从 knownAppBundleIds 和 ignoredAutoAddBundleIds 中修剪掉该应用的历史记录，
-            // 确保如果用户未来重新从 App Store / DMG 下载安装该应用，能被当作“新安装应用”再次自动入库！
-            let targetPath = item.target
-            let appBaseName = (targetPath as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
-            if !appBaseName.isEmpty {
-                self.config.knownAppBundleIds.removeAll { bid in
-                    bid.localizedCaseInsensitiveContains(appBaseName)
-                }
-                self.config.ignoredAutoAddBundleIds.removeAll { bid in
-                    bid.localizedCaseInsensitiveContains(appBaseName)
-                }
+            // S-06: 仅使用精确的 Bundle Identifier 修剪，禁止使用模糊应用名子串匹配误删其他正常应用
+            let exactBid = item.bundleIdentifier ?? Bundle(path: item.target)?.bundleIdentifier
+            if let bid = exactBid, !bid.isEmpty {
+                self.config.knownAppBundleIds.removeAll { $0.caseInsensitiveCompare(bid) == .orderedSame }
+                self.config.ignoredAutoAddBundleIds.removeAll { $0.caseInsensitiveCompare(bid) == .orderedSame }
             }
         }
         save()
@@ -1432,8 +1507,12 @@ public final class ConfigManager {
 
         let categoryToDelete = self.config.categories[idx]
 
-        if let targetId = targetId,
-           let targetIdx = self.config.categories.firstIndex(where: { $0.id == targetId }) {
+        if let targetId = targetId {
+            // S-05: 强校验迁移目标分类：禁止迁移到自身，且目标分类必须真实存在，否则拒绝删除防止静默丢项
+            guard targetId != id,
+                  let targetIdx = self.config.categories.firstIndex(where: { $0.id == targetId }) else {
+                return false
+            }
             self.config.categories[targetIdx].items.append(contentsOf: categoryToDelete.items)
         } else {
             for item in categoryToDelete.items {
@@ -1450,6 +1529,7 @@ public final class ConfigManager {
             self.config.autoAddPolicyMode = .dedicatedInbox
         }
         save()
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         return true
     }
 
@@ -1469,7 +1549,7 @@ public final class ConfigManager {
     }
 
     public func updateSearchResultLimit(_ limit: Int) {
-        let clamped = max(20, min(200, limit))
+        let clamped = max(AppConstants.searchResultLimitRange.lowerBound, min(AppConstants.searchResultLimitRange.upperBound, limit))
         self.config.searchResultLimit = clamped
         save()
     }

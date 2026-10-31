@@ -2069,7 +2069,7 @@ public enum DiagnosticSuite {
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: 0) == true, "Both AX and WindowServer 0 confirms window close")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: nil, windowServerCount: 0) == false, "AX failure must never quit even if WindowServer 0")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 1, windowServerCount: 1) == false, "Active running window must not quit")
-        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: nil) == true, "AX 0 with unknown WindowServer falls back to quit")
+        TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(axCount: 0, windowServerCount: nil) == false, "Y-01: AX 0 with unknown WindowServer (nil) must fail-safe and NEVER quit")
         // 验证 AutoQuitQuirks 声明式规则引擎
         let quirks = AutoQuitQuirks.shared
         TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.parallels.desktop.console") == true, "Parallels must be protected by quirks")
@@ -2618,6 +2618,134 @@ public enum DiagnosticSuite {
     TestAssertions.expect(!mockGrid.hasBatchSelection, "clearBatchSelection 后必须清空选中态")
 
     print("      ✓ Marquee Batch Selection, Atomic Batch Delete, Move, Folder Grouping & Tombstones verified.")
+
+    // 19. 工业级深度加固与全量审计回归测试矩阵 (S-01~S-06, U-01~U-06, Q-01~Q-12, K-01~K-05, Y-01~Y-11, C-01~C-04 & 军师4项加固)
+    print("[19] Testing Deep Architectural Hardening & Remediation Matrix...")
+    do {
+        // (1) S-01 & 军师加固点 3: 备份恢复路径穿越拦截与 APFS Unicode NFC 规范化防御
+        let iconsSandbox = tempTestDir.appendingPathComponent("icons_sec_test", isDirectory: true)
+        try? FileManager.default.createDirectory(at: iconsSandbox, withIntermediateDirectories: true)
+        var traversalBlocked = false
+        do {
+            _ = try BackupService.sanitizeIconFilename("../../config.json", targetDirectory: iconsSandbox)
+        } catch BackupError.securityViolation {
+            traversalBlocked = true
+        }
+        TestAssertions.expect(traversalBlocked, "S-01: 路径穿越文件名 ../../config.json 必须被 sanitizeIconFilename 拦截")
+
+        var dotHiddenBlocked = false
+        do {
+            _ = try BackupService.sanitizeIconFilename(".hidden_payload.png", targetDirectory: iconsSandbox)
+        } catch BackupError.securityViolation {
+            dotHiddenBlocked = true
+        }
+        TestAssertions.expect(dotHiddenBlocked, "S-01: 隐藏文件前缀必须被 sanitizeIconFilename 拦截")
+
+        // 验证 NFD 变音符文件名自动规范化为 NFC
+        let nfdName = "cafe\u{0301}_icon.png"
+        let sanitizedURL = try BackupService.sanitizeIconFilename(nfdName, targetDirectory: iconsSandbox)
+        TestAssertions.expect(sanitizedURL.lastPathComponent == nfdName.precomposedStringWithCanonicalMapping, "军师加固点 3: 文件名必须被规范化为 NFC")
+
+        // (2) S-02: 备份导出拒绝破坏性覆盖非备份重要目录
+        let nonBackupDir = tempTestDir.appendingPathComponent("ImportantUserDocs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: nonBackupDir, withIntermediateDirectories: true)
+        let importantFile = nonBackupDir.appendingPathComponent("keep_me.txt")
+        try "precious data".write(to: importantFile, atomically: true, encoding: .utf8)
+        var destructiveOverwriteBlocked = false
+        do {
+            _ = try BackupService.shared.exportBackup(to: nonBackupDir)
+        } catch {
+            destructiveOverwriteBlocked = true
+        }
+        TestAssertions.expect(destructiveOverwriteBlocked, "S-02: 导出到包含用户文件的非备份目录必须被拒绝")
+        TestAssertions.expect(FileManager.default.fileExists(atPath: importantFile.path), "S-02: 拒绝覆盖后原目录中的用户文件必须完好无损")
+
+        // (3) S-03: 配置文件 categories 字段类型损坏时必须抛出异常而非静默清空为 []
+        let malformedCategoriesJSON = "{\"version\":5,\"categories\":\"corrupted_not_an_array\"}".data(using: .utf8)!
+        var malformedCaught = false
+        do {
+            _ = try JSONDecoder().decode(AtoolsConfig.self, from: malformedCategoriesJSON)
+        } catch {
+            malformedCaught = true
+        }
+        TestAssertions.expect(malformedCaught, "S-03: categories 字段类型损坏时解码器必须抛出异常，严禁静默清空")
+
+        // (4) S-04: Shell 启动项参数化防注入与含空格脚本路径识别
+        let spacedScriptDir = tempTestDir.appendingPathComponent("My Scripts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: spacedScriptDir, withIntermediateDirectories: true)
+        let spacedScriptPath = spacedScriptDir.appendingPathComponent("deploy app.sh")
+        try "#!/bin/sh\necho ok".write(to: spacedScriptPath, atomically: true, encoding: .utf8)
+        let spacedItem = LauncherItem(name: "Spaced", itemType: .shellScript, target: spacedScriptPath.path)
+        TestAssertions.expect(!spacedItem.checkTargetMissing(), "S-04: 真实存在的含空格脚本路径绝不能误报目标缺失")
+        let fileScriptArgs = LauncherExecutor.buildShellProcessArguments(target: spacedScriptPath.path, extraArgs: ["$(whoami)", "arg with space"])
+        TestAssertions.expect(fileScriptArgs == [spacedScriptPath.path, "$(whoami)", "arg with space"], "S-04: 脚本文件执行必须直接传参而不经过字符串拼接")
+        let inlineCmdArgs = LauncherExecutor.buildShellProcessArguments(target: "echo hello", extraArgs: ["$(rm -rf /)"])
+        TestAssertions.expect(inlineCmdArgs == ["-c", "echo hello \"$@\"", "--", "$(rm -rf /)"], "S-04: 命令行脚本必须采用 -- 与 $@ 位置参数隔离，防止命令注入")
+
+        // (5) S-05: deleteCategory 迁移目标非法时拒绝删除防止静默丢项
+        if let validCatId = ConfigManager.shared.config.categories.first?.id {
+            let invalidTargetResult = ConfigManager.shared.deleteCategory(id: validCatId, migrateItemsTo: UUID())
+            TestAssertions.expect(invalidTargetResult == false, "S-05: 迁移目标分类不存在时必须拒绝删除")
+            let selfTargetResult = ConfigManager.shared.deleteCategory(id: validCatId, migrateItemsTo: validCatId)
+            TestAssertions.expect(selfTargetResult == false, "S-05: 迁移目标为自身时必须拒绝删除")
+        }
+
+        // (6) U-03, U-05, U-06 & 军师加固点 4: SemVer 预发布版比较、软链接阻塞检测与同卷隐藏 Staging 目录
+        TestAssertions.expect(UpdateManager.isVersion("1.3.25", greaterThan: "1.3.25-beta.1") == true, "U-06: 正式版 1.3.25 必须高于预发布版 1.3.25-beta.1")
+        TestAssertions.expect(UpdateManager.isVersion("1.3.25-beta.2", greaterThan: "1.3.25-beta.1") == true, "U-06: 1.3.25-beta.2 必须高于 1.3.25-beta.1")
+        TestAssertions.expect(UpdateManager.isVersion("1.3.25-beta.1", greaterThan: "1.3.25") == false, "U-06: 预发布版不得高于同号正式版")
+        let mockTargetApp = tempTestDir.appendingPathComponent("ATools.app").path
+        let sameVolStaging = try UpdateManager.createSameVolumeStagingDirectory(forTargetAppPath: mockTargetApp, fallbackTempDir: tempTestDir)
+        TestAssertions.expect(sameVolStaging.deletingLastPathComponent().standardizedFileURL == tempTestDir.standardizedFileURL, "军师加固点 4: 更新 Staging 目录必须创建在目标 App 同一物理卷父目录下")
+        TestAssertions.expect(sameVolStaging.lastPathComponent.hasPrefix(".atools_staging_"), "军师加固点 4: Staging 目录必须为 .atools_staging_<UUID> 隐藏工作目录")
+        try? FileManager.default.removeItem(at: sameVolStaging)
+
+        // (7) 军师加固点 2: RawSearchResultPayload Sendable 跨线程合规与主线程组装
+        let payload = RawSearchResultPayload(id: "test_payload", title: "PayloadApp", subtitle: "/Applications/Safari.app", path: "/Applications/Safari.app", type: .application, score: 888)
+        let materialized = payload.materializeSearchResult()
+        TestAssertions.expect(materialized.id == "test_payload" && materialized.title == "PayloadApp" && materialized.action != nil, "军师加固点 2: RawSearchResultPayload 跨入主线程后必须正确绑定 action")
+
+        // (8) Q-03, Q-09, Q-12 & 军师加固点 3: 搜索限制钳制、开发者排除开关、计算器负号幂运算优先级、NFC 路径排除
+        let extremeCfgJSON = "{\"version\":5,\"searchResultLimit\":-999,\"shelfIconScale\":9.9,\"categories\":[]}".data(using: .utf8)!
+        let clampedDecode = try JSONDecoder().decode(AtoolsConfig.self, from: extremeCfgJSON)
+        TestAssertions.expect(clampedDecode.searchResultLimit == AppConstants.searchResultLimitRange.lowerBound, "Q-03: 负数 searchResultLimit 解码时必须钳制到安全下界 10")
+        TestAssertions.expect(clampedDecode.shelfIconScale == AppConstants.shelfIconScaleRange.upperBound, "C-04: 超界 shelfIconScale 解码时必须钳制到统一上界 1.10")
+        TestAssertions.expect(CalculatorEngine.shared.evaluate("-2^2") == "-4", "Q-12: -2^2 必须遵循数学标准求值为 -4")
+        TestAssertions.expect(CalculatorEngine.shared.evaluate("(-2)^2") == "4", "Q-12: (-2)^2 必须求值为 4")
+
+        var devAllowedCfg = AtoolsConfig()
+        devAllowedCfg.searchExcludeDeveloper = false
+        let devRules = SearchExclusionEngine.CompiledRules(config: devAllowedCfg)
+        TestAssertions.expect(devRules.developerInfixes.isEmpty, "Q-09: 关闭排除开发者选项时，developerInfixes 必须为空，不硬编码排除 CommandLineTools")
+
+        // 验证 SearchExclusionEngine 对 NFD 编码路径的 NFC 归一化拦截
+        var customExclCfg = AtoolsConfig()
+        let nfcExcludedDir = "/Users/test/Caf\u{00E9}Secret"
+        let nfdQueryFile = "/Users/test/Cafe\u{0301}Secret/doc.pdf"
+        customExclCfg.customExcludedPaths = [nfcExcludedDir]
+        SearchExclusionEngine.shared.recompile(config: customExclCfg)
+        TestAssertions.expect(SearchExclusionEngine.shared.isExcluded(path: nfdQueryFile) == true, "军师加固点 3: NFD 形式路径必须无法绕过 NFC 排除前缀过滤")
+        SearchExclusionEngine.shared.recompile(config: ConfigManager.shared.config)
+
+        // (9) C-03: 备份恢复支持非 PNG 扩展名 (.jpg / .icns) 自定义图标自愈映射
+        let customIconItemID = UUID()
+        let itemWithJpgIcon = LauncherItem(id: customIconItemID, name: "JpgApp", itemType: .application, target: "/Applications/Safari.app", customIconPath: "/Users/oldmac/Pictures/custom.jpg")
+        let cfgForHeal = AtoolsConfig(categories: [Category(name: "测试", items: [itemWithJpgIcon])])
+        let jpgFileName = "\(customIconItemID.uuidString).jpg"
+        let healedResult = BackupService.healPaths(
+            in: cfgForHeal,
+            sourceHomePath: "/Users/oldmac",
+            currentHomePath: "/Users/newmac",
+            currentIconsDir: URL(fileURLWithPath: "/Users/newmac/Library/Application Support/ATools/icons"),
+            availableBackupIcons: [jpgFileName],
+            iconFileMap: [customIconItemID.uuidString: jpgFileName]
+        )
+        TestAssertions.expect(healedResult.healed.categories[0].items[0].customIconPath?.hasSuffix(jpgFileName) == true, "C-03: 非 PNG 自定义图标 (.jpg) 必须通过 iconFileMap 精确自愈映射")
+
+        print("      ✓ Deep Architectural Hardening & Remediation Matrix verified.")
+    } catch {
+        TestAssertions.expect(false, "Deep Architectural Hardening test threw: \(error)")
+    }
 
     if TestAssertions.failures > 0 {
         print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")

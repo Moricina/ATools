@@ -188,6 +188,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
 
+        // Y-07: 监听快捷键配置变更通知，实时刷新状态栏菜单标题
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handlePanelTogglesChanged),
+            name: .atoolsHotkeysDidChange,
+            object: nil
+        )
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(handleAutoQuitConfigChanged),
@@ -274,13 +282,26 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         runtimeLog("[RawKey] \(source) \(event.type.rawValue) code=\(event.keyCode) chars=\(chars.debugDescription) mods=\(mods.rawValue)")
     }
 
+    /// Q-10: 记录启动期目录 TCC 权限预检受阻的目录列表
+    public static private(set) var restrictedUserDirectories: [String] = []
+
     private func preflightUserDirectoriesAccess() {
         DispatchQueue.global(qos: .utility).async {
             let home = FileManager.default.homeDirectoryForCurrentUser
             let folders = ["Downloads", "Documents", "Desktop"]
+            var restricted: [String] = []
             for folder in folders {
                 let url = home.appendingPathComponent(folder)
-                _ = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                do {
+                    _ = try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil)
+                } catch {
+                    restricted.append(folder)
+                    runtimeLog("[App] TCC directory access restricted for ~/\(folder): \(error.localizedDescription)")
+                }
+            }
+            DispatchQueue.main.async {
+                Self.restrictedUserDirectories = restricted
             }
         }
     }

@@ -90,10 +90,10 @@ public final class CalculatorEngine {
         }
 
         private mutating func parseTerm() -> Double? {
-            guard var lhs = parsePower() else { return nil }
+            guard var lhs = parseUnary() else { return nil }
             while let op = peek(), "*/%×÷".contains(op) {
                 index += 1
-                guard let rhs = parsePower() else { return nil }
+                guard let rhs = parseUnary() else { return nil }
                 switch op {
                 case "*", "×": lhs *= rhs
                 case "/", "÷":
@@ -107,29 +107,30 @@ public final class CalculatorEngine {
             return lhs
         }
 
-        private mutating func parsePower() -> Double? {
-            guard let base = parseUnary() else { return nil }
-            if peek() == "^" {
-                index += 1
-                guard let exponent = parsePower() else { return nil }
-                return pow(base, exponent)
-            }
-            // `**` is accepted as an alias for `^`
-            if peek() == "*", index + 1 < chars.count, chars[index + 1] == "*" {
-                index += 2
-                guard let exponent = parsePower() else { return nil }
-                return pow(base, exponent)
-            }
-            return base
-        }
-
+        /// Q-12: 幂运算优先级高于一元负号（例如 -2^2 == -(2^2) == -4，而 (-2)^2 == 4，2^-2 == 0.25）
         private mutating func parseUnary() -> Double? {
             if let op = peek(), op == "+" || op == "-" {
                 index += 1
                 guard let value = parseUnary() else { return nil }
                 return op == "-" ? -value : value
             }
-            return parsePrimary()
+            return parsePower()
+        }
+
+        private mutating func parsePower() -> Double? {
+            guard let base = parsePrimary() else { return nil }
+            if peek() == "^" {
+                index += 1
+                guard let exponent = parseUnary() else { return nil }
+                return pow(base, exponent)
+            }
+            // `**` is accepted as an alias for `^`
+            if peek() == "*", index + 1 < chars.count, chars[index + 1] == "*" {
+                index += 2
+                guard let exponent = parseUnary() else { return nil }
+                return pow(base, exponent)
+            }
+            return base
         }
 
         private mutating func parsePrimary() -> Double? {

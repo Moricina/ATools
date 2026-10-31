@@ -133,18 +133,19 @@ public enum SearchTypeFilter: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// 热目录快照内存极速判定
+    /// 热目录快照内存极速判定（Q-12：大小写无关扩展名判定）
     public func matches(filename: String, isDirectory: Bool) -> Bool {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let isAppOrPref = (ext == "app" || ext == "prefpane")
         switch self {
         case .all:
             return true
         case .application:
-            return filename.hasSuffix(".app") || filename.hasSuffix(".prefPane")
+            return isAppOrPref
         case .folder:
-            return isDirectory && !filename.hasSuffix(".app")
+            return isDirectory && !isAppOrPref
         case .document, .image, .media, .code, .archive:
             if isDirectory { return false }
-            let ext = (filename as NSString).pathExtension.lowercased()
             return extensions.contains(ext)
         }
     }

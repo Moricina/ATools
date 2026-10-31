@@ -1158,7 +1158,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
                 HotkeyManager.shared.register(id: .search, binding: ConfigManager.shared.config.searchHotkey)
             } else {
                 HotkeyManager.shared.unregister(id: .search)
-                PanelCoordinator.shared.searchPanel.orderOut(nil)
+                // K-03: 委托给 PanelCoordinator 受控关闭并释放监听与搜索任务
+                PanelCoordinator.shared.disableAndHidePanel(.search)
             }
             NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
             refresh()
@@ -1176,15 +1177,26 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             alert.runModalAboveFloatingWindows()
             return
         }
-        ConfigManager.shared.updateSearchHotkey(newBinding)
-        HotkeyManager.shared.register(id: .search, binding: newBinding)
-        searchRecorder?.currentBinding = newBinding
+        // Y-06 & Y-07: 两阶段提交，仅当底层热键注册成功后才写入 ConfigManager 并广播菜单栏刷新通知
+        if HotkeyManager.shared.register(id: .search, binding: newBinding) {
+            ConfigManager.shared.updateSearchHotkey(newBinding)
+            searchRecorder?.currentBinding = newBinding
+            NotificationCenter.default.post(name: .atoolsHotkeysDidChange, object: nil)
+        } else {
+            searchRecorder?.currentBinding = ConfigManager.shared.config.searchHotkey
+            NSSound.beep()
+            let alert = NSAlert()
+            alert.messageText = "快捷键注册失败"
+            alert.informativeText = "该快捷键可能已被系统或其他软件占用，请更换其他按键组合。"
+            alert.runModalAboveFloatingWindows()
+        }
     }
 
     private func handleSearchCleared() {
         let unassigned = HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "", specialTrigger: .none)
-        ConfigManager.shared.updateSearchHotkey(unassigned)
         HotkeyManager.shared.unregister(id: .search)
+        ConfigManager.shared.updateSearchHotkey(unassigned)
+        NotificationCenter.default.post(name: .atoolsHotkeysDidChange, object: nil)
     }
 
     @objc private func setCommandSpaceHotkey() {

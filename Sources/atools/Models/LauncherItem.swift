@@ -1,6 +1,6 @@
 import Foundation
 
-public enum LauncherItemType: String, Codable, Equatable {
+public enum LauncherItemType: String, Codable, Equatable, Sendable {
     case application
     case fileOrFolder
     case webURL
@@ -9,13 +9,13 @@ public enum LauncherItemType: String, Codable, Equatable {
     case systemAction
 }
 
-public enum TerminalMode: String, Codable, Equatable {
+public enum TerminalMode: String, Codable, Equatable, Sendable {
     case integratedBackground
     case launchTerminal
     case openWith
 }
 
-public struct ExecutionContext: Codable, Equatable {
+public struct ExecutionContext: Codable, Equatable, Sendable {
     public var arguments: [String]
     public var workingDirectory: String?
     public var environmentVars: [String: String]
@@ -97,12 +97,13 @@ public struct ExecutionContext: Codable, Equatable {
     }
 }
 
-public struct LauncherItem: Identifiable, Codable, Equatable {
+public struct LauncherItem: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
     public var parentId: UUID?
     public var name: String
     public var itemType: LauncherItemType
     public var target: String
+    public var bundleIdentifier: String?
     public var executionContext: ExecutionContext?
     public var customIconPath: String?
     public var hotkey: String?
@@ -119,6 +120,7 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         name: String,
         itemType: LauncherItemType,
         target: String,
+        bundleIdentifier: String? = nil,
         executionContext: ExecutionContext? = nil,
         customIconPath: String? = nil,
         hotkey: String? = nil,
@@ -134,6 +136,13 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         self.name = name
         self.itemType = itemType
         self.target = target
+        if let explicitBid = bundleIdentifier, !explicitBid.isEmpty {
+            self.bundleIdentifier = explicitBid
+        } else if itemType == .application && target.lowercased().hasSuffix(".app") {
+            self.bundleIdentifier = Bundle(path: target)?.bundleIdentifier
+        } else {
+            self.bundleIdentifier = nil
+        }
         self.executionContext = executionContext
         self.customIconPath = customIconPath
         self.hotkey = hotkey
@@ -146,7 +155,7 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, parentId, name, itemType, target, executionContext, customIconPath, hotkey, tags, sortWeight, isVirtualGroup
+        case id, parentId, name, itemType, target, bundleIdentifier, executionContext, customIconPath, hotkey, tags, sortWeight, isVirtualGroup
         case launchCount, lastLaunchedAt, addedAt
     }
 
@@ -157,6 +166,13 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         self.name = (try? container.decode(String.self, forKey: .name)) ?? ""
         self.itemType = (try? container.decode(LauncherItemType.self, forKey: .itemType)) ?? .application
         self.target = (try? container.decode(String.self, forKey: .target)) ?? ""
+        if let decodedBid = try? container.decode(String.self, forKey: .bundleIdentifier), !decodedBid.isEmpty {
+            self.bundleIdentifier = decodedBid
+        } else if self.itemType == .application && self.target.lowercased().hasSuffix(".app") {
+            self.bundleIdentifier = Bundle(path: self.target)?.bundleIdentifier
+        } else {
+            self.bundleIdentifier = nil
+        }
         self.executionContext = try? container.decode(ExecutionContext.self, forKey: .executionContext)
         self.customIconPath = try? container.decode(String.self, forKey: .customIconPath)
         self.hotkey = try? container.decode(String.self, forKey: .hotkey)
@@ -168,6 +184,25 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         self.addedAt = try? container.decode(Double.self, forKey: .addedAt)
     }
 
+    /// S-04：判断 shellScript 的 target 是否为磁盘路径（支持含空格的脚本文件路径）
+    public static func isLikelyFileSystemScriptPath(_ rawTarget: String) -> Bool {
+        let trimmed = rawTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return false }
+        if FileManager.default.fileExists(atPath: trimmed) {
+            return true
+        }
+        let shellOperators = CharacterSet(charactersIn: "|&;$><`!(){}[]*?")
+        if trimmed.rangeOfCharacter(from: shellOperators) != nil {
+            return false
+        }
+        if !trimmed.contains(" ") {
+            return true
+        }
+        let ext = (trimmed as NSString).pathExtension.lowercased()
+        let scriptExtensions: Set<String> = ["sh", "zsh", "bash", "command", "py", "rb", "pl", "js", "swift"]
+        return scriptExtensions.contains(ext)
+    }
+
     /// 检测目标路径是否已失效（对标 GlassDesk IsTargetMissing）
     public func checkTargetMissing() -> Bool {
         if isVirtualGroup { return false }
@@ -177,7 +212,7 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
         case .application, .fileOrFolder:
             return !FileManager.default.fileExists(atPath: trimmed)
         case .shellScript:
-            if trimmed.hasPrefix("/") && !trimmed.contains(" ") {
+            if Self.isLikelyFileSystemScriptPath(trimmed) {
                 return !FileManager.default.fileExists(atPath: trimmed)
             }
             return false
@@ -281,9 +316,9 @@ public struct LauncherItem: Identifiable, Codable, Equatable {
 }
 
 /// Stable identity used to prevent dragging the same file or application into a category twice.
-/// File system paths are standardized and symlinks are resolved so aliases to the same bundle
-/// cannot create duplicate launcher entries.
-public struct LauncherItemIdentity: Hashable {
+/// File system paths are standardized, symlinks are resolved, and Unicode NFC normalization
+/// (.precomposedStringWithCanonicalMapping) is applied so APFS NFD/NFC variants never create duplicates.
+public struct LauncherItemIdentity: Hashable, Sendable {
     public let itemType: LauncherItemType
     public let canonicalTarget: String
 
@@ -294,8 +329,9 @@ public struct LauncherItemIdentity: Hashable {
                 .standardizedFileURL
                 .resolvingSymlinksInPath()
                 .path
+                .precomposedStringWithCanonicalMapping
         } else {
-            self.canonicalTarget = target
+            self.canonicalTarget = target.precomposedStringWithCanonicalMapping
         }
     }
 }
@@ -337,7 +373,7 @@ public extension LauncherItem {
     }
 }
 
-public struct Category: Identifiable, Codable, Equatable {
+public struct Category: Identifiable, Codable, Equatable, Sendable {
     public var id: UUID
     public var name: String
     public var iconSymbol: String

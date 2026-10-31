@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-public enum SearchResultType: String, Codable {
+public enum SearchResultType: String, Codable, Sendable {
     case application
     case file
     case folder
@@ -10,6 +10,53 @@ public enum SearchResultType: String, Codable {
     case systemAction
     case webSearch
     case syntaxCommand
+}
+
+/// 军师加固点 2：后台检索线程统一产出的轻量不可变跨隔离区安全载荷（严格 Sendable 合规，不持有 NSImage 与逃逸闭包）。
+/// 跨入 @MainActor / 主线程边界后再调用 `materializeSearchResult()` 绑定图片与交互动作。
+public struct RawSearchResultPayload: Identifiable, Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let subtitle: String
+    public let path: String?
+    public let customIconPath: String?
+    public let type: SearchResultType
+    public let score: Int
+
+    public init(
+        id: String = UUID().uuidString,
+        title: String,
+        subtitle: String,
+        path: String? = nil,
+        customIconPath: String? = nil,
+        type: SearchResultType,
+        score: Int = 0
+    ) {
+        self.id = id
+        self.title = title
+        self.subtitle = subtitle
+        self.path = path
+        self.customIconPath = customIconPath
+        self.type = type
+        self.score = score
+    }
+
+    public func materializeSearchResult() -> SearchResult {
+        let targetPath = self.path
+        return SearchResult(
+            id: id,
+            title: title,
+            subtitle: subtitle,
+            path: path,
+            customIconPath: customIconPath,
+            type: type,
+            score: score,
+            icon: nil,
+            action: targetPath.map { p in
+                { LauncherExecutor.open(path: p) }
+            }
+        )
+    }
 }
 
 public struct SearchResult: Identifiable {

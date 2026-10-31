@@ -10,6 +10,8 @@ public final class DesktopIconManager {
 
     private let finderDomain = "com.apple.finder" as CFString
     private let key = "CreateDesktop" as CFString
+    /// Y-10: 专用串行队列，保证快速双击切换桌面图标时 defaults 写入与 Finder 重启严格按顺序串行执行，杜绝并发竞态
+    private let executionQueue = DispatchQueue(label: "cc.atools.desktopicon.serial", qos: .userInitiated)
 
     private init() {}
 
@@ -36,25 +38,38 @@ public final class DesktopIconManager {
         return newHidden
     }
 
-    /// Explicitly sets desktop icon visibility.
+    /// Explicitly sets desktop icon visibility on a serial queue and verifies exit codes (Y-10).
     public func setDesktopIconsHidden(_ hidden: Bool) {
         let targetBool = !hidden // CreateDesktop == true means icons are visible
         CFPreferencesSetAppValue(key, targetBool ? kCFBooleanTrue : kCFBooleanFalse, finderDomain)
         CFPreferencesAppSynchronize(finderDomain)
 
-        DispatchQueue.global(qos: .userInitiated).async { [targetBool] in
-            // Use defaults write + killall Finder for guaranteed multi-version macOS consistency
+        executionQueue.async { [targetBool] in
             let defaultsTask = Process()
             defaultsTask.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
             defaultsTask.arguments = ["write", "com.apple.finder", "CreateDesktop", "-bool", targetBool ? "true" : "false"]
-            try? defaultsTask.run()
-            defaultsTask.waitUntilExit()
+            do {
+                try defaultsTask.run()
+                defaultsTask.waitUntilExit()
+                guard defaultsTask.terminationStatus == 0 else {
+                    runtimeLog("[DesktopIconManager] defaults write exited with status \(defaultsTask.terminationStatus)")
+                    return
+                }
+            } catch {
+                runtimeLog("[DesktopIconManager] Failed to run defaults: \(error)")
+                return
+            }
 
             let killTask = Process()
             killTask.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
             killTask.arguments = ["Finder"]
-            try? killTask.run()
-            killTask.waitUntilExit()
+            do {
+                try killTask.run()
+                killTask.waitUntilExit()
+            } catch {
+                runtimeLog("[DesktopIconManager] Failed to restart Finder: \(error)")
+                return
+            }
 
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .atoolsDesktopIconsVisibilityDidChange, object: nil)

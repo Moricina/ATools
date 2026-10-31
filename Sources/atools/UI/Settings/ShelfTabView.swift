@@ -543,7 +543,8 @@ public final class ShelfTabView: NSView {
                 HotkeyManager.shared.register(id: .shelf, binding: ConfigManager.shared.config.shelfHotkey)
             } else {
                 HotkeyManager.shared.unregister(id: .shelf)
-                PanelCoordinator.shared.shelfPanel.orderOut(nil)
+                // K-03: 委托给 PanelCoordinator 受控关闭并释放监听与浮层
+                PanelCoordinator.shared.disableAndHidePanel(.shelf)
             }
             NotificationCenter.default.post(name: .atoolsPanelTogglesDidChange, object: nil)
             refresh()
@@ -561,15 +562,26 @@ public final class ShelfTabView: NSView {
             alert.runModalAboveFloatingWindows()
             return
         }
-        ConfigManager.shared.updateShelfHotkey(newBinding)
-        HotkeyManager.shared.register(id: .shelf, binding: newBinding)
-        shelfRecorder?.currentBinding = newBinding
+        // Y-06 & Y-07: 两阶段提交，仅当底层热键注册成功后才写入 ConfigManager 并广播菜单栏刷新通知
+        if HotkeyManager.shared.register(id: .shelf, binding: newBinding) {
+            ConfigManager.shared.updateShelfHotkey(newBinding)
+            shelfRecorder?.currentBinding = newBinding
+            NotificationCenter.default.post(name: .atoolsHotkeysDidChange, object: nil)
+        } else {
+            shelfRecorder?.currentBinding = ConfigManager.shared.config.shelfHotkey
+            NSSound.beep()
+            let alert = NSAlert()
+            alert.messageText = "快捷键注册失败"
+            alert.informativeText = "该快捷键可能已被系统或其他软件占用，请更换其他按键组合。"
+            alert.runModalAboveFloatingWindows()
+        }
     }
 
     private func handleShelfCleared() {
         let unassigned = HotkeyBinding(keyCode: 0, carbonModifiers: 0, displayString: "", specialTrigger: .none)
-        ConfigManager.shared.updateShelfHotkey(unassigned)
         HotkeyManager.shared.unregister(id: .shelf)
+        ConfigManager.shared.updateShelfHotkey(unassigned)
+        NotificationCenter.default.post(name: .atoolsHotkeysDidChange, object: nil)
     }
 
     @objc private func trackpadGestureChanged(_ sender: NSPopUpButton) {

@@ -9,6 +9,7 @@ public final class AutoQuitUndoHUDController {
     private var dismissTimer: Timer?
     private var countdownTimer: Timer?
     private var remainingSeconds: Double = 0
+    private var targetDeadline: Date = .distantPast
     private var currentPid: pid_t = 0
     private var onCancelHandler: ((pid_t) -> Void)?
 
@@ -19,14 +20,20 @@ public final class AutoQuitUndoHUDController {
     private init() {}
 
     /// 展示退出倒计时 HUD
+    /// - 军师加固点 1：倒计时 Timer 显式挂载到 RunLoop `.common` (`.commonModes`)，
+    ///   且基于绝对 Deadline 时间戳差值驱动 UI，确保用户拖动滑块或展开菜单期间倒计时不暂停、与 GCD 退出 Deadline 绝对同步。
+    /// - Y-04：支持传入已解析的真实 PID，防止 `app.processIdentifier == -1` 时取消回调丢失目标。
     public func showCountdown(
         for app: NSRunningApplication,
+        resolvedPid: pid_t? = nil,
         seconds: Double,
         onCancel: @escaping (pid_t) -> Void
     ) {
         assert(Thread.isMainThread)
-        currentPid = app.processIdentifier
+        let effectivePid = resolvedPid ?? AutoQuitManager.resolveProcessIdentifier(for: app) ?? app.processIdentifier
+        currentPid = effectivePid
         remainingSeconds = seconds
+        targetDeadline = Date().addingTimeInterval(seconds)
         onCancelHandler = onCancel
 
         buildHUDWindowIfNeeded()
@@ -45,21 +52,29 @@ public final class AutoQuitUndoHUDController {
         }
 
         countdownTimer?.invalidate()
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self = self else { return }
-            self.remainingSeconds -= 0.5
-            let secInt = Int(ceil(max(0, self.remainingSeconds)))
+            self.remainingSeconds = max(0, self.targetDeadline.timeIntervalSinceNow)
+            let secInt = Int(ceil(self.remainingSeconds))
             self.updateMessageLabel(appName: appName, seconds: secInt)
             if self.remainingSeconds <= 0 {
                 self.countdownTimer?.invalidate()
                 self.countdownTimer = nil
             }
         }
+        // 关键加固：显式挂载到 RunLoop.main 的 .common (.commonModes)，防止菜单展开或滑块拖拽期间倒计时停滞
+        RunLoop.main.add(timer, forMode: .common)
+        countdownTimer = timer
     }
 
-    /// 隐藏并彻底销毁 HUD（释放窗口显存）
-    public func dismiss() {
+    /// 隐藏并彻底销毁 HUD（若指定了 forPid，仅在当前展示的 HUD 归属该 PID 时销毁，防多应用并发退出互相误关 Y-04）
+    public func dismiss(forPid pid: pid_t? = nil) {
         assert(Thread.isMainThread)
+        if let pid = pid, currentPid != 0, currentPid != pid {
+            return
+        }
+        currentPid = 0
+        onCancelHandler = nil
         countdownTimer?.invalidate()
         countdownTimer = nil
         dismissTimer?.invalidate()
@@ -168,7 +183,8 @@ public final class AutoQuitUndoHUDController {
 
     @objc private func handleCancelClicked() {
         let pid = currentPid
+        let handler = onCancelHandler
         dismiss()
-        onCancelHandler?(pid)
+        handler?(pid)
     }
 }

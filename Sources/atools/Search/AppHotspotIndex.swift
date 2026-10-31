@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import Darwin
 
-public struct IndexedApp {
+public struct IndexedApp: Sendable {
     public let name: String
     public let localizedName: String
     public let path: String
@@ -29,7 +29,8 @@ public struct IndexedApp {
         for a in additionalAliases where !a.isEmpty {
             allAliases.insert(a)
         }
-        self.aliases = Array(allAliases)
+        // Q-12: 固定排序保证拼音与别名顺序确定性，消除 Set 随机哈希顺序导致的搜索得分抖动
+        self.aliases = Array(allAliases).sorted()
         self.lowercasedAliases = self.aliases.map { $0.lowercased() }
 
         var pinyinList: [String] = []
@@ -73,6 +74,7 @@ public final class AppHotspotIndex {
     private let appsLock = NSLock()
     private let queue = DispatchQueue(label: "cc.atools.appindex", qos: .utility)
     private var lastRefreshDate = Date.distantPast
+    private var isScanInProgress = false
     private var directorySources: [DispatchSourceFileSystemObject] = []
     private var debounceWorkItem: DispatchWorkItem?
 
@@ -120,28 +122,54 @@ public final class AppHotspotIndex {
         queue.asyncAfter(deadline: .now() + 2.0, execute: item)
     }
 
-    /// Re-scans at most once per `interval` so apps installed after launch become searchable.
+    /// Q-06: 线程安全节流刷新（加锁保护 lastRefreshDate 与 isScanInProgress，杜绝并发重入全量扫描）
     public func refreshIfStale(interval: TimeInterval = 30) {
-        guard Date().timeIntervalSince(lastRefreshDate) > interval else { return }
-        refreshIndex()
+        appsLock.lock()
+        let shouldRefresh = !isScanInProgress && Date().timeIntervalSince(lastRefreshDate) > interval
+        if shouldRefresh {
+            lastRefreshDate = Date()
+        }
+        appsLock.unlock()
+
+        if shouldRefresh {
+            refreshIndex()
+        }
     }
 
     public func refreshIndex(completion: (() -> Void)? = nil) {
+        appsLock.lock()
+        if isScanInProgress && completion == nil {
+            appsLock.unlock()
+            return
+        }
+        isScanInProgress = true
         lastRefreshDate = Date()
+        appsLock.unlock()
+
         queue.async { [weak self] in
             guard let self = self else { return }
             var results: [IndexedApp] = []
             var visitedPaths = Set<String>()
+            var visitedDirectories = Set<String>()
 
             let directoriesToScan = self.collectAppDirectories()
 
             for dir in directoriesToScan {
                 guard FileManager.default.fileExists(atPath: dir) else { continue }
-                self.scanDirectoryFast(dir, depth: 0, maxDepth: AppConstants.appIndexScanDepth, results: &results, visitedPaths: &visitedPaths)
+                self.scanDirectoryFast(
+                    dir,
+                    depth: 0,
+                    maxDepth: AppConstants.appIndexScanDepth,
+                    results: &results,
+                    visitedPaths: &visitedPaths,
+                    visitedDirectories: &visitedDirectories
+                )
             }
 
             self.appsLock.lock()
             self.apps = results
+            self.isScanInProgress = false
+            self.lastRefreshDate = Date()
             self.appsLock.unlock()
             completion?()
 
@@ -170,40 +198,45 @@ public final class AppHotspotIndex {
         ]
     }
 
-    private func scanDirectoryFast(_ dir: String, depth: Int, maxDepth: Int, results: inout [IndexedApp], visitedPaths: inout Set<String>) {
+    /// Q-07 & 军师加固点 3：遍历目录时解析软链接并基于 NFC 规范化路径记录 visitedDirectories，彻底阻断目录符号链接环路
+    private func scanDirectoryFast(
+        _ dir: String,
+        depth: Int,
+        maxDepth: Int,
+        results: inout [IndexedApp],
+        visitedPaths: inout Set<String>,
+        visitedDirectories: inout Set<String>
+    ) {
+        let canonicalDir = (dir as NSString).resolvingSymlinksInPath.precomposedStringWithCanonicalMapping
+        guard visitedDirectories.insert(canonicalDir).inserted else { return }
+
         guard let contents = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
 
         for item in contents {
             if item.hasPrefix(".") { continue }
             let fullPath = (dir as NSString).appendingPathComponent(item)
 
-            if item.hasSuffix(".app") || item.hasSuffix(".prefPane") {
-                // /Applications/Safari.app is a symlink into the Safari cryptex; dedupe on the
-                // resolved path so the same bundle isn't listed twice.
-                let resolvedPath = (fullPath as NSString).resolvingSymlinksInPath
+            if MetadataFileSearchBackend.isApplicationOrPrefPane(item) {
+                let resolvedPath = (fullPath as NSString).resolvingSymlinksInPath.precomposedStringWithCanonicalMapping
                 if !visitedPaths.contains(resolvedPath) {
                     visitedPaths.insert(resolvedPath)
                     autoreleasepool {
                         let baseName = (item as NSString).deletingPathExtension
                         var aliases: [String] = []
 
-                        // 1. LaunchServices localized name via URL resource values
                         let fileURL = URL(fileURLWithPath: fullPath)
                         let resourceValues = try? fileURL.resourceValues(forKeys: [.localizedNameKey])
-                        let lsName = resourceValues?.localizedName?.replacingOccurrences(of: ".app", with: "")
+                        let lsName = resourceValues?.localizedName?.replacingOccurrences(of: ".app", with: "", options: .caseInsensitive)
 
                         if let ls = lsName, !ls.isEmpty && ls != baseName {
                             aliases.append(ls)
                         }
 
-                        // 2. Read plist and localized strings directly. NSBundle caches every bundle
-                        // globally and is unnecessary for a background index refresh.
-                        let metadata = AppMetadataReader.read(appURL: URL(fileURLWithPath: fullPath))
+                        let metadata = AppMetadataReader.read(appURL: fileURL)
                         aliases.append(contentsOf: metadata.localizedNames)
                         if let disp = metadata.displayName, !disp.isEmpty { aliases.append(disp) }
                         if let bName = metadata.bundleName, !bName.isEmpty { aliases.append(bName) }
 
-                        // 3. Fallback well-known Chinese mappings for standard apps
                         if let wellKnown = AppHotspotIndex.wellKnownAliases[baseName] {
                             aliases.append(contentsOf: wellKnown)
                         }
@@ -211,7 +244,7 @@ public final class AppHotspotIndex {
                         let primaryLocalizedName = aliases.first ?? lsName ?? baseName
                         let isCoreServicesDaemon = fullPath.contains("/System/Library/CoreServices") && !fullPath.contains("/System/Library/CoreServices/Applications")
                         let isExcluded = metadata.bundleIdentifier.map { AutoQuitManager.systemExcludedBundleIDs.contains($0) || $0 == "cc.atools.app" || $0 == "cc.atools.app.dev" } ?? true
-                        let isPrefPane = fullPath.hasSuffix(".prefPane")
+                        let isPrefPane = (fullPath as NSString).pathExtension.caseInsensitiveCompare("prefPane") == .orderedSame
                         let isRegular = !isPrefPane && !metadata.isUIElement && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
                         let isShelfEligible = !isPrefPane && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
 
@@ -228,10 +261,23 @@ public final class AppHotspotIndex {
                     }
                 }
             } else if depth < maxDepth {
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDir), isDir.boolValue {
-                    if !item.hasSuffix(".app") && !item.hasSuffix(".framework") && !item.hasSuffix(".lproj") {
-                        scanDirectoryFast(fullPath, depth: depth + 1, maxDepth: maxDepth, results: &results, visitedPaths: &visitedPaths)
+                let itemURL = URL(fileURLWithPath: fullPath)
+                let values = try? itemURL.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
+                // Q-07: 默认跳过子目录符号链接以防死循环与越界扫描
+                if values?.isSymbolicLink == true {
+                    continue
+                }
+                if values?.isDirectory == true {
+                    let ext = (item as NSString).pathExtension.lowercased()
+                    if ext != "app" && ext != "framework" && ext != "lproj" && ext != "prefpane" {
+                        scanDirectoryFast(
+                            fullPath,
+                            depth: depth + 1,
+                            maxDepth: maxDepth,
+                            results: &results,
+                            visitedPaths: &visitedPaths,
+                            visitedDirectories: &visitedDirectories
+                        )
                     }
                 }
             }
@@ -268,36 +314,28 @@ public final class AppHotspotIndex {
         "NeteaseMusic": ["网易云音乐"]
     ]
 
-    /// 已安装应用的全量快照（锁内拷贝）。供设置页等需要枚举全部应用的 UI 复用；刷新索引后需重新获取。
     public var allApps: [IndexedApp] {
         appsLock.lock()
         defer { appsLock.unlock() }
         return apps
     }
 
-    /// 已安装标准 GUI 应用程序快照（剔除无面板后台 Agent、守护程序、偏好面板及系统排除项）。
-    /// 专供设置页「关窗即退」名单编辑器等仅面向标准窗口应用的 UI 使用。
     public var allRegularApps: [IndexedApp] {
         appsLock.lock()
         defer { appsLock.unlock() }
         return apps.filter { $0.isRegularApp }
     }
 
-    /// 所有可供用户在设置页选择纳管的已安装应用快照：
-    /// 1. 包含常规窗口应用与小工具/菜单栏应用（如 Paste, MonitorControl）；
-    /// 2. 彻底过滤掉 CoreServices 非应用系统后台守护进程（如 AirPlayUIAgent）与系统底座（Dock, Finder, ControlCenter 等）；
-    /// 3. 基于 bundleId 进行权威去重（路径权重：/Applications > ~/Applications > /System/Applications 等），杜绝 Cryptex 等底层投影产生的重复项。
     public var allSelectableApps: [IndexedApp] {
         appsLock.lock()
         defer { appsLock.unlock() }
 
         let validApps = apps.filter { app in
             guard let bid = app.bundleId, !bid.isEmpty else { return false }
-            guard !app.path.hasSuffix(".prefPane") else { return false }
+            guard (app.path as NSString).pathExtension.caseInsensitiveCompare("prefPane") != .orderedSame else { return false }
             guard !AutoQuitManager.systemExcludedBundleIDs.contains(bid) else { return false }
             guard bid != "cc.atools.app" && bid != "cc.atools.app.dev" else { return false }
             guard bid != "com.apple.controlcenter" && bid != "com.apple.wallpaper.agent" && bid != "com.apple.UserNotificationCenter" else { return false }
-            // 过滤 /System/Library/CoreServices 下的非应用后台守护
             let isCoreServicesDaemon = app.path.contains("/System/Library/CoreServices") && !app.path.contains("/System/Library/CoreServices/Applications")
             guard !isCoreServicesDaemon else { return false }
             return true

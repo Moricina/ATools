@@ -1,13 +1,36 @@
 import Foundation
 import AppKit
 
-public final class SearchCoordinator {
+public final class SearchCoordinator: @unchecked Sendable {
     public static let shared = SearchCoordinator()
 
+    private let stateLock = NSLock()
     private var debounceWorkItem: DispatchWorkItem?
-    private var currentGenerationId: UInt64 = 0
+    private var deliverWorkItem: DispatchWorkItem?
+    private var _currentGenerationId: UInt64 = 0
     private var dictionaryResults: [UInt64: SearchResult] = [:]
     private var fileResults: [UInt64: [SearchResult]] = [:]
+
+    private var currentGenerationId: UInt64 {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return _currentGenerationId
+        }
+        set {
+            stateLock.lock()
+            _currentGenerationId = newValue
+            stateLock.unlock()
+        }
+    }
+
+    @discardableResult
+    private func bumpGeneration() -> UInt64 {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        _currentGenerationId &+= 1
+        return _currentGenerationId
+    }
 
     private init() {}
 
@@ -15,21 +38,35 @@ public final class SearchCoordinator {
     public func cancelPendingSearches() {
         debounceWorkItem?.cancel()
         debounceWorkItem = nil
-        currentGenerationId &+= 1
-        dictionaryResults.removeAll()
-        fileResults.removeAll()
+        deliverWorkItem?.cancel()
+        deliverWorkItem = nil
+        _ = bumpGeneration()
+        if Thread.isMainThread {
+            dictionaryResults.removeAll()
+            fileResults.removeAll()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.dictionaryResults.removeAll()
+                self?.fileResults.removeAll()
+            }
+        }
         SpotlightBridge.shared.stop()
         DictionaryService.shared.cancelPendingLookups()
     }
 
     public func search(query: String, filter: SearchTypeFilter = .all, onResults: @escaping ([SearchResult]) -> Void) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in
+                self?.search(query: query, filter: filter, onResults: onResults)
+            }
+            return
+        }
+
         debounceWorkItem?.cancel()
-        currentGenerationId &+= 1
-        let generation = currentGenerationId
-        // Results are keyed by generation and older generations can never be read
-        // again (every reader checks currentGenerationId). Without this, each
-        // keystroke added up to `searchResultLimit` retained result closures that
-        // were only dropped when the panel next hid.
+        debounceWorkItem = nil
+        deliverWorkItem?.cancel()
+        deliverWorkItem = nil
+        let generation = bumpGeneration()
         dictionaryResults.removeAll()
         fileResults.removeAll()
 
@@ -46,7 +83,8 @@ public final class SearchCoordinator {
         let trimmed = effectiveText
         guard !trimmed.isEmpty else {
             SpotlightBridge.shared.stop()
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.currentGenerationId == generation else { return }
                 onResults([])
             }
             return
@@ -79,7 +117,8 @@ public final class SearchCoordinator {
                 ))
             }
             SpotlightBridge.shared.stop()
-            DispatchQueue.main.async {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.currentGenerationId == generation else { return }
                 onResults(instantSyntaxResults)
             }
             return
@@ -104,12 +143,14 @@ public final class SearchCoordinator {
                     }
                 )
                 SpotlightBridge.shared.stop()
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.currentGenerationId == generation else { return }
                     onResults([result])
                 }
             } else {
                 SpotlightBridge.shared.stop()
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.currentGenerationId == generation else { return }
                     onResults([])
                 }
             }
@@ -133,7 +174,8 @@ public final class SearchCoordinator {
                         PasteboardRecencyTracker.shared.markSelfGeneratedChangeCount()
                     }
                 )
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.currentGenerationId == generation else { return }
                     onResults([result])
                 }
             } else {
@@ -146,7 +188,8 @@ public final class SearchCoordinator {
                     icon: ThumbnailPipeline.shared.symbolIcon(name: "equal", pointSize: 16, weight: .medium),
                     action: nil
                 )
-                DispatchQueue.main.async {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.currentGenerationId == generation else { return }
                     onResults([promptResult])
                 }
             }
@@ -175,11 +218,10 @@ public final class SearchCoordinator {
             ))
         }
 
-        // 2. System Commands (Lock, Sleep, Trash, etc. 仅在 .all 模式有效)
+        // 2. System Commands (Lock, Sleep, Trash, etc. 仅在 .all 模式有效；单趟划分精确命中与前缀命中，消除死代码重复计算 C-05)
+        var deferredPartialActionResults: [SearchResult] = []
         if effectiveFilter == .all {
             let lowerQuery = trimmed.lowercased()
-            var exactActionResults: [SearchResult] = []
-            var partialActionResults: [SearchResult] = []
             for act in SystemActions.shared.match(trimmed) {
                 let result = SearchResult(
                     id: "sys_\(act.id)",
@@ -191,12 +233,11 @@ public final class SearchCoordinator {
                     action: act.execute
                 )
                 if act.keywords.contains(lowerQuery) {
-                    exactActionResults.append(result)
+                    instantResults.append(result)
                 } else {
-                    partialActionResults.append(result)
+                    deferredPartialActionResults.append(result)
                 }
             }
-            instantResults.append(contentsOf: exactActionResults)
         }
 
         // 3. In-Memory Apps & Custom Shelf Items (0ms) - 在 .all 模式展示前 15 条，在 .application 模式展示全量（上限 searchResultLimit）
@@ -222,7 +263,7 @@ public final class SearchCoordinator {
 
             for entry in matchedShelfItems.prefix(appLimit) {
                 let item = entry.item
-                let canonicalPath = (item.target as NSString).resolvingSymlinksInPath
+                let canonicalPath = (item.target as NSString).resolvingSymlinksInPath.precomposedStringWithCanonicalMapping
                 guard seenAppPaths.insert(canonicalPath).inserted else { continue }
                 let resultType: SearchResultType = (item.itemType == .application) ? .application : .file
                 let sub = item.tags.isEmpty ? item.target : "\(item.target)  •  别名: \(item.formattedTagsString)"
@@ -244,7 +285,7 @@ public final class SearchCoordinator {
             let apps = AppHotspotIndex.shared.search(trimmed)
             for app in apps {
                 guard instantResults.filter({ $0.type == .application }).count < appLimit else { break }
-                let canonicalPath = (app.path as NSString).resolvingSymlinksInPath
+                let canonicalPath = (app.path as NSString).resolvingSymlinksInPath.precomposedStringWithCanonicalMapping
                 guard seenAppPaths.insert(canonicalPath).inserted else { continue }
                 let appPath = app.path
                 instantResults.append(SearchResult(
@@ -261,23 +302,13 @@ public final class SearchCoordinator {
             }
         }
 
-        if effectiveFilter == .all {
-            let lowerQuery = trimmed.lowercased()
-            for act in SystemActions.shared.match(trimmed) where !act.keywords.contains(lowerQuery) {
-                instantResults.append(SearchResult(
-                    id: "sys_\(act.id)",
-                    title: act.name,
-                    subtitle: "系统控制指令",
-                    type: .systemAction,
-                    score: 900,
-                    icon: ThumbnailPipeline.shared.symbolIcon(name: act.iconSymbol),
-                    action: act.execute
-                ))
-            }
+        if !deferredPartialActionResults.isEmpty {
+            instantResults.append(contentsOf: deferredPartialActionResults)
         }
 
+        // Q-02: deliver 闭包首行强校验 currentGenerationId == generation，彻底拦截取消或过期结果漏投
         let deliver: () -> Void = { [weak self] in
-            guard let self else { return }
+            guard let self, self.currentGenerationId == generation else { return }
             var merged = instantResults
             if let dictionary = self.dictionaryResults[generation] { merged.append(dictionary) }
             for result in self.fileResults[generation] ?? [] where !merged.contains(where: { $0.path == result.path }) {
@@ -286,12 +317,12 @@ public final class SearchCoordinator {
             if effectiveFilter == .all, ConfigManager.shared.config.enableWebSearch {
                 merged.append(self.makeWebSearchResult(for: trimmed))
             }
-            // Search churn leaves dirty pages in the malloc zones; debounce a quiet
-            // period so the last delivery triggers the same anneal as a panel hide.
             MemoryGuardian.shared.scheduleAnneal()
             onResults(merged)
         }
-        DispatchQueue.main.async(execute: deliver)
+        let initialDeliverItem = DispatchWorkItem(block: deliver)
+        self.deliverWorkItem = initialDeliverItem
+        DispatchQueue.main.async(execute: initialDeliverItem)
 
         // 词典查询（仅在 .all 模式有效）
         if effectiveFilter == .all, ConfigManager.shared.config.enableDictionary {
@@ -323,22 +354,23 @@ public final class SearchCoordinator {
             return
         }
 
+        let limit = ConfigManager.shared.config.searchResultLimit
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self = self else { return }
+            guard let self = self, self.currentGenerationId == generation else { return }
             runtimeLog("[Coordinator] workItem running for '\(trimmed)', filter=\(effectiveFilter.rawValue), gen=\(generation)")
-            let limit = ConfigManager.shared.config.searchResultLimit
-            SpotlightBridge.shared.searchFiles(matching: trimmed, limit: limit, filter: effectiveFilter) { fileResults in
-                runtimeLog("[Coordinator] Spotlight returned \(fileResults.count) files for '\(trimmed)', currGen=\(self.currentGenerationId), taskGen=\(generation)")
+            // 军师加固点 2：后台检索线程统一产出 Sendable 的 RawSearchResultPayload，跨回主线程后再绑定交互闭包与图片
+            SpotlightBridge.shared.searchFilePayloads(matching: trimmed, limit: limit, filter: effectiveFilter) { [weak self] payloads in
+                guard let self = self else { return }
                 guard self.currentGenerationId == generation else {
-                    runtimeLog("[Coordinator] Dropping outdated results (currGen \(self.currentGenerationId) != taskGen \(generation))")
+                    runtimeLog("[Coordinator] Dropping outdated payloads (currGen \(self.currentGenerationId) != taskGen \(generation))")
                     return
                 }
 
-                DispatchQueue.main.async {
-                    if self.currentGenerationId == generation {
-                        self.fileResults[generation] = fileResults
-                        deliver()
-                    }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self, self.currentGenerationId == generation else { return }
+                    let materialized = payloads.map { $0.materializeSearchResult() }
+                    self.fileResults[generation] = materialized
+                    deliver()
                 }
             }
         }

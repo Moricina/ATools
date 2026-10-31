@@ -26,6 +26,12 @@ public enum AppConstants {
     /// Bitmap byte estimate used when the image's backing bytes cannot be measured directly.
     public static let fallbackImageCostBytes = 64 * 64 * 4
 
+    /// Unified icon scale range across config decoding, slider UI, andConfigManager updates (C-04).
+    public static let shelfIconScaleRange: ClosedRange<Double> = 0.70...1.10
+
+    /// Safe bounds for full-disk search result limits to prevent negative traps or integer overflow (Q-03).
+    public static let searchResultLimitRange: ClosedRange<Int> = 10...200
+
     /// Custom pasteboard types used for internal drag-and-drop.
     public static let shelfItemReorderType = "cc.atools.shelf-item-reorder"
     public static let shelfItemMoveType = "cc.atools.shelf-item-move"

@@ -2,17 +2,16 @@ import Foundation
 
 /// 全盘搜索与热目录快照排除过滤引擎 (参照 Alfred Search Scope 设计)
 ///
-/// 性能契约：
-/// 1. MDQuery 在单次大范围检索中可能遍历 10,000 ~ 50,000+ 条文件路径，
-///    本引擎维护预编译的不可变规则快照（CompiledRules），以高阶前缀比对（$O(1)$ 快速跳出）
-///    与带双斜杠中缀匹配为主，全程零锁、零动态堆分配。
-/// 2. 参照 Alfred 核心规范，排除 `~/Library` 时智能保护 iCloud Drive 与各类第三方网盘
-///    （`~/Library/Mobile Documents` 和 `~/Library/CloudStorage`），确保用户云端文档安全可搜。
-/// 3. 热目录快照中提供 `shouldSkipDescendants`，在发现排除目录时立即阻断子树深度遍历。
+/// 性能契约与安全加固：
+/// 1. 维护预编译的不可变规则快照（CompiledRules），全程零锁、零动态堆分配。
+/// 2. 军师加固点 3：所有预设前缀、用户自定义排除目录与待检测路径在进入前缀/中缀比对前，
+///    统一执行 APFS Unicode NFC 规范化（`.precomposedStringWithCanonicalMapping`），
+///    彻底防范带变音符的 NFD 分解形式绕过字符串前缀过滤。
+/// 3. Q-09：严格遵守 `searchExcludeDeveloper` 开关，关闭时绝不硬编码排除 `/Library/Developer/CommandLineTools/`。
 public final class SearchExclusionEngine {
     public static let shared = SearchExclusionEngine()
 
-    public struct CompiledRules {
+    public struct CompiledRules: Sendable {
         public let excludeCaches: Bool
         public let excludeLogs: Bool
         public let excludeDeveloper: Bool
@@ -43,7 +42,7 @@ public final class SearchExclusionEngine {
             self.excludeTrash = config.searchExcludeTrash
             self.excludeUserLibrary = config.searchExcludeUserLibrary
 
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let home = FileManager.default.homeDirectoryForCurrentUser.path.precomposedStringWithCanonicalMapping
             let homePrefix = home.hasSuffix("/") ? home : home + "/"
 
             // 1. 系统与应用缓存前缀
@@ -80,7 +79,7 @@ public final class SearchExclusionEngine {
             self.cloudStoragePrefix = homePrefix + "Library/CloudStorage/"
             self.mobileDocsPrefix = homePrefix + "Library/Mobile Documents/"
 
-            // 5. 开发者工程构建产物与依赖 (严格带前后斜杠，防止误伤合法文件名)
+            // 5. 开发者工程构建产物与依赖 (Q-09: 关闭开关时完全清空，不留硬编码排除项)
             if config.searchExcludeDeveloper {
                 self.developerInfixes = [
                     "/node_modules/",
@@ -102,7 +101,7 @@ public final class SearchExclusionEngine {
                     ".cargo"
                 ]
             } else {
-                self.developerInfixes = ["/Library/Developer/CommandLineTools/"]
+                self.developerInfixes = []
                 self.developerFolderNames = []
             }
 
@@ -113,11 +112,11 @@ public final class SearchExclusionEngine {
                 self.vcsInfixes = []
             }
 
-            // 7. 用户自定义排除目录 (统一规范化并构建精准前缀)
+            // 7. 用户自定义排除目录 (统一 NFC 规范化并构建精准前缀)
             var cPrefixes: [String] = []
             var cExact: Set<String> = []
-            for path in config.customExcludedPaths {
-                let std = (path as NSString).standardizingPath
+            for rawPath in config.customExcludedPaths {
+                let std = (rawPath as NSString).standardizingPath.precomposedStringWithCanonicalMapping
                 guard !std.isEmpty && std != "/" else { continue }
                 cExact.insert(std)
                 let withSlash = std.hasSuffix("/") ? std : std + "/"
@@ -150,10 +149,12 @@ public final class SearchExclusionEngine {
         return rules
     }
 
-    /// 核心判定方法：用于 MDQuery 5 万次大循环与搜索结果合并过滤。
-    /// 毫秒级极速执行：按开销从低到高梯度过滤。
+    /// 核心判定方法：在进入路径前缀与包含比对前统一调用 `.precomposedStringWithCanonicalMapping` (NFC)
     @inline(__always)
-    public func isExcluded(path: String) -> Bool {
+    public func isExcluded(path rawPath: String) -> Bool {
+        let path = rawPath.isContiguousUTF8 && rawPath.utf8.allSatisfy({ $0 < 0x80 })
+            ? rawPath
+            : rawPath.precomposedStringWithCanonicalMapping
         let r = currentRules
 
         // 1. 自定义排除路径（用户显式指定，最高优先级）
@@ -187,16 +188,17 @@ public final class SearchExclusionEngine {
 
         // 5. 用户资源库 ~/Library 核心策略（智能保留 iCloud Drive 与 CloudStorage 网盘）
         if r.excludeUserLibrary && path.hasPrefix(r.userLibraryPrefix) {
-            // 核心白名单：如果是 iCloud 云盘或第三方网盘目录，放行继续后续规则判定
             let isCloud = path.hasPrefix(r.mobileDocsPrefix) || path.hasPrefix(r.cloudStoragePrefix)
             if !isCloud {
                 return true
             }
         }
 
-        // 6. 开发者构建产物与依赖 (如 /node_modules/, /DerivedData/)
-        for infix in r.developerInfixes {
-            if path.contains(infix) { return true }
+        // 6. 开发者构建产物与依赖 (Q-09: 受 r.excludeDeveloper 保护)
+        if r.excludeDeveloper {
+            for infix in r.developerInfixes {
+                if path.contains(infix) { return true }
+            }
         }
 
         // 7. 版本控制目录 (如 /.git/)
@@ -207,7 +209,6 @@ public final class SearchExclusionEngine {
         // 8. 隐藏文件与隐藏目录 (.*)
         if r.excludeHidden {
             if path.contains("/.") {
-                // 排除当前/父目录指示符的干扰
                 return true
             }
         }
@@ -217,7 +218,9 @@ public final class SearchExclusionEngine {
 
     /// 热目录快照遍历阻断专用：判断在枚举目录时是否应当调用 enumerator.skipDescendants()。
     @inline(__always)
-    public func shouldSkipDescendants(folderName: String, path: String) -> Bool {
+    public func shouldSkipDescendants(folderName rawFolderName: String, path rawPath: String) -> Bool {
+        let folderName = rawFolderName.precomposedStringWithCanonicalMapping
+        let path = rawPath.precomposedStringWithCanonicalMapping
         let r = currentRules
 
         // 1. 命中开发者构建产物目录名（如 node_modules, DerivedData, .build, target 等）

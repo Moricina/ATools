@@ -446,6 +446,39 @@ public final class PanelCoordinator {
         }
     }
 
+    /// K-03: 受控禁用并隐藏指定面板，完整执行事件监听器注销、搜索代次取消与焦点恢复，严禁外部直接调用 orderOut
+    public func disableAndHidePanel(_ kind: PanelKind) {
+        switch kind {
+        case .shelf:
+            if shelfPanelCreated {
+                if shelfPanel.isVisible {
+                    hideShelfPanel(restoreFocus: false, animated: false, forceHidePinned: true)
+                } else {
+                    shelfPanel.shelfViewController.stopMouseExitMonitoring()
+                    shelfPanel.shelfViewController.closeFolderOverlay(animated: false)
+                    shelfPanel.orderOut(nil)
+                }
+            }
+        case .search:
+            if searchPanelCreated {
+                if searchPanel.isVisible {
+                    hideSearchPanel(restoreFocus: false, animated: false)
+                } else {
+                    searchPanel.searchViewController.clearSearch()
+                    searchPanel.orderOut(nil)
+                }
+            }
+        }
+    }
+
+    /// K-06: 当偏好设置窗口打开时，若固定在桌面的 Shelf 处于可见态，自动将其收起（与呼出 Shelf 自动关闭设置双向对称），保持 ShelfPanel.level == .statusBar 不变
+    public func setPinnedShelfLoweredForSettings(_ lowered: Bool) {
+        guard shelfPanelCreated else { return }
+        if lowered && isShelfPinned && shelfPanel.isVisible {
+            hideShelfPanel(restoreFocus: false, animated: false, forceHidePinned: true)
+        }
+    }
+
     public func switchToPanel(_ target: PanelKind) {
         runtimeLog("[Panel] switchToPanel(\(target))")
         switch target {
@@ -716,7 +749,9 @@ public final class PanelCoordinator {
             }
         }
 
-        let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 900
+        // K-07: Quartz 全局坐标系原点固定在主显示屏（frame.origin == .zero）左上角
+        let primaryScreen = NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.screens.first
+        let mainScreenHeight = primaryScreen?.frame.height ?? 900
         let quartzY = mainScreenHeight - screenPoint.y
 
         // Tier 1: 尝试通过系统 Accessibility API (AXUIElement) 获取点击点所在的进程 PID

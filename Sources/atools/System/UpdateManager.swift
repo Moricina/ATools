@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import CryptoKit
 
-public struct ReleaseInfo: Equatable {
+public struct ReleaseInfo: Equatable, Sendable {
     public let version: String
     public let name: String
     public let body: String
@@ -30,7 +30,7 @@ public struct ReleaseInfo: Equatable {
     }
 }
 
-public enum UpdateState: Equatable {
+public enum UpdateState: Equatable, Sendable {
     case idle
     case checking
     case upToDate(currentVersion: String)
@@ -45,10 +45,21 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
     public static let stateDidChangeNotification = Notification.Name("UpdateManagerStateDidChangeNotification")
     private static let expectedBundleIdentifier = "cc.atools.app"
+    private static let allowedDownloadHosts: Set<String> = [
+        "github.com",
+        "api.github.com",
+        "objects.githubusercontent.com",
+        "releases.githubusercontent.com",
+        "codeload.github.com"
+    ]
 
     private let stateLock = NSLock()
     private var _currentState: UpdateState = .idle
     private var _targetRelease: ReleaseInfo?
+    /// U-01: 全局唯一代次令牌，防止 cancelUpdate() 与下载完成/解压回调发生竞态重入
+    private var _currentSessionToken = UUID()
+    private var _activeDownloadToken: UUID?
+    private var _activeStagingDirectories: Set<URL> = []
 
     /// All update state is read and written through one lock. Public mutations are forced onto
     /// the main thread so Settings observes a stable state model even from URLSession callbacks.
@@ -74,6 +85,16 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     }
 
     private var currentDownloadTask: URLSessionDownloadTask?
+
+    /// U-04: 专用后台 Delegate Queue，避免下载完成时在主线程同步拷贝数以百兆的 DMG/ZIP 导致 UI 冻结
+    private let downloadDelegateQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "cc.atools.update.delegate"
+        q.qualityOfService = .userInitiated
+        q.maxConcurrentOperationCount = 1
+        return q
+    }()
+
     private lazy var downloadSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 30.0
@@ -82,7 +103,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         config.urlCache = nil
         config.httpCookieStorage = nil
         config.httpShouldSetCookies = false
-        return URLSession(configuration: config, delegate: self, delegateQueue: .main)
+        return URLSession(configuration: config, delegate: self, delegateQueue: downloadDelegateQueue)
     }()
 
     private var targetRelease: ReleaseInfo? {
@@ -106,9 +127,75 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         super.init()
     }
 
-    // MARK: - Version Comparison
-    /// 比较语义化版本号：若 v1 大于 v2 则返回 true
+    // MARK: - U-06: Strict SemVer 2.0.0 Version Comparison
+
+    private struct SemanticVersion: Comparable {
+        let numbers: [Int]
+        let prerelease: [String]
+
+        init?(_ raw: String) {
+            let cleaned = raw.trimmingCharacters(in: CharacterSet(charactersIn: "vV \t\n\r"))
+            guard !cleaned.isEmpty else { return nil }
+            // Strip build metadata (+...)
+            let withoutBuild = cleaned.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? cleaned
+            let dashParts = withoutBuild.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            let corePart = String(dashParts[0])
+            let rawNums = corePart.split(separator: ".")
+            guard !rawNums.isEmpty else { return nil }
+            var parsedNums: [Int] = []
+            for token in rawNums {
+                guard let n = Int(token), n >= 0 else { return nil }
+                parsedNums.append(n)
+            }
+            self.numbers = parsedNums
+            if dashParts.count > 1 && !dashParts[1].isEmpty {
+                self.prerelease = dashParts[1].split(separator: ".").map(String.init)
+            } else {
+                self.prerelease = []
+            }
+        }
+
+        static func < (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {
+            let maxCount = max(lhs.numbers.count, rhs.numbers.count)
+            for i in 0..<maxCount {
+                let l = i < lhs.numbers.count ? lhs.numbers[i] : 0
+                let r = i < rhs.numbers.count ? rhs.numbers[i] : 0
+                if l != r { return l < r }
+            }
+            // SemVer 2.0.0: normal version has higher precedence than prerelease version (e.g. 1.0.0 > 1.0.0-beta.1)
+            if lhs.prerelease.isEmpty && rhs.prerelease.isEmpty { return false }
+            if lhs.prerelease.isEmpty { return false }
+            if rhs.prerelease.isEmpty { return true }
+
+            let preCount = max(lhs.prerelease.count, rhs.prerelease.count)
+            for i in 0..<preCount {
+                if i >= lhs.prerelease.count { return true }
+                if i >= rhs.prerelease.count { return false }
+                let idL = lhs.prerelease[i]
+                let idR = rhs.prerelease[i]
+                if idL == idR { continue }
+                let numL = Int(idL)
+                let numR = Int(idR)
+                if let nl = numL, let nr = numR {
+                    return nl < nr
+                } else if numL != nil {
+                    // Numeric identifiers always have lower precedence than non-numeric identifiers
+                    return true
+                } else if numR != nil {
+                    return false
+                } else {
+                    return idL < idR
+                }
+            }
+            return false
+        }
+    }
+
+    /// 比较语义化版本号（支持标准 SemVer 预发布后缀如 -beta.1, -rc.2）：若 v1 大于 v2 则返回 true
     public static func isVersion(_ v1: String, greaterThan v2: String) -> Bool {
+        if let sem1 = SemanticVersion(v1), let sem2 = SemanticVersion(v2) {
+            return sem1 > sem2
+        }
         let clean1 = v1.trimmingCharacters(in: CharacterSet(charactersIn: "vV \t\n\r"))
         let clean2 = v2.trimmingCharacters(in: CharacterSet(charactersIn: "vV \t\n\r"))
 
@@ -146,6 +233,11 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         guard currentState != .checking else { return }
+        let checkToken = UUID()
+        stateLock.lock()
+        _currentSessionToken = checkToken
+        stateLock.unlock()
+
         currentState = .checking
         targetRelease = nil
 
@@ -168,7 +260,12 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             guard let self = self else { return }
 
             DispatchQueue.main.async { [weak self] in
-                self?.handleUpdateCheck(data: data, response: response, error: error, isUserInitiated: isUserInitiated)
+                guard let self = self else { return }
+                self.stateLock.lock()
+                let isCurrent = (self._currentSessionToken == checkToken)
+                self.stateLock.unlock()
+                guard isCurrent else { return }
+                self.handleUpdateCheck(data: data, response: response, error: error, isUserInitiated: isUserInitiated)
             }
         }
         task.resume()
@@ -288,10 +385,15 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         guard case .available(let release) = currentState else { return }
-        self.targetRelease = release
-        self.currentState = .downloading(progress: 0.0)
 
-        // 验证当前路径是否处于 AppTranslocation 或只读挂载卷
+        // U-05: 校验下载链接与签名链接必须为安全的 HTTPS 协议且在受信任域名白名单内
+        guard Self.isTrustedRemoteAssetURL(release.downloadURL),
+              Self.isTrustedRemoteAssetURL(release.signatureURL) else {
+            self.currentState = .error("更新包下载源地址不受信任，已拒绝下载")
+            return
+        }
+
+        // 验证当前路径是否处于 AppTranslocation 或只读挂载卷（含软链接解析与 NFC 规范化）
         let bundlePath = Bundle.main.bundlePath
         if UpdateManager.isBlockedUpdateLocation(bundlePath) {
             self.currentState = .error("当前应用运行在临时隔离区或只读磁盘镜像中，请先将其移动到「应用程序」文件夹后再执行更新")
@@ -299,14 +401,26 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         }
 
         // 原地替换需要对父目录有写权限；目录本身不可写并不代表替换不可行
-        let parentDirectory = (bundlePath as NSString).deletingLastPathComponent
+        let resolvedBundlePath = URL(fileURLWithPath: bundlePath).standardizedFileURL.resolvingSymlinksInPath().path
+        let parentDirectory = (resolvedBundlePath as NSString).deletingLastPathComponent
         if !FileManager.default.isWritableFile(atPath: parentDirectory) {
             self.currentState = .error("对目标应用程序目录缺少写入权限，无法原地自动更新")
             return
         }
 
+        let sessionToken = UUID()
+        stateLock.lock()
+        _currentSessionToken = sessionToken
+        _activeDownloadToken = sessionToken
+        _targetRelease = release
+        stateLock.unlock()
+
+        self.currentState = .downloading(progress: 0.0)
+
         let downloadTask = downloadSession.downloadTask(with: release.downloadURL)
+        stateLock.lock()
         self.currentDownloadTask = downloadTask
+        stateLock.unlock()
         downloadTask.resume()
     }
 
@@ -331,15 +445,57 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             return
         }
 
-        currentDownloadTask?.cancel()
+        stateLock.lock()
+        // U-01: 立即轮换代次令牌并清空活跃下载令牌，任何在途或已排队完成的回调都将被硬性拦截
+        _currentSessionToken = UUID()
+        _activeDownloadToken = nil
+        let taskToCancel = currentDownloadTask
         currentDownloadTask = nil
+        let dirsToClean = _activeStagingDirectories
+        _activeStagingDirectories.removeAll()
+        stateLock.unlock()
+
+        taskToCancel?.cancel()
         currentState = .idle
+
+        if !dirsToClean.isEmpty {
+            DispatchQueue.global(qos: .utility).async {
+                for dir in dirsToClean {
+                    try? FileManager.default.removeItem(at: dir)
+                }
+            }
+        }
     }
 
+    /// U-05 & 军师加固点 3：同时解析软链接与执行 APFS Unicode NFC 规范化，防止通过符号链接或 NFD 编码绕过位置限制
     static func isBlockedUpdateLocation(_ path: String) -> Bool {
-        let standardizedPath = URL(fileURLWithPath: path).standardizedFileURL.path
-        return standardizedPath.contains("/AppTranslocation/")
-            || standardizedPath.hasPrefix("/Volumes/")
+        let url = URL(fileURLWithPath: path)
+        let standardizedPath = url.standardizedFileURL.path.precomposedStringWithCanonicalMapping
+        let resolvedPath = url.standardizedFileURL.resolvingSymlinksInPath().path.precomposedStringWithCanonicalMapping
+
+        for candidate in [standardizedPath, resolvedPath] {
+            if candidate.contains("/AppTranslocation/")
+                || candidate.hasPrefix("/Volumes/")
+                || candidate.hasPrefix("/private/var/folders/") {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func isTrustedRemoteAssetURL(_ url: URL) -> Bool {
+        if url.isFileURL { return true }
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased() else {
+            return false
+        }
+        if allowedDownloadHosts.contains(host) { return true }
+        return host.hasSuffix(".githubusercontent.com") || host.hasSuffix(".github.com")
+    }
+
+    static func isHTTPSOrFileURL(_ url: URL) -> Bool {
+        if url.isFileURL { return true }
+        return url.scheme?.lowercased() == "https"
     }
 
     static func normalizedVersion(_ version: String) -> String {
@@ -352,7 +508,8 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 guard let name = asset["name"] as? String,
                       name.lowercased().hasSuffix(preferredExtension),
                       let urlString = asset["browser_download_url"] as? String,
-                      let url = URL(string: urlString) else {
+                      let url = URL(string: urlString),
+                      isHTTPSOrFileURL(url) else {
                     continue
                 }
                 return (name: name, url: url)
@@ -362,11 +519,13 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
     }
 
     static func signatureURL(for assetName: String, from assets: [[String: Any]]) -> URL? {
-        let signatureName = assetName + ".sig"
+        let signatureName = (assetName + ".sig").lowercased()
         for asset in assets {
-            guard asset["name"] as? String == signatureName,
+            guard let candidateName = asset["name"] as? String,
+                  candidateName.lowercased() == signatureName,
                   let urlString = asset["browser_download_url"] as? String,
-                  let url = URL(string: urlString) else {
+                  let url = URL(string: urlString),
+                  isHTTPSOrFileURL(url) else {
                 continue
             }
             return url
@@ -387,13 +546,65 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return Data(SHA256.hash(data: Data(canonicalString.utf8)))
     }
 
+    /// U-05: 受限获取签名文件内容（校验 HTTPS 白名单、10秒超时、16KB 体积上限）
+    private static func fetchSignatureData(from signatureURL: URL) throws -> Data {
+        let maxSignatureBytes = 16 * 1024
+        if signatureURL.isFileURL {
+            let data = try Data(contentsOf: signatureURL)
+            guard data.count <= maxSignatureBytes else {
+                throw NSError(domain: "UpdateManager", code: 8, userInfo: [NSLocalizedDescriptionKey: "更新签名文件体积异常超限"])
+            }
+            return data
+        }
+
+        guard isTrustedRemoteAssetURL(signatureURL) else {
+            throw NSError(domain: "UpdateManager", code: 8, userInfo: [NSLocalizedDescriptionKey: "更新签名地址协议或域名不受信任"])
+        }
+
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 10.0
+        config.timeoutIntervalForResource = 15.0
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var fetchedData: Data?
+        var fetchError: Error?
+
+        let task = session.dataTask(with: signatureURL) { data, response, error in
+            defer { semaphore.signal() }
+            if let error = error {
+                fetchError = error
+                return
+            }
+            if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                fetchError = NSError(domain: "UpdateManager", code: 8, userInfo: [NSLocalizedDescriptionKey: "获取更新签名失败 (HTTP \(http.statusCode))"])
+                return
+            }
+            fetchedData = data
+        }
+        task.resume()
+
+        if semaphore.wait(timeout: .now() + 12.0) == .timedOut {
+            task.cancel()
+            throw NSError(domain: "UpdateManager", code: 8, userInfo: [NSLocalizedDescriptionKey: "下载更新签名文件超时"])
+        }
+        if let err = fetchError {
+            throw err
+        }
+        guard let validData = fetchedData, !validData.isEmpty, validData.count <= maxSignatureBytes else {
+            throw NSError(domain: "UpdateManager", code: 8, userInfo: [NSLocalizedDescriptionKey: "更新签名文件为空或体积异常"])
+        }
+        return validData
+    }
+
     static func verifyUpdateSignature(
         assetURL: URL,
         signatureURL: URL,
         expectedVersion: String? = nil,
         assetName: String? = nil
     ) throws {
-        let signatureData = try Data(contentsOf: signatureURL)
+        let signatureData = try fetchSignatureData(from: signatureURL)
         guard let signatureText = String(data: signatureData, encoding: .utf8) else {
             throw NSError(
                 domain: "UpdateManager",
@@ -454,6 +665,12 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return Data(hasher.finalize())
     }
 
+    private func isTokenStillActive(_ token: UUID) -> Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return _currentSessionToken == token && _activeDownloadToken == token
+    }
+
     // MARK: - URLSessionDownloadDelegate
     public func urlSession(
         _ session: URLSession,
@@ -463,9 +680,18 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         totalBytesExpectedToWrite: Int64
     ) {
         guard totalBytesExpectedToWrite > 0 else { return }
+        stateLock.lock()
+        let isValidTask = (downloadTask === currentDownloadTask && _activeDownloadToken != nil && _currentSessionToken == _activeDownloadToken)
+        stateLock.unlock()
+        guard isValidTask else { return }
+
         let progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
+            self.stateLock.lock()
+            let stillActive = (self._activeDownloadToken != nil && self._currentSessionToken == self._activeDownloadToken)
+            self.stateLock.unlock()
+            guard stillActive else { return }
             if case .downloading = self.currentState {
                 self.currentState = .downloading(progress: min(1.0, max(0.0, progress)))
             }
@@ -477,81 +703,161 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         downloadTask: URLSessionDownloadTask,
         didFinishDownloadingTo location: URL
     ) {
-        currentState = .preparing
+        // U-01: 强校验当前任务身份与代次令牌，若用户已点击取消，立即删除临时文件并中止
+        stateLock.lock()
+        guard downloadTask === currentDownloadTask,
+              let activeToken = _activeDownloadToken,
+              _currentSessionToken == activeToken else {
+            stateLock.unlock()
+            try? FileManager.default.removeItem(at: location)
+            return
+        }
+        let releaseSnapshot = _targetRelease
+        stateLock.unlock()
 
         guard let httpResponse = downloadTask.response as? HTTPURLResponse,
               (200...299).contains(httpResponse.statusCode) else {
+            stateLock.lock()
             currentDownloadTask = nil
+            _activeDownloadToken = nil
+            stateLock.unlock()
+            try? FileManager.default.removeItem(at: location)
             currentState = .error("下载服务器返回异常，请稍后重试")
             return
         }
 
+        currentState = .preparing
+
         do {
-            // URLSession 会在本代理方法返回后删除 location，必须先同步接管临时文件。
-            let preparedUpdate = try prepareDownloadedAsset(at: location)
-            let expectedVersion = targetRelease?.version ?? ""
-            let signatureURL = targetRelease?.signatureURL
+            // U-04: 此代理方法已在后台专用队列 (downloadDelegateQueue) 运行，优先使用 moveItem O(1) 接管临时文件
+            let preparedUpdate = try prepareDownloadedAsset(at: location, release: releaseSnapshot, sessionToken: activeToken)
+            let expectedVersion = releaseSnapshot?.version ?? ""
+            let signatureURL = releaseSnapshot?.signatureURL
+            let assetName = releaseSnapshot?.assetName
+
+            stateLock.lock()
             currentDownloadTask = nil
+            stateLock.unlock()
+
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self = self else { return }
                 self.extractAndRelaunch(
                     preparedUpdate: preparedUpdate,
                     expectedVersion: expectedVersion,
-                    signatureURL: signatureURL
+                    signatureURL: signatureURL,
+                    assetName: assetName,
+                    sessionToken: activeToken
                 )
             }
         } catch {
+            stateLock.lock()
             currentDownloadTask = nil
+            _activeDownloadToken = nil
+            stateLock.unlock()
             currentState = .error("保存安装包失败：\(error.localizedDescription)")
         }
     }
 
     public func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error as NSError?, error.code != NSURLErrorCancelled {
-            DispatchQueue.main.async { [weak self] in
-                self?.currentState = .error("下载安装包失败：\(error.localizedDescription)")
-            }
+        guard let error = error as NSError?, error.code != NSURLErrorCancelled else { return }
+        stateLock.lock()
+        let isValidTask = (task === currentDownloadTask && _activeDownloadToken != nil)
+        if isValidTask {
+            currentDownloadTask = nil
+            _activeDownloadToken = nil
+        }
+        stateLock.unlock()
+        guard isValidTask else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            self?.currentState = .error("下载安装包失败：\(error.localizedDescription)")
         }
     }
 
-    // MARK: - Extraction & In-Place Replacement
+    // MARK: - Extraction & Same-Volume Atomic Replacement
     private struct PreparedUpdate {
         let tempDirectory: URL
         let assetURL: URL
         let isDMG: Bool
     }
 
-    private func prepareDownloadedAsset(at location: URL) throws -> PreparedUpdate {
+    private func prepareDownloadedAsset(at location: URL, release: ReleaseInfo?, sessionToken: UUID) throws -> PreparedUpdate {
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("atools_update_\(UUID().uuidString)")
-        let isDMG = targetRelease?.assetName.hasSuffix(".dmg") ?? true
+        // U-06: 统一使用大小写无关扩展名判断
+        let isDMG = (release?.assetName.lowercased().hasSuffix(".dmg")) ?? true
         let localAssetPath = tempDir.appendingPathComponent(isDMG ? "download.dmg" : "download.zip")
+
+        stateLock.lock()
+        _activeStagingDirectories.insert(tempDir)
+        stateLock.unlock()
 
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: location, to: localAssetPath)
+            // 优先使用同卷 O(1) moveItem 接管，若跨卷则回退至 copyItem
+            do {
+                try FileManager.default.moveItem(at: location, to: localAssetPath)
+            } catch {
+                try FileManager.default.copyItem(at: location, to: localAssetPath)
+            }
+            guard isTokenStillActive(sessionToken) else {
+                try? FileManager.default.removeItem(at: tempDir)
+                throw NSError(domain: "UpdateManager", code: 99, userInfo: [NSLocalizedDescriptionKey: "更新已取消"])
+            }
             return PreparedUpdate(tempDirectory: tempDir, assetURL: localAssetPath, isDMG: isDMG)
         } catch {
             try? FileManager.default.removeItem(at: tempDir)
+            stateLock.lock()
+            _activeStagingDirectories.remove(tempDir)
+            stateLock.unlock()
             throw error
+        }
+    }
+
+    /// 军师加固点 4：优先在目标 App 所在物理卷（如 `/Applications/.atools_staging_<UUID>`）创建隐藏 Staging 目录，
+    /// 确保后续 `mv` 底层调用 `rename(2)` 具备绝对的 APFS 同卷原子性，绝不退化为跨卷非原子拷贝。
+    static func createSameVolumeStagingDirectory(forTargetAppPath targetAppBundlePath: String, fallbackTempDir: URL) throws -> URL {
+        let resolvedTarget = URL(fileURLWithPath: targetAppBundlePath).standardizedFileURL.resolvingSymlinksInPath()
+        let parentDir = resolvedTarget.deletingLastPathComponent()
+        let sameVolumeCandidate = parentDir.appendingPathComponent(".atools_staging_\(UUID().uuidString)", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: sameVolumeCandidate, withIntermediateDirectories: true)
+            return sameVolumeCandidate
+        } catch {
+            let fallback = fallbackTempDir.appendingPathComponent("staging", isDirectory: true)
+            try FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
+            return fallback
         }
     }
 
     private func extractAndRelaunch(
         preparedUpdate: PreparedUpdate,
         expectedVersion: String,
-        signatureURL: URL?
+        signatureURL: URL?,
+        assetName: String?,
+        sessionToken: UUID
     ) {
         let tempDir = preparedUpdate.tempDirectory
-        let stagingDir = tempDir.appendingPathComponent("staging")
-        let targetAppBundlePath = Bundle.main.bundlePath
-        var shouldCleanupTempDirectory = true
+        let targetAppBundlePath = URL(fileURLWithPath: Bundle.main.bundlePath).standardizedFileURL.resolvingSymlinksInPath().path
+        var stagingDir: URL?
+        var shouldCleanupDirectories = true
         defer {
-            if shouldCleanupTempDirectory {
+            if shouldCleanupDirectories {
                 try? FileManager.default.removeItem(at: tempDir)
+                if let sDir = stagingDir {
+                    try? FileManager.default.removeItem(at: sDir)
+                }
+                stateLock.lock()
+                _activeStagingDirectories.remove(tempDir)
+                if let sDir = stagingDir {
+                    _activeStagingDirectories.remove(sDir)
+                }
+                stateLock.unlock()
             }
         }
 
         do {
+            guard isTokenStillActive(sessionToken) else { return }
+
             guard let signatureURL = signatureURL else {
                 throw NSError(
                     domain: "UpdateManager",
@@ -563,11 +869,21 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 assetURL: preparedUpdate.assetURL,
                 signatureURL: signatureURL,
                 expectedVersion: expectedVersion,
-                assetName: targetRelease?.assetName
+                assetName: assetName
             )
 
-            try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
-            let stagingAppPath = stagingDir.appendingPathComponent("ATools.app").path
+            guard isTokenStillActive(sessionToken) else { return }
+
+            let createdStagingDir = try Self.createSameVolumeStagingDirectory(
+                forTargetAppPath: targetAppBundlePath,
+                fallbackTempDir: tempDir
+            )
+            stagingDir = createdStagingDir
+            stateLock.lock()
+            _activeStagingDirectories.insert(createdStagingDir)
+            stateLock.unlock()
+
+            let stagingAppPath = createdStagingDir.appendingPathComponent("ATools.app").path
 
             if preparedUpdate.isDMG {
                 // 挂载 DMG 提取 ATools.app
@@ -576,7 +892,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
                 let attachProcess = Process()
                 attachProcess.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-                attachProcess.arguments = ["attach", preparedUpdate.assetURL.path, "-nobrowse", "-mountpoint", mountPoint]
+                attachProcess.arguments = ["attach", preparedUpdate.assetURL.path, "-nobrowse", "-readonly", "-mountpoint", mountPoint]
                 try attachProcess.run()
                 attachProcess.waitUntilExit()
 
@@ -598,7 +914,7 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 // 解压 ZIP 提取 ATools.app
                 let unzipProcess = Process()
                 unzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-                unzipProcess.arguments = ["-xk", preparedUpdate.assetURL.path, stagingDir.path]
+                unzipProcess.arguments = ["-xk", preparedUpdate.assetURL.path, createdStagingDir.path]
                 try unzipProcess.run()
                 unzipProcess.waitUntilExit()
 
@@ -608,14 +924,19 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 }
             }
 
+            guard isTokenStillActive(sessionToken) else { return }
+
             try validateStagedApp(at: stagingAppPath, expectedVersion: expectedVersion)
+
+            // 二次确认取消状态：一旦越过此边界即启动替换守护进程
+            guard isTokenStillActive(sessionToken) else { return }
 
             // 写入独立的平滑替换守护脚本
             let scriptPath = tempDir.appendingPathComponent("relaunch.sh").path
             let currentPID = ProcessInfo.processInfo.processIdentifier
 
             try UpdateManager.relaunchScript.write(toFile: scriptPath, atomically: true, encoding: .utf8)
-            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: scriptPath)
 
             // 启动守护脚本并退出当前老进程 (使用 nohup 隔离父进程退出信号)
             let runnerProcess = Process()
@@ -626,17 +947,19 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 String(currentPID),
                 targetAppBundlePath,
                 stagingAppPath,
-                tempDir.path
+                tempDir.path,
+                createdStagingDir.path
             ]
             runnerProcess.standardOutput = FileHandle.nullDevice
             runnerProcess.standardError = FileHandle.nullDevice
             try runnerProcess.run()
-            shouldCleanupTempDirectory = false
+            shouldCleanupDirectories = false
 
             DispatchQueue.main.async {
                 NSApp.terminate(nil)
             }
         } catch {
+            guard isTokenStillActive(sessionToken) else { return }
             DispatchQueue.main.async { [weak self] in
                 self?.currentState = .error("更新替换失败：\(error.localizedDescription)")
             }
@@ -702,11 +1025,6 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
             throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包 designated requirement 无效"])
         }
 
-        // 证书签名（Developer ID 等）的 DR 形如：
-        //   designated => identifier "cc.atools.app" and certificate leaf=H"..."
-        // ad-hoc 签名没有证书，DR 只会是 cdhash（`# designated => cdhash H"..."`），
-        // 根本不含 identifier——只查 DR 的话所有 ad-hoc 正式包都会被误拒，
-        // 所以退回用 -dv 输出的 Identifier= 校验（历史上就是这里导致更新报错）。
         let requirementMatches = stagedRequirement.output.contains("identifier \"\(UpdateManager.expectedBundleIdentifier)\"")
         let identifierMatches = UpdateManager.identifierValue(in: stagedDescription.output) == UpdateManager.expectedBundleIdentifier
         guard requirementMatches || identifierMatches else {
@@ -723,10 +1041,6 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
                 throw NSError(domain: "UpdateManager", code: 7, userInfo: [NSLocalizedDescriptionKey: "更新包签名 Team ID 与当前应用不一致"])
             }
         } else {
-            // 当前是 ad-hoc / 无 Team 构建（自签名证书同样 TeamIdentifier=not set）：
-            // ① 放行 ad-hoc 包（历史默认）
-            // ② 放行 pinned leaf 指纹匹配的证书包（自签名证书迁移路径）
-            // 指纹填入 expectedSigningLeafHash 后生效；留空则行为与旧版完全一致。
             guard Self.acceptsUpdateWithoutTeam(stagedIsAdhoc: stagedIsAdhoc,
                                                 stagedTeam: stagedTeam,
                                                 stagedRequirement: stagedRequirement.output,
@@ -738,11 +1052,6 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
 
     // MARK: - 签名指纹 pinning（自签名证书迁移路径）
 
-    /// 自签名证书的 leaf 指纹集合（`codesign -dr` 输出里 `certificate leaf = H"..."` 的十六进制串）。
-    ///
-    /// 支持新旧并存：换证书/升级签名体系时，先发一版同时 pin [旧, 新] 双指纹，
-    /// 确保存量用户能自动更新到该版；下一版再收敛为只 pin [新]。
-    /// 留空数组 = 只接受 ad-hoc 包（与未加固行为完全一致）。
     static let expectedSigningLeafHashes: [String] = [
         // "ATools Sign" 自签名证书（有效期至 2036-09-26），创建于 2026-09-30
         "e27bee7aa3e27e544d365c8042723d2c6624fbdb"
@@ -759,8 +1068,6 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         return hash.isEmpty ? nil : hash
     }
 
-    /// 无 Team 的当前构建接受哪种更新包（纯函数，供 --test 回归）：
-    /// ① ad-hoc 包；② 指纹命中 pinnedLeafHashes 任一项的证书包。
     static func acceptsUpdateWithoutTeam(stagedIsAdhoc: Bool,
                                          stagedTeam: String?,
                                          stagedRequirement: String,
@@ -813,49 +1120,97 @@ public final class UpdateManager: NSObject, URLSessionDownloadDelegate {
         detach.waitUntilExit()
     }
 
-    private static let relaunchScript = """
+    /// U-02, U-03 & 军师加固点 4：
+    /// 1. 显式锁定安全 PATH，杜绝环境变量命令劫持；
+    /// 2. 校验进程身份必须包含 ATools，严禁裸 PID 暴力 `kill -9`；
+    /// 3. 替换前二次校验 `$STAGING_APP` 签名与 `cc.atools.app` 标识符，收敛 TOCTOU 窗口；
+    /// 4. 使用目标同卷隐藏目录 `.atools_staging_<UUID>` 执行 `/bin/mv`（底层同卷 `rename(2)` 原子交替），若失败或拉起失败则无损回滚 `$BACKUP_APP`。
+    internal static let relaunchScript = """
     #!/bin/sh
     set -u
+    export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 
     OLD_PID="$1"
     TARGET_APP="$2"
     STAGING_APP="$3"
     TEMP_DIR="$4"
+    STAGING_DIR="${5:-}"
     BACKUP_APP="${TARGET_APP}.atools-update-backup"
 
-    # 1. 等待老进程退出（最长等待 10 秒）
+    cleanup_all() {
+        if [ -n "$STAGING_DIR" ] && [ -d "$STAGING_DIR" ]; then
+            /bin/rm -rf "$STAGING_DIR"
+        fi
+        if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+            /bin/rm -rf "$TEMP_DIR"
+        fi
+    }
+
+    is_atools_pid() {
+        if ! /bin/kill -0 "$OLD_PID" 2>/dev/null; then
+            return 1
+        fi
+        PROC_COMM=$(/bin/ps -p "$OLD_PID" -o comm= 2>/dev/null || true)
+        case "$PROC_COMM" in
+            *ATools*|*atools*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
+
+    # 1. 等待旧进程平滑退出（最长等待 10 秒，严禁使用裸 kill -9 强杀防 PID 复用误伤）
     COUNT=0
-    while kill -0 "$OLD_PID" 2>/dev/null; do
-        sleep 0.2
+    while is_atools_pid; do
+        /bin/sleep 0.2
         COUNT=$((COUNT+1))
+        if [ "$COUNT" -eq 40 ]; then
+            /bin/kill -TERM "$OLD_PID" 2>/dev/null || true
+        fi
         if [ "$COUNT" -gt 50 ]; then
-            kill -9 "$OLD_PID" 2>/dev/null
-            break
+            cleanup_all
+            exit 1
         fi
     done
 
-    # 2. 替换前清理陈旧备份
-    rm -rf "$BACKUP_APP"
+    # 2. 替换前二次严格验签（防范 TOCTOU 篡改窗口）
+    if ! /usr/bin/codesign --verify --deep --strict "$STAGING_APP" >/dev/null 2>&1; then
+        cleanup_all
+        exit 1
+    fi
+    STAGED_INFO=$(/usr/bin/codesign -dv --verbose=4 "$STAGING_APP" 2>&1 || true)
+    case "$STAGED_INFO" in
+        *"Identifier=cc.atools.app"*) ;;
+        *)
+            cleanup_all
+            exit 1
+            ;;
+    esac
 
-    # 3. 先移动旧包，再使用 ditto 保留资源、权限与隔离属性
-    if mv "$TARGET_APP" "$BACKUP_APP" 2>/dev/null; then
-        if /usr/bin/ditto "$STAGING_APP" "$TARGET_APP"; then
+    # 3. 清理陈旧备份并执行同卷 rename(2) 原子交替
+    /bin/rm -rf "$BACKUP_APP"
+
+    if /bin/mv "$TARGET_APP" "$BACKUP_APP" 2>/dev/null; then
+        if /bin/mv "$STAGING_APP" "$TARGET_APP" 2>/dev/null || /usr/bin/ditto "$STAGING_APP" "$TARGET_APP"; then
             if /usr/bin/codesign --verify --deep --strict "$TARGET_APP" >/dev/null 2>&1; then
-                rm -rf "$BACKUP_APP"
+                if /usr/bin/open "$TARGET_APP"; then
+                    /bin/rm -rf "$BACKUP_APP"
+                    cleanup_all
+                    exit 0
+                else
+                    /bin/rm -rf "$TARGET_APP"
+                    /bin/mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
+                fi
             else
-                rm -rf "$TARGET_APP"
-                mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
+                /bin/rm -rf "$TARGET_APP"
+                /bin/mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
             fi
         else
-            rm -rf "$TARGET_APP"
-            mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
+            /bin/rm -rf "$TARGET_APP"
+            /bin/mv "$BACKUP_APP" "$TARGET_APP" 2>/dev/null
         fi
     fi
 
-    # 4. 重新拉起应用
-    /usr/bin/open "$TARGET_APP"
-
-    # 5. 清理临时更新目录
-    rm -rf "$TEMP_DIR"
+    /usr/bin/open "$TARGET_APP" 2>/dev/null || true
+    cleanup_all
+    exit 1
     """
 }

@@ -741,27 +741,49 @@ public final class SearchResultsTableView: NSView, NSTableViewDataSource, NSTabl
     }
 
     private var draggedRow: Int?
+    private var draggedResultId: String?
+    private var draggedResultSnapshot: SearchResult?
 
     public func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
         PanelCoordinator.shared.isDraggingActive = true
-        draggedRow = rowIndexes.first
+        let row = rowIndexes.first
+        draggedRow = row
+        if let row = row, row >= 0 && row < results.count {
+            draggedResultId = results[row].id
+            draggedResultSnapshot = results[row]
+        } else {
+            draggedResultId = nil
+            draggedResultSnapshot = nil
+        }
     }
 
     public func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
         PanelCoordinator.shared.isDraggingActive = false
 
-        // 外部应用成功接收 Drop（如微信输入框、QQ 窗口、访达目录）
+        // 外部应用成功接收 Drop（Q-11：按稳定唯一 ID 与拖拽快照回查，防止异步结果到达后行号偏移导致错位）
         if operation != [] {
+            let capturedId = draggedResultId
+            let capturedSnapshot = draggedResultSnapshot
+            draggedRow = nil
+            draggedResultId = nil
+            draggedResultSnapshot = nil
+
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
-                let row = self.draggedRow ?? tableView.selectedRow
-                self.draggedRow = nil
-                guard row >= 0 && row < self.results.count else {
-                    PanelCoordinator.shared.hideSearchPanel()
+                if let id = capturedId, let matched = self.results.first(where: { $0.id == id }) {
+                    self.delegate?.searchResultsTable(self, didCompleteDragResult: matched)
                     return
                 }
-                self.delegate?.searchResultsTable(self, didCompleteDragResult: self.results[row])
+                if let snapshot = capturedSnapshot {
+                    self.delegate?.searchResultsTable(self, didCompleteDragResult: snapshot)
+                    return
+                }
+                PanelCoordinator.shared.hideSearchPanel()
             }
+        } else {
+            draggedRow = nil
+            draggedResultId = nil
+            draggedResultSnapshot = nil
         }
     }
 

@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import os
 
-public struct MTPoint {
+public struct MTPoint: Sendable {
     public var x: Float
     public var y: Float
     public init(x: Float = 0, y: Float = 0) {
@@ -11,7 +11,7 @@ public struct MTPoint {
     }
 }
 
-public struct MTVector {
+public struct MTVector: Sendable {
     public var position: MTPoint
     public var velocity: MTPoint
     public init(position: MTPoint = MTPoint(), velocity: MTPoint = MTPoint()) {
@@ -21,7 +21,7 @@ public struct MTVector {
 }
 
 /// MultitouchSupport 触控板单指精确二进制布局（每指严格 96 字节）
-public struct MTContact {
+public struct MTContact: Sendable {
     public var frame: Int32        // +0
     public var pad: Int32          // +4
     public var timestamp: Double   // +8
@@ -94,6 +94,8 @@ public final class TrackpadGestureManager {
     private var activeDeviceList: CFArray?
     private var activeDevices: [UnsafeMutableRawPointer] = []
     private var isListening: Bool = false
+    private var isStopping: Bool = false
+    private var activeCallbackCount: Int = 0
     private var lock = os_unfair_lock()
 
     private var sleepWakeObservers: [NSObjectProtocol] = []
@@ -113,6 +115,8 @@ public final class TrackpadGestureManager {
     }
 
     private var cycleState = TouchCycleState()
+    /// Y-08: 触控周期代次计数器，防止上一周期延迟排队的 DispatchWorkItem 误终结已开始的新手势周期
+    private var touchCycleGeneration: UInt64 = 0
     private var activeGesture: ShelfTrackpadGesture = .none
     private var lastTriggerTimestamp: Double = 0
     private var pendingEndWorkItem: DispatchWorkItem?
@@ -128,14 +132,19 @@ public final class TrackpadGestureManager {
         }
         sleepWakeObservers.removeAll()
         stopListening()
-        if let handle = dylibHandle {
+        // Y-09: 单例驻留生命周期内不直接 dlclose 仍在排空的动态库，若真销毁仅在无活跃回调时关闭
+        os_unfair_lock_lock(&lock)
+        let inFlight = activeCallbackCount
+        let handle = dylibHandle
+        dylibHandle = nil
+        os_unfair_lock_unlock(&lock)
+        if inFlight == 0, let handle = handle {
             dlclose(handle)
         }
     }
 
     private func setupSleepWakeObservers() {
         let center = NSWorkspace.shared.notificationCenter
-        // 1. 系统准备休眠时：立刻平稳停止触控监听并释放设备引用，防止内核断电后后台线程竞争崩溃
         sleepWakeObservers.append(center.addObserver(
             forName: NSWorkspace.willSleepNotification,
             object: nil,
@@ -147,7 +156,6 @@ public final class TrackpadGestureManager {
             self?.stopListening()
         })
 
-        // 2. 系统从睡眠唤醒时：硬件 I2C/SPI 总线需完成电源恢复，防抖延迟 1.2s 后再重建监听
         sleepWakeObservers.append(center.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -168,7 +176,7 @@ public final class TrackpadGestureManager {
         })
     }
 
-    private func loadMultitouchFramework() -> Bool {
+    private func loadMultitouchFrameworkLocked() -> Bool {
         if dylibHandle != nil { return true }
         let path = "/System/Library/PrivateFrameworks/MultitouchSupport.framework/MultitouchSupport"
         guard let handle = dlopen(path, RTLD_NOW) else {
@@ -224,76 +232,89 @@ public final class TrackpadGestureManager {
         }
     }
 
+    /// Y-09: 将私有框架 C API (MTDeviceCreateList / MTDeviceStart) 移出 lock 临界区，杜绝与底层回调线程发生互锁死锁
     public func startListening() {
         os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
-        guard !isListening else { return }
-        guard loadMultitouchFramework(),
+        if isListening {
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+        guard loadMultitouchFrameworkLocked(),
               let createList = mtDeviceCreateList,
               let registerCb = mtRegisterCallback,
-              let startDev = mtDeviceStart else { return }
+              let startDev = mtDeviceStart else {
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+        isStopping = false
+        os_unfair_lock_unlock(&lock)
 
         guard let list = createList()?.takeRetainedValue() else { return }
-        self.activeDeviceList = list
         let count = CFArrayGetCount(list)
-        activeDevices.removeAll()
+        var startedDevices: [UnsafeMutableRawPointer] = []
 
         for i in 0..<count {
             if let rawDev = CFArrayGetValueAtIndex(list, i) {
                 let dev = UnsafeMutableRawPointer(mutating: rawDev)
                 registerCb(dev, multitouchCallbackTrampoline)
                 _ = startDev(dev, 0)
-                activeDevices.append(dev)
+                startedDevices.append(dev)
             }
         }
 
-        isListening = !activeDevices.isEmpty
-        runtimeLog("[TrackpadGesture] Started listening on \(activeDevices.count) touch device(s)")
+        os_unfair_lock_lock(&lock)
+        self.activeDeviceList = list
+        self.activeDevices = startedDevices
+        self.isListening = !startedDevices.isEmpty
+        os_unfair_lock_unlock(&lock)
+
+        runtimeLog("[TrackpadGesture] Started listening on \(startedDevices.count) touch device(s)")
     }
 
+    /// Y-09: 先在锁内标记 isStopping 并取出设备快照，随后在锁外执行 MTUnregisterContactFrameCallback 与 MTDeviceStop
     public func stopListening() {
         os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-
+        isStopping = true
+        touchCycleGeneration &+= 1
         pendingEndWorkItem?.cancel()
         pendingEndWorkItem = nil
 
         guard isListening || !activeDevices.isEmpty else {
             activeDeviceList = nil
-            return
-        }
-        guard let unregisterCb = mtUnregisterCallback,
-              let stopDev = mtDeviceStop else {
-            activeDevices.removeAll()
-            activeDeviceList = nil
-            isListening = false
+            os_unfair_lock_unlock(&lock)
             return
         }
 
-        for dev in activeDevices {
-            // 关键时序防御 1：必须先反注册 C 帧回调，切断后续所有 touch 派发
-            unregisterCb(dev, multitouchCallbackTrampoline)
-            // 关键时序防御 2：仅当设备处于 running 状态时才调用 MTDeviceStop，避免在已停机/断电对象上过释放
-            if let isRunning = mtDeviceIsRunning {
-                if isRunning(dev) {
+        let devicesToStop = activeDevices
+        let staleList = activeDeviceList
+        let unregisterCb = mtUnregisterCallback
+        let stopDev = mtDeviceStop
+        let isRunningFn = mtDeviceIsRunning
+
+        activeDevices.removeAll()
+        activeDeviceList = nil
+        isListening = false
+        cycleState = TouchCycleState()
+        os_unfair_lock_unlock(&lock)
+
+        if let unregisterCb = unregisterCb, let stopDev = stopDev {
+            for dev in devicesToStop {
+                unregisterCb(dev, multitouchCallbackTrampoline)
+                if let isRunning = isRunningFn {
+                    if isRunning(dev) {
+                        _ = stopDev(dev)
+                    }
+                } else {
                     _ = stopDev(dev)
                 }
-            } else {
-                _ = stopDev(dev)
             }
         }
-        activeDevices.removeAll()
-        // 关键时序防御 3：在设备停机后延迟释放 CFArray，确保 MultitouchSupport 内部异步工作线程 (mt_ThreadedMTEntry)
-        // 有充足时间 (5s) 彻底关闭并退出，杜绝内核/框架工作线程访问已释放 MTDeviceRef 导致的 SIGSEGV 崩溃！
-        if let staleList = activeDeviceList {
+
+        if let staleList = staleList {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5.0) {
                 _ = staleList
             }
         }
-        activeDeviceList = nil
-        isListening = false
-        cycleState = TouchCycleState()
         runtimeLog("[TrackpadGesture] Stopped listening and released all touch devices")
     }
 
@@ -304,7 +325,6 @@ public final class TrackpadGestureManager {
 
     @inline(__always)
     private func isFingerTouching(_ state: Int32) -> Bool {
-        // 3=make, 4=touch, 5=press, 6=tap
         return state >= 3 && state <= 6
     }
 
@@ -316,7 +336,15 @@ public final class TrackpadGestureManager {
         frame: Int32
     ) {
         os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
+        if isStopping {
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+        activeCallbackCount += 1
+        defer {
+            activeCallbackCount -= 1
+            os_unfair_lock_unlock(&lock)
+        }
 
         let configuredGesture = activeGesture
         guard configuredGesture != .none else { return }
@@ -348,7 +376,7 @@ public final class TrackpadGestureManager {
         }
 
         if !cycleState.isTracking {
-            // 开始新的触控追踪周期
+            touchCycleGeneration &+= 1
             cycleState = TouchCycleState(
                 initialTimestamp: timestamp,
                 lastFrameTimestamp: timestamp,
@@ -370,7 +398,6 @@ public final class TrackpadGestureManager {
             cycleState.lastFrameTimestamp = timestamp
             cycleState.maxFingerCount = max(cycleState.maxFingerCount, touchingCount)
 
-            // 计算位移与方向
             var totalDeltaX: Float = 0
             var totalDeltaY: Float = 0
             var matchedFingers = 0
@@ -395,7 +422,6 @@ public final class TrackpadGestureManager {
                 cycleState.avgDeltaY = totalDeltaY / Float(matchedFingers)
             }
 
-            // 针对三指下滑：在滑移过程中一旦满足位移阈值即触发，获得丝滑响应
             if configuredGesture == .threeFingerSwipeDown && !cycleState.triggeredThisCycle {
                 let elapsed = timestamp - cycleState.initialTimestamp
                 if cycleState.maxFingerCount == 3 && elapsed <= 0.45 {
@@ -411,14 +437,19 @@ public final class TrackpadGestureManager {
             }
         }
 
-        // 定时兜底：若手指离开后硬件不再下发新帧，通过 70ms 延迟安全完成轻点判定
+        // Y-08: 捕获当前触控代次 capturedGeneration 并检查 workItem.isCancelled，杜绝旧定时器误杀新手势周期
+        let capturedGeneration = touchCycleGeneration
+        var workItemRef: DispatchWorkItem?
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
+            if let item = workItemRef, item.isCancelled { return }
             os_unfair_lock_lock(&self.lock)
             defer { os_unfair_lock_unlock(&self.lock) }
+            guard !self.isStopping, self.touchCycleGeneration == capturedGeneration else { return }
             let endTs = max(self.cycleState.lastFrameTimestamp, self.cycleState.initialTimestamp + 0.05)
             self.evaluateTouchCycleEnd(timestamp: endTs, gesture: configuredGesture)
         }
+        workItemRef = work
         pendingEndWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.07, execute: work)
     }
@@ -455,16 +486,13 @@ public final class TrackpadGestureManager {
     }
 
     private func triggerGestureAction(timestamp: Double) {
-        // 0.45s 防抖与冷却时间
         guard timestamp - lastTriggerTimestamp > 0.45 else { return }
         lastTriggerTimestamp = timestamp
         cycleState.triggeredThisCycle = true
 
         DispatchQueue.main.async {
             runtimeLog("[TrackpadGesture] Gesture triggered: \(ConfigManager.shared.config.shelfTrackpadGesture.rawValue)")
-            // 重置快捷键候选态，避免用户手势时无意碰到修饰键导致候选挂起
             HotkeyManager.shared.resetCandidateState()
-            // 切换应用抽屉
             PanelCoordinator.shared.togglePanel(.shelf)
         }
     }

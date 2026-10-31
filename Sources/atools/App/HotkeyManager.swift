@@ -216,6 +216,15 @@ public final class HotkeyManager {
         }
     }
 
+    public func unregisterAllItemHotkeys() {
+        for (_, ref) in registeredItemHotkeys {
+            UnregisterEventHotKey(ref)
+        }
+        registeredItemHotkeys.removeAll()
+        itemHotKeyIdMap.removeAll()
+        nextItemHotKeyId = 1000
+    }
+
     public func unregisterAll() {
         for (_, ref) in registeredHotkeys {
             UnregisterEventHotKey(ref)
@@ -223,6 +232,7 @@ public final class HotkeyManager {
         registeredHotkeys.removeAll()
         specialBindings.removeAll()
         registeredBindings.removeAll()
+        unregisterAllItemHotkeys()
         teardownFlagsMonitors()
     }
 

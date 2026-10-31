@@ -7,6 +7,8 @@ public extension Notification.Name {
     static let atoolsShelfItemSpacingDidChange = Notification.Name("atoolsShelfItemSpacingDidChange")
     static let atoolsFavoritesToggleDidChange = Notification.Name("atoolsFavoritesToggleDidChange")
     static let atoolsPanelTogglesDidChange = Notification.Name("atoolsPanelTogglesDidChange")
+    static let atoolsHotkeysDidChange = Notification.Name("atoolsHotkeysDidChange")
+    static let atoolsPersistenceDidFail = Notification.Name("atoolsPersistenceDidFail")
     static let atoolsThemeDidChange = Notification.Name("atoolsThemeDidChange")
     static let atoolsAutoQuitDidChange = Notification.Name("atoolsAutoQuitDidChange")
     static let atoolsDidSelectSyntaxCommand = Notification.Name("atoolsDidSelectSyntaxCommand")
@@ -197,10 +199,10 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func showSettingsWindow() {
-        // Diagnostic: every open path funnels here; log the exact caller chain when
-        // debug logging is enabled (defaults write cc.atools.app atools.debugLog -bool YES).
         runtimeLog("[Settings] showSettingsWindow called from:\n" + Thread.callStackSymbols.prefix(16).joined(separator: "\n"))
         PanelCoordinator.shared.hideAllPanels(restoreFocus: false)
+        // K-06: 当设置窗口打开时，若存在固定在桌面的 Shelf 面板，将其层级临时降级至普通层级下方，防止遮挡设置窗口
+        PanelCoordinator.shared.setPinnedShelfLoweredForSettings(true)
         guard let win = window else { return }
         win.setContentSize(NSSize(width: 780, height: 600))
         win.center()
@@ -236,6 +238,7 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
     }
 
     public func windowWillClose(_ notification: Notification) {
+        PanelCoordinator.shared.setPinnedShelfLoweredForSettings(false)
         shelfView?.shelfRecorder?.stopRecording()
         searchView?.searchRecorder?.stopRecording()
         performanceView?.stopMonitor()

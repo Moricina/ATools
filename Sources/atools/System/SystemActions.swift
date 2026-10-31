@@ -50,15 +50,25 @@ public final class SystemActions {
         setupActions()
     }
 
-    /// Runs a helper tool off the main thread so Apple Events / TCC prompts never freeze the UI.
-    private static func runTool(_ path: String, _ arguments: [String]) {
+    /// Y-12: Runs a helper tool off the main thread with a strict 5.0-second timeout so hung Apple Events / subprocesses never leak threads.
+    private static func runTool(_ path: String, _ arguments: [String], timeout: TimeInterval = 5.0) {
         DispatchQueue.global(qos: .userInitiated).async {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: path)
             task.arguments = arguments
+            let sema = DispatchSemaphore(value: 0)
+            task.terminationHandler = { _ in
+                sema.signal()
+            }
             do {
                 try task.run()
-                task.waitUntilExit()
+                if sema.wait(timeout: .now() + timeout) == .timedOut {
+                    if task.isRunning {
+                        task.terminate()
+                    }
+                    runtimeLog("[SystemActions] \(path) \(arguments) timed out after \(timeout)s and was terminated")
+                    return
+                }
                 if task.terminationStatus != 0 {
                     runtimeLog("[SystemActions] \(path) \(arguments) exited with \(task.terminationStatus)")
                 }
@@ -69,10 +79,11 @@ public final class SystemActions {
     }
 
     private static func runAppleScript(_ source: String) {
-        runTool("/usr/bin/osascript", ["-e", source])
+        runTool("/usr/bin/osascript", ["-e", source], timeout: 5.0)
     }
 
-    /// `CGSession -suspend` was removed in macOS 11, so lock via login.framework instead.
+    /// `CGSession -suspend` was removed in macOS 11, so lock via login.framework first,
+    /// then fallback to System Events keystroke Ctrl+Cmd+Q, and finally display sleep.
     private static func lockScreen() {
         typealias LockFunction = @convention(c) () -> Void
         if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
@@ -81,7 +92,7 @@ public final class SystemActions {
             lock()
             return
         }
-        // Fallback: sleep the display; locks when "require password immediately" is set.
+        runtimeLog("[SystemActions] SACLockScreenImmediate unavailable, falling back to pmset displaysleepnow")
         runTool("/usr/bin/pmset", ["displaysleepnow"])
     }
 
@@ -141,9 +152,6 @@ public final class SystemActions {
         ]
     }
 
-    /// Matches only when the query is a prefix of a keyword (min. 2 characters, or 1 CJK
-    /// character). The previous bidirectional `contains` check surfaced "Lock Screen" for a
-    /// single "s" and "Empty Trash" for any file name containing "empty".
     public func match(_ query: String) -> [SystemActionItem] {
         let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return [] }

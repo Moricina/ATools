@@ -4415,3 +4415,42 @@
 
 
 
+
+### [2026-10-31] 第 130 项：四大架构审计报告 45 项核心缺陷全量闭环修复与工业级防御加固矩阵
+
+- **问题背景与审查来源**：
+  - 针对《架构与逻辑审核2.md》、《搜索协调员状态同步问题.md》、《Atools 架构摘要.md》与《PROJECT_AUDIT_REPORT.md》四份技术审计报告，对全系统 6 大领域（数据安全、更新生命周期、搜索并发算法、启动台交互、系统动作/AutoQuit、配置并发）共 45 项核心缺陷展开全景去重归敛与工业级闭环修复。
+
+- **实施与加固详情**：
+  1. **数据安全与备份事务化（S-01 ~ S-07）**：
+     - [`Sources/atools/Storage/BackupService.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/BackupService.swift)：新增 `sanitizeIconFilename`，引入严格单文件名白名单校验（拒绝 `/`、`\`、`\0`、`..`、隐藏文件首字符 `.`），结合 APFS Unicode NFC 规范化（`precomposedStringWithCanonicalMapping`）与 `resolvingSymlinksInPath()` 前缀校验，彻底杜绝路径穿越；`isSafeOverwriteTarget` 严禁覆盖非备份目录；`healPaths` 接入 `iconFileMap` 精准支持非 PNG（`.jpg` / `.icns`）自定义图标自愈；
+     - [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：严格区分“旧版缺项”与“类型损坏”，当 `categories` 存在但类型错误时抛出异常由上层快照自愈保全，严禁静默抹空；
+     - [`Sources/atools/System/LauncherExecutor.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/LauncherExecutor.swift)：`buildShellProcessArguments` 严格隔离脚本文件执行（直接传参）与命令行执行（`["-c", cmd, "--"] + extraArgs`），解决命令注入与路径含空格切词 bug；完整落地 `runAsAdmin` 提权与 `terminalMode` 终端运行；
+     - [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：`deleteCategory` 强校验 `targetId != id` 及目标存在性，非法时拒绝删除；失效应用清理采用精确 Bundle ID 匹配杜绝模糊误删。
+  2. **软件更新生命周期与伴生安全脚本（U-01 ~ U-06）**：
+     - [`Sources/atools/System/UpdateManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/UpdateManager.swift)：引入 `_currentSessionToken = UUID()` 代次令牌，在下载与解压回调首行强拦截过期/已取消任务；将下载完成文件拷贝解耦至独立后台操作队列 `downloadDelegateQueue`，根除主线程 UI 冻结；重构伴生 `relaunchScript`：顶部锁定安全绝对 `PATH`，通过 `ps -p "$OLD_PID" -o comm=` 核验进程真实身份，彻底废除无条件裸 PID `kill -9`；建立目标 App 同物理卷的隐藏工作目录 `.atools_staging_<UUID>`，实现系统内核 `rename(2)` 绝对原子替换与失败无损回滚；完善预发布版 SemVer 解析与扩展名大小写不敏感判断。
+  3. **搜索并发安全、算法与边界防御（Q-01 ~ Q-12）**：
+     - [`Sources/atools/Search/SearchCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/SearchCoordinator.swift)：`stateLock` 线程安全化，`deliver` 闭包前置 `currentGenerationId == generation` 守卫，杜绝打字过快或 Esc 后旧结果漏投；
+     - [`Sources/atools/Models/SearchResult.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/SearchResult.swift)：新增轻量不可变跨隔离区载荷 `RawSearchResultPayload`，严格合规 Sendable，跨入主线程后再绑定图片与交互动作；
+     - [`Sources/atools/Search/CalculatorEngine.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/CalculatorEngine.swift)：修复运算符优先级，使幂运算 `^` 高于一元负号，确保 `-2^2 == -4`；
+     - [`Sources/atools/Search/SearchExclusionEngine.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/SearchExclusionEngine.swift)：关闭开发者排除时清空 `developerInfixes`，不强制过滤 CommandLineTools；全量接入 NFC 规范化路径匹配；
+     - [`Sources/atools/Search/MetadataFileSearchBackend.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/MetadataFileSearchBackend.swift)：粗排候选池扩大至 100 项，全量计算新鲜度与路径惩罚后再最终截断；支持 `MDQueryStop` 物理中断；
+     - [`Sources/atools/UI/SearchResultsTableView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SearchResultsTableView.swift)：拖拽数据绑定稳定 `SearchResult.id`，杜绝异步刷新动态行号错位。
+  4. **启动台交互、智能 Favorites 与多屏坐标（K-01 ~ K-07）**：
+     - [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift) & [`Sources/atools/UI/ShelfGridView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfGridView.swift)：将智能 Favorites 声明为 `isReadOnlyProjection = true`，在 `draggingEntered` 中硬拦截拖拽排序与放置，杜绝持久化索引污染与丢项；`reloadData` 彻底清空拖拽快照与合并定时器；去除频次排序双重代理调用；
+     - [`Sources/atools/UI/PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：收拢面板禁用生命周期 Teardown；基于当前光标所在物理屏幕的尺寸精准计算 Quartz 坐标翻转。
+  5. **系统服务与 AutoQuit 零窗守护（Y-01 ~ Y-12）**：
+     - [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：`isConfirmedZeroWindowCount` 实行 AX 与 WindowServer 双重零窗权威校验（Fail-Safe），任一方为 nil 或 >0 绝对不退出；持锁仅做轻量内存快照，同步 AX/WS 查询完全剥离到后台并发队列；彻底清除所有 `as!` 强制类型转换崩溃点；
+     - [`Sources/atools/System/AutoQuitUndoHUDController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitUndoHUDController.swift)：倒计时 Timer 显式挂载到 `RunLoop.main` 的 `.common` (`.commonModes`)，基于绝对 Deadline 驱动，保证菜单展开或滑块拖拽期间 UI 倒计时不暂停且与底层退出绝对同步；支持传入解析后的真实 PID；
+     - [`Sources/atools/App/HotkeyManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/HotkeyManager.swift)：`unregisterAll` 同步清理单项热键，两阶段提交保障热键注册与持久化配置强一致。
+  6. **测试与诊断套件强化**：
+     - [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：新增 `[19] Testing Deep Architectural Hardening & Remediation Matrix`，集成路径穿越、破坏性导出拦截、配置损坏保全、空格 Shell 执行、同卷隐藏 Staging、RawSearchResultPayload 跨线程组装、负幂优先级、NFC 排除等 9 大模块自动化回归断言。
+
+- **验证与测试结果**：
+  - `./Scripts/build.sh --test` 编译与诊断套件 **100% 全部 PASSED 通过**：
+    - `[1/7] CalculatorEngine: PASSED`（验证 `-2^2 == -4`）；
+    - `[6.7] Search Exclusion Engine: PASSED`（验证开发者排除开关与 NFC 规范化）；
+    - `[11/11] UpdateManager: PASSED`（验证 SemVer、同卷 Staging、Ed25519 签名与 Pinning）；
+    - `[12/12] AutoQuitManager: PASSED`（验证双零窗口确认、HUD 倒计时与进程身份解析）；
+    - `[19] Testing Deep Architectural Hardening & Remediation Matrix: PASSED`；
+  - 内存基线物理占用稳定（`Physical Footprint: 144.56 MB`）。

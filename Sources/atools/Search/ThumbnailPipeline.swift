@@ -41,33 +41,33 @@ public final class ThumbnailPipeline {
 
     /// 快速同步读取已有内存缓存图标
     public func cachedIcon(forItem item: LauncherItem) -> NSImage? {
+        let trimmedTarget = item.target.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustom = item.customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let keyStr = (trimmedCustom != nil && !trimmedCustom!.isEmpty) ? Self.cacheKey(forPath: item.target, customIconPath: trimmedCustom) : item.target
+        let keyStr = Self.cacheKey(forPath: trimmedTarget, customIconPath: trimmedCustom)
         return cache.object(forKey: keyStr as NSString)
     }
 
-    /// 驱逐指定启动项或路径的缩略图缓存（用于更换自定义图标或重新定位目标后立即刷新）
+    /// 驱逐指定启动项或路径的缩略图缓存（Q-12：统一规范化裁剪空白字符，保证读、写、失效缓存键完全一致）
     public func invalidateIcon(forItem item: LauncherItem) {
-        cache.removeObject(forKey: item.target as NSString)
-        if let custom = item.customIconPath, !custom.isEmpty {
-            let customKey = Self.cacheKey(forPath: item.target, customIconPath: custom) as NSString
-            cache.removeObject(forKey: customKey)
-        }
+        invalidateIcon(forPath: item.target, customIconPath: item.customIconPath)
     }
 
     public func invalidateIcon(forPath path: String, customIconPath: String? = nil) {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         cache.removeObject(forKey: path as NSString)
-        if let custom = customIconPath, !custom.isEmpty {
-            let customKey = Self.cacheKey(forPath: path, customIconPath: custom) as NSString
+        cache.removeObject(forKey: trimmedPath as NSString)
+        if let custom = customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+            let customKey = Self.cacheKey(forPath: trimmedPath, customIconPath: custom) as NSString
             cache.removeObject(forKey: customKey)
         }
     }
 
     public static func cacheKey(forPath path: String, customIconPath: String?) -> String {
+        let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         if let custom = customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
-            return "custom:\(custom)|\(path)"
+            return "custom:\(custom)|\(cleanPath)"
         }
-        return path
+        return cleanPath
     }
 
     /// 保留应用抽屉已固定的关键应用图标与自定义图标（防止重新展开抽屉时发生重绘或闪烁），同时清空全盘搜索中产生的临时文件缩略图缓存
@@ -75,9 +75,10 @@ public final class ThumbnailPipeline {
         let allItems = ConfigManager.shared.config.categories.flatMap { $0.items }
         var keysToKeep = Set<String>()
         for item in allItems {
-            keysToKeep.insert(item.target)
-            if let custom = item.customIconPath, !custom.isEmpty {
-                keysToKeep.insert(Self.cacheKey(forPath: item.target, customIconPath: custom))
+            let cleanTarget = item.target.trimmingCharacters(in: .whitespacesAndNewlines)
+            keysToKeep.insert(cleanTarget)
+            if let custom = item.customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty {
+                keysToKeep.insert(Self.cacheKey(forPath: cleanTarget, customIconPath: custom))
             }
         }
         var shelfImages: [(NSString, NSImage, Int)] = []
@@ -99,6 +100,7 @@ public final class ThumbnailPipeline {
     }
 
     public func icon(forPath path: String, customIconPath: String? = nil, completion: @escaping (NSImage) -> Void) {
+        let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustom = customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasValidCustom: Bool
         if let c = trimmedCustom, !c.isEmpty, FileManager.default.fileExists(atPath: c) {
@@ -107,7 +109,7 @@ public final class ThumbnailPipeline {
             hasValidCustom = false
         }
 
-        let effectiveKeyString = hasValidCustom ? Self.cacheKey(forPath: path, customIconPath: trimmedCustom) : path
+        let effectiveKeyString = hasValidCustom ? Self.cacheKey(forPath: cleanPath, customIconPath: trimmedCustom) : cleanPath
         let key = effectiveKeyString as NSString
 
         if let cached = cache.object(forKey: key) {
@@ -115,9 +117,9 @@ public final class ThumbnailPipeline {
             return
         }
 
-        let ext = (path as NSString).pathExtension.lowercased()
+        let ext = (cleanPath as NSString).pathExtension.lowercased()
         let isApp = ext == "app"
-        let isDir = (try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        let isDir = (try? URL(fileURLWithPath: cleanPath).resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
 
         // 若未设置自定义图标，对于普通文档直接返回共享类型图标
         if !hasValidCustom && !isApp && !isDir && !ext.isEmpty {
@@ -150,8 +152,8 @@ public final class ThumbnailPipeline {
             }
 
             // 2. 对非应用目标尝试 QLThumbnailGenerator
-            if finalImage == nil && !isApp && FileManager.default.fileExists(atPath: path) {
-                let url = URL(fileURLWithPath: path)
+            if finalImage == nil && !isApp && FileManager.default.fileExists(atPath: cleanPath) {
+                let url = URL(fileURLWithPath: cleanPath)
                 let request = QLThumbnailGenerator.Request(
                     fileAt: url,
                     size: self.targetSize,
@@ -172,7 +174,7 @@ public final class ThumbnailPipeline {
 
             // 3. 回退到 NSWorkspace 图标并缩放
             if finalImage == nil {
-                let rawIcon = NSWorkspace.shared.icon(forFile: path)
+                let rawIcon = NSWorkspace.shared.icon(forFile: cleanPath)
                 finalImage = self.downsample(image: rawIcon, to: self.targetSize)
             }
 
@@ -208,7 +210,8 @@ public final class ThumbnailPipeline {
 
         if #available(macOS 11.0, *), let img = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
             let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
-            let configured = (img.withSymbolConfiguration(config) ?? img).copy() as! NSImage
+            let baseImg = img.withSymbolConfiguration(config) ?? img
+            let configured = (baseImg.copy() as? NSImage) ?? baseImg
             configured.isTemplate = true
             genericCache.setObject(configured, forKey: key, cost: Self.costBytes(for: configured))
             return configured
@@ -291,7 +294,6 @@ public final class ThumbnailPipeline {
         }
 
         let targetRect = CGRect(x: 0, y: 0, width: CGFloat(pixelSize), height: CGFloat(pixelSize))
-        // 等比居中缩放裁剪（对于非正方形图片保持比例居中绘制，避免拉伸变形）
         let srcW = img.size.width
         let srcH = img.size.height
         let scale = min(CGFloat(pixelSize) / srcW, CGFloat(pixelSize) / srcH)
@@ -317,8 +319,6 @@ public final class ThumbnailPipeline {
         return rep.representation(using: .png, properties: [:])
     }
 
-    /// Estimates the resident byte cost of an image using its backing pixel data when measurable,
-    /// falling back to a conservative constant for small icons/symbols.
     private static func costBytes(for image: NSImage) -> Int {
         var size = image.size
         if let rep = image.representations.first {
@@ -358,7 +358,6 @@ public final class ThumbnailPipeline {
     }
 }
 
-/// Hands a QuickLook result across threads; late callbacks after a timeout are dropped.
 private final class ThumbnailResultBox: @unchecked Sendable {
     private let lock = NSLock()
     private var image: NSImage?

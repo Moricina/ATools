@@ -976,6 +976,8 @@ public final class ShelfGridView: NSView {
     internal var itemButtons: [ShelfItemButton] = []
     public var allCategoryItems: [LauncherItem] = []
     public var currentCategoryId: UUID?
+    /// K-01: 智能常用分类动态投影只读标志（开启时禁止拖拽重排与直接拖入）
+    public var isReadOnlyProjection: Bool = false
     private var keyboardSelectedID: UUID?
     private var activeFilter = ""
     private var targetValidationGeneration: UInt64 = 0
@@ -1708,8 +1710,8 @@ public final class ShelfGridView: NSView {
     }
 
     @objc private func contextSortByFrequency() {
+        // K-04: 单次调用排序代理，消除重复排序与双重存盘
         delegate?.shelfGrid(self, didRequestSortBy: .frequency)
-        delegate?.shelfGridDidRequestSortByFrequency(self)
     }
 
     @objc private func contextSortByName() {
@@ -1964,20 +1966,45 @@ public final class ShelfGridView: NSView {
 
     // MARK: - 实时平滑让位、Alt 快速交换与 Esc 撤销保护引擎
 
-    private func resetDragPreviewSnapshotBeforeReload() {
+    /// K-05: 集中幂等清理全部拖拽会话状态（含定时器、修饰键监听、幽灵按钮与状态位）
+    public func cancelAllDragInteractions() {
+        removeDragKeyMonitor()
+        cancelFolderMergeTimer()
         if let ghost = crossCategoryGhostButton {
             ghost.removeFromSuperview()
             crossCategoryGhostButton = nil
         }
+        for btn in itemButtons {
+            btn.isDraggingSource = false
+            btn.isSwapTarget = false
+            btn.isFolderMergeTarget = false
+            btn.alphaValue = 1.0
+        }
+        if let origButtons = dragOriginalButtons {
+            for btn in origButtons {
+                btn.isDraggingSource = false
+                btn.isSwapTarget = false
+                btn.isFolderMergeTarget = false
+                btn.alphaValue = 1.0
+            }
+        }
+        dragSourceID = nil
         dragSourceIndex = nil
         dragCurrentTargetIndex = nil
         dragOriginalItems = nil
         dragOriginalButtons = nil
+        isOptionSwapActive = false
+        isDragCancelledByEscape = false
+        didCommitCurrentDrag = false
         lastKnownDragPointInContent = nil
     }
 
+    private func resetDragPreviewSnapshotBeforeReload() {
+        cancelAllDragInteractions()
+    }
+
     private func beginInternalDragPreview(for button: ShelfItemButton) {
-        guard activeFilter.isEmpty else { return }
+        guard activeFilter.isEmpty, !isReadOnlyProjection else { return }
         guard let srcIdx = items.firstIndex(where: { $0.id == button.item.id }) else { return }
 
         if let ghost = crossCategoryGhostButton {
@@ -2329,6 +2356,7 @@ public final class ShelfGridView: NSView {
 
     // MARK: - Drag and Drop Support
     override public func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !isReadOnlyProjection else { return [] }
         let pboard = sender.draggingPasteboard
         let isReorder = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true
         let isMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
@@ -2349,6 +2377,7 @@ public final class ShelfGridView: NSView {
     }
 
     override public func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard !isReadOnlyProjection else { return [] }
         let pboard = sender.draggingPasteboard
         let isReorder = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemReorderType)) == true
         let isMove = pboard.types?.contains(NSPasteboard.PasteboardType(AppConstants.shelfItemMoveType)) == true
@@ -2384,7 +2413,7 @@ public final class ShelfGridView: NSView {
         layer?.borderWidth = 0.0
         layer?.backgroundColor = NSColor.clear.cgColor
 
-        if isDragCancelledByEscape {
+        if isReadOnlyProjection || isDragCancelledByEscape {
             cancelFolderMergeTimer()
             restoreDragPreviewToOriginal(animated: true)
             return false

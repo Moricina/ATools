@@ -12,6 +12,7 @@ public struct BackupManifest: Codable, Equatable {
     public var categoriesCount: Int
     public var totalItemsCount: Int
     public var customIcons: [String: String]
+    public var iconFileMap: [String: String]?
 
     public init(
         formatVersion: Int = 1,
@@ -23,7 +24,8 @@ public struct BackupManifest: Codable, Equatable {
         configSHA256: String,
         categoriesCount: Int,
         totalItemsCount: Int,
-        customIcons: [String: String]
+        customIcons: [String: String],
+        iconFileMap: [String: String]? = nil
     ) {
         self.formatVersion = formatVersion
         self.minCompatibleConfigVersion = minCompatibleConfigVersion
@@ -35,6 +37,7 @@ public struct BackupManifest: Codable, Equatable {
         self.categoriesCount = categoriesCount
         self.totalItemsCount = totalItemsCount
         self.customIcons = customIcons
+        self.iconFileMap = iconFileMap
     }
 }
 
@@ -62,6 +65,7 @@ public enum BackupError: LocalizedError, Equatable {
     case corruptedConfigChecksum(expected: String, actual: String)
     case missingCustomIconFile(String)
     case corruptedCustomIconChecksum(fileName: String)
+    case securityViolation(String)
     case exportFailed(String)
     case snapshotFailed(String)
     case noSnapshotAvailable
@@ -80,12 +84,14 @@ public enum BackupError: LocalizedError, Equatable {
             return "备份归档格式版本过高（v\(found)），当前版本最高支持 v\(supported)。"
         case .incompatibleConfigVersion(let found, let maxSupported):
             return "配置文件数据结构版本过高（v\(found)），当前版本最高支持 v\(maxSupported)。"
-        case .corruptedConfigChecksum(let expected, let actual):
+        case .corruptedConfigChecksum(expected: let expected, actual: let actual):
             return "config.json 完整性校验失败（SHA-256 不匹配，期望 \(expected.prefix(10))...，实际 \(actual.prefix(10))...），文件可能已损坏。"
         case .missingCustomIconFile(let name):
             return "备份包中缺失清单声明的自定义图标文件：\(name)"
         case .corruptedCustomIconChecksum(let name):
             return "自定义图标文件校验失败（SHA-256 不匹配）：\(name)"
+        case .securityViolation(let detail):
+            return "安全校验拦截：检测到非法的路径或文件名（\(detail)）。"
         case .exportFailed(let reason):
             return "导出备份失败：\(reason)"
         case .snapshotFailed(let reason):
@@ -113,6 +119,30 @@ public final class BackupService {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// S-01 & 军师加固点 3：严格单文件名验证器与 APFS Unicode NFC 规范化路径穿越防御
+    public static func sanitizeIconFilename(_ name: String, targetDirectory: URL) throws -> URL {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines).precomposedStringWithCanonicalMapping
+        guard !trimmed.isEmpty,
+              !trimmed.contains("/"),
+              !trimmed.contains("\\"),
+              !trimmed.contains("\0"),
+              trimmed != ".",
+              trimmed != "..",
+              !trimmed.hasPrefix("."),
+              !trimmed.contains("..") else {
+            throw BackupError.securityViolation("Invalid icon filename: \(name)")
+        }
+        let canonicalBaseDir = targetDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let targetURL = canonicalBaseDir.appendingPathComponent(trimmed).standardizedFileURL.resolvingSymlinksInPath()
+        let canonicalBase = canonicalBaseDir.path.precomposedStringWithCanonicalMapping
+        let canonicalTarget = targetURL.path.precomposedStringWithCanonicalMapping
+        let requiredPrefix = canonicalBase.hasSuffix("/") ? canonicalBase : (canonicalBase + "/")
+        guard canonicalTarget.hasPrefix(requiredPrefix) else {
+            throw BackupError.securityViolation("Path traversal attempt detected: \(name)")
+        }
+        return targetURL
+    }
+
     private static func makeTimestampString(for date: Date = Date()) -> String {
         let fmt = DateFormatter()
         fmt.locale = Locale(identifier: "en_US_POSIX")
@@ -130,24 +160,58 @@ public final class BackupService {
         return "ATools-Backup-\(makeTimestampString(for: date)).atoolsbackup"
     }
 
-    // MARK: - 1. 导出全量备份 (config.json + icons/ + manifest.json)
+    /// 校验目标导出路径是否允许安全覆盖（防止误删用户桌面或非备份重要目录）
+    private func isSafeOverwriteTarget(_ url: URL) -> Bool {
+        let std = url.standardizedFileURL.resolvingSymlinksInPath()
+        let name = std.lastPathComponent
+        if std.pathExtension.lowercased() == "atoolsbackup"
+            || name.hasPrefix("pre-restore-")
+            || name.hasPrefix("ATools-Backup-") {
+            return true
+        }
+        let manifestPath = std.appendingPathComponent("manifest.json").path
+        let configPath = std.appendingPathComponent("config.json").path
+        if fileManager.fileExists(atPath: manifestPath) && fileManager.fileExists(atPath: configPath) {
+            return true
+        }
+        if let contents = try? fileManager.contentsOfDirectory(atPath: std.path), contents.isEmpty {
+            return true
+        }
+        return false
+    }
+
+    // MARK: - 1. 导出全量备份 (config.json + icons/ + manifest.json) - S-02 事务化安全导出
 
     @discardableResult
     public func exportBackup(to destinationURL: URL, sourceHomeOverride: String? = nil) throws -> BackupManifest {
         ConfigManager.shared.flushPendingSave()
         let config = ConfigManager.shared.config
 
-        do {
-            if fileManager.fileExists(atPath: destinationURL.path) {
-                try fileManager.removeItem(at: destinationURL)
-            }
-            try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        let standardizedDest = destinationURL.standardizedFileURL
+        let destExists = fileManager.fileExists(atPath: standardizedDest.path)
+        if destExists && !isSafeOverwriteTarget(standardizedDest) {
+            throw BackupError.exportFailed("目标目录已存在且包含非备份文件，为防止数据丢失已拒绝覆盖：\(standardizedDest.path)")
+        }
 
-            let iconsDestDir = destinationURL.appendingPathComponent("icons", isDirectory: true)
+        let parentDir = standardizedDest.deletingLastPathComponent()
+        try? fileManager.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        let stagingURL = parentDir.appendingPathComponent(".atools_export_\(UUID().uuidString).tmp", isDirectory: true)
+        var shouldCleanupStaging = true
+        defer {
+            if shouldCleanupStaging {
+                try? fileManager.removeItem(at: stagingURL)
+            }
+        }
+
+        do {
+            try fileManager.createDirectory(at: stagingURL, withIntermediateDirectories: true)
+
+            let iconsDestDir = stagingURL.appendingPathComponent("icons", isDirectory: true)
             try fileManager.createDirectory(at: iconsDestDir, withIntermediateDirectories: true)
 
             // 1. 收集并拷贝所有自定义图标文件（含 icons/ 托管目录及任何有效的自定义图标路径）
             var customIconHashes: [String: String] = [:]
+            var iconFileMap: [String: String] = [:]
             let exportedConfig = config
 
             for catIdx in exportedConfig.categories.indices {
@@ -160,12 +224,13 @@ public final class BackupService {
                     let srcURL = URL(fileURLWithPath: customPath)
                     let ext = srcURL.pathExtension.isEmpty ? "png" : srcURL.pathExtension
                     let canonicalFileName = "\(item.id.uuidString).\(ext)"
-                    let dstURL = iconsDestDir.appendingPathComponent(canonicalFileName)
+                    let dstURL = try Self.sanitizeIconFilename(canonicalFileName, targetDirectory: iconsDestDir)
 
                     if let iconData = try? Data(contentsOf: srcURL) {
                         try iconData.write(to: dstURL, options: .atomic)
-                        customIconHashes[canonicalFileName] = Self.sha256Hex(of: iconData)
-                        // 保持配置内的路径结构以便 manifest 记录原机器路径与文件名映射
+                        let normalizedKey = dstURL.lastPathComponent
+                        customIconHashes[normalizedKey] = Self.sha256Hex(of: iconData)
+                        iconFileMap[item.id.uuidString] = normalizedKey
                     }
                 }
             }
@@ -175,11 +240,12 @@ public final class BackupService {
             if let existingFiles = try? fileManager.contentsOfDirectory(at: managedIconsDir, includingPropertiesForKeys: nil) {
                 for fileURL in existingFiles where !fileURL.lastPathComponent.hasPrefix(".") {
                     let name = fileURL.lastPathComponent
-                    let dstURL = iconsDestDir.appendingPathComponent(name)
+                    guard let dstURL = try? Self.sanitizeIconFilename(name, targetDirectory: iconsDestDir) else { continue }
+                    let normalizedKey = dstURL.lastPathComponent
                     if !fileManager.fileExists(atPath: dstURL.path),
                        let data = try? Data(contentsOf: fileURL) {
                         try data.write(to: dstURL, options: .atomic)
-                        customIconHashes[name] = Self.sha256Hex(of: data)
+                        customIconHashes[normalizedKey] = Self.sha256Hex(of: data)
                     }
                 }
             }
@@ -188,7 +254,7 @@ public final class BackupService {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             let configData = try encoder.encode(exportedConfig)
-            let configFileURL = destinationURL.appendingPathComponent("config.json")
+            let configFileURL = stagingURL.appendingPathComponent("config.json")
             try configData.write(to: configFileURL, options: .atomic)
 
             let configSHA = Self.sha256Hex(of: configData)
@@ -207,12 +273,30 @@ public final class BackupService {
                 configSHA256: configSHA,
                 categoriesCount: exportedConfig.categories.count,
                 totalItemsCount: totalItems,
-                customIcons: customIconHashes
+                customIcons: customIconHashes,
+                iconFileMap: iconFileMap
             )
 
             let manifestData = try encoder.encode(manifest)
-            let manifestURL = destinationURL.appendingPathComponent("manifest.json")
+            let manifestURL = stagingURL.appendingPathComponent("manifest.json")
             try manifestData.write(to: manifestURL, options: .atomic)
+
+            // 4. 事务化原子提交至最终目标路径（含旧目标备份与失败回滚）
+            if fileManager.fileExists(atPath: standardizedDest.path) {
+                let backupTargetURL = parentDir.appendingPathComponent(".\(standardizedDest.lastPathComponent).bak-\(UUID().uuidString)")
+                try fileManager.moveItem(at: standardizedDest, to: backupTargetURL)
+                do {
+                    try fileManager.moveItem(at: stagingURL, to: standardizedDest)
+                    shouldCleanupStaging = false
+                    try? fileManager.removeItem(at: backupTargetURL)
+                } catch {
+                    try? fileManager.moveItem(at: backupTargetURL, to: standardizedDest)
+                    throw error
+                }
+            } else {
+                try fileManager.moveItem(at: stagingURL, to: standardizedDest)
+                shouldCleanupStaging = false
+            }
 
             return manifest
         } catch let err as BackupError {
@@ -291,15 +375,16 @@ public final class BackupService {
                     return .failure(.invalidJSONFormat("第 \(idx + 1) 个分类缺少有效的 name 或 items 字段"))
                 }
                 for (itemIdx, itemObj) in items.enumerated() {
+                    let isGroup = (itemObj["isVirtualGroup"] as? Bool) ?? false
                     guard let itemName = itemObj["name"] as? String, !itemName.isEmpty,
-                          let itemTarget = itemObj["target"] as? String, !itemTarget.isEmpty else {
+                          let itemTarget = itemObj["target"] as? String, (!itemTarget.isEmpty || isGroup) else {
                         return .failure(.invalidJSONFormat("分类「\(name)」第 \(itemIdx + 1) 个启动项缺少有效的 name 或 target"))
                     }
                 }
             }
         }
 
-        // 2. 若包含 manifest.json，校验归档版本、config.json 的 SHA-256 以及自定义图标完整性
+        // 2. 若包含 manifest.json，校验归档版本、config.json 的 SHA-256 以及自定义图标完整性（含 S-01 路径穿越拦截）
         var parsedManifest: BackupManifest?
         var verifiedIcons: [String: URL] = [:]
 
@@ -317,13 +402,21 @@ public final class BackupService {
                     return .failure(.corruptedConfigChecksum(expected: m.configSHA256, actual: actualConfigSHA))
                 }
 
-                // 校验清单中声明的每个自定义图标是否存在且哈希一致
+                // 校验清单中声明的每个自定义图标文件名合法性（拦截 ../ 等路径穿越）、存在性及 SHA-256
                 for (fileName, expectedSHA) in m.customIcons {
-                    guard let iconsDir = iconsDirURL else {
-                        return .failure(.missingCustomIconFile(fileName))
+                    // 即使 iconsDirURL 尚不存在，也先用标准化路径校验文件名自身合法性
+                    let validationBaseDir = iconsDirURL ?? standardizedURL.appendingPathComponent("icons", isDirectory: true)
+                    let iconURL: URL
+                    do {
+                        iconURL = try Self.sanitizeIconFilename(fileName, targetDirectory: validationBaseDir)
+                    } catch let secErr as BackupError {
+                        return .failure(secErr)
+                    } catch {
+                        return .failure(.securityViolation(fileName))
                     }
-                    let iconURL = iconsDir.appendingPathComponent(fileName)
-                    guard fileManager.fileExists(atPath: iconURL.path),
+
+                    guard iconsDirURL != nil,
+                          fileManager.fileExists(atPath: iconURL.path),
                           let iconData = try? Data(contentsOf: iconURL) else {
                         return .failure(.missingCustomIconFile(fileName))
                     }
@@ -331,16 +424,35 @@ public final class BackupService {
                     if actualIconSHA.lowercased() != expectedSHA.lowercased() {
                         return .failure(.corruptedCustomIconChecksum(fileName: fileName))
                     }
-                    verifiedIcons[fileName] = iconURL
+                    verifiedIcons[iconURL.lastPathComponent] = iconURL
                 }
+
+                // 若存在 iconFileMap，同样验证其目标文件名合法性
+                if let fileMap = m.iconFileMap {
+                    let validationBaseDir = iconsDirURL ?? standardizedURL.appendingPathComponent("icons", isDirectory: true)
+                    for (_, mappedFileName) in fileMap {
+                        do {
+                            _ = try Self.sanitizeIconFilename(mappedFileName, targetDirectory: validationBaseDir)
+                        } catch let secErr as BackupError {
+                            return .failure(secErr)
+                        } catch {
+                            return .failure(.securityViolation(mappedFileName))
+                        }
+                    }
+                }
+
                 parsedManifest = m
+            } catch let bErr as BackupError {
+                return .failure(bErr)
             } catch {
                 return .failure(.invalidJSONFormat("manifest.json 解析失败：\(error.localizedDescription)"))
             }
         } else if let iconsDir = iconsDirURL,
                   let files = try? fileManager.contentsOfDirectory(at: iconsDir, includingPropertiesForKeys: nil) {
             for f in files where !f.lastPathComponent.hasPrefix(".") {
-                verifiedIcons[f.lastPathComponent] = f
+                if let safeURL = try? Self.sanitizeIconFilename(f.lastPathComponent, targetDirectory: iconsDir) {
+                    verifiedIcons[safeURL.lastPathComponent] = safeURL
+                }
             }
         }
 
@@ -364,7 +476,8 @@ public final class BackupService {
             sourceHomePath: parsedManifest?.sourceUserHomePath,
             currentHomePath: currentHome,
             currentIconsDir: currentIconsDir,
-            availableBackupIcons: Set(verifiedIcons.keys)
+            availableBackupIcons: Set(verifiedIcons.keys),
+            iconFileMap: parsedManifest?.iconFileMap
         )
 
         let totalItems = healedConfig.categories.reduce(0) { $0 + $1.items.count }
@@ -393,21 +506,23 @@ public final class BackupService {
         sourceHomePath: String?,
         currentHomePath: String = NSHomeDirectory(),
         currentIconsDir: URL = ConfigManager.shared.iconsDirectoryURL,
-        availableBackupIcons: Set<String>
+        availableBackupIcons: Set<String>,
+        iconFileMap: [String: String]? = nil
     ) -> (healed: AtoolsConfig, healedIconPathsCount: Int, healedUserPathsCount: Int) {
         var cfg = config
         var healedIcons = 0
         var healedUserPaths = 0
 
-        let normalizedSourceHome = sourceHomePath?.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedSourceHome = sourceHomePath?.precomposedStringWithCanonicalMapping.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let sourceHomePrefix = (normalizedSourceHome?.isEmpty == false) ? "/\(normalizedSourceHome!)" : nil
-        let targetHomePrefix = currentHomePath.hasSuffix("/")
-            ? String(currentHomePath.dropLast())
-            : currentHomePath
+        let normalizedCurrentHome = currentHomePath.precomposedStringWithCanonicalMapping
+        let targetHomePrefix = normalizedCurrentHome.hasSuffix("/")
+            ? String(normalizedCurrentHome.dropLast())
+            : normalizedCurrentHome
 
-        // 辅助函数：将跨机家目录路径（如 /Users/olduser/Documents/a.sh）映射为当前机器家目录路径
+        // 辅助函数：将跨机家目录路径（如 /Users/olduser/Documents/a.sh）映射为当前机器家目录路径（统一使用 NFC 规范化比较）
         func remapUserPathIfNeeded(_ rawPath: String) -> (String, Bool) {
-            let candidate = rawPath
+            let candidate = rawPath.precomposedStringWithCanonicalMapping
             if candidate.hasPrefix("~/") {
                 let expanded = targetHomePrefix + String(candidate.dropFirst(1))
                 return (expanded, expanded != rawPath)
@@ -431,24 +546,38 @@ public final class BackupService {
                     }
                 }
             }
-            return (candidate, false)
+            return (rawPath, false)
         }
 
         for catIdx in cfg.categories.indices {
             for itemIdx in cfg.categories[catIdx].items.indices {
                 var item = cfg.categories[catIdx].items[itemIdx]
 
-                // A. 自愈自定义图标路径 (customIconPath)
+                // A. 自愈自定义图标路径 (customIconPath) - C-03 支持任意扩展名映射恢复
                 if let rawCustom = item.customIconPath?.trimmingCharacters(in: .whitespacesAndNewlines),
                    !rawCustom.isEmpty {
-                    let fileName = (rawCustom as NSString).lastPathComponent
-                    let idFileName = "\(item.id.uuidString).png"
+                    let fileName = (rawCustom as NSString).lastPathComponent.precomposedStringWithCanonicalMapping
+                    let itemUUID = item.id.uuidString
+                    let idPngName = "\(itemUUID).png"
+                    let rawExt = (rawCustom as NSString).pathExtension
+                    let idOriginalExtName = rawExt.isEmpty ? idPngName : "\(itemUUID).\(rawExt)"
+                    let mappedIconName = iconFileMap?[itemUUID]?.precomposedStringWithCanonicalMapping
+                    let prefixMatchedIconName = availableBackupIcons.first {
+                        $0.lowercased().hasPrefix("\(itemUUID.lowercased()).")
+                    }
+
                     let targetManagedPath: String?
 
-                    if availableBackupIcons.contains(fileName) {
+                    if let mapped = mappedIconName, availableBackupIcons.contains(mapped) {
+                        targetManagedPath = currentIconsDir.appendingPathComponent(mapped).path
+                    } else if availableBackupIcons.contains(fileName) {
                         targetManagedPath = currentIconsDir.appendingPathComponent(fileName).path
-                    } else if availableBackupIcons.contains(idFileName) {
-                        targetManagedPath = currentIconsDir.appendingPathComponent(idFileName).path
+                    } else if availableBackupIcons.contains(idOriginalExtName) {
+                        targetManagedPath = currentIconsDir.appendingPathComponent(idOriginalExtName).path
+                    } else if availableBackupIcons.contains(idPngName) {
+                        targetManagedPath = currentIconsDir.appendingPathComponent(idPngName).path
+                    } else if let prefixMatched = prefixMatchedIconName {
+                        targetManagedPath = currentIconsDir.appendingPathComponent(prefixMatched).path
                     } else if rawCustom.contains("/ATools/icons/") || rawCustom.contains("/atools/icons/") {
                         targetManagedPath = currentIconsDir.appendingPathComponent(fileName).path
                     } else {
@@ -565,13 +694,13 @@ public final class BackupService {
             snapshotURL = try createPreRestoreSnapshot()
         }
 
-        // 3. 拷贝托管自定义图标到当前机器的 icons/ 目录
+        // 3. 拷贝托管自定义图标到当前机器的 icons/ 目录（二次校验防路径穿越）
         let targetIconsDir = ConfigManager.shared.iconsDirectoryURL
         for (fileName, srcFileURL) in validation.iconSourceFiles {
-            let dstFileURL = targetIconsDir.appendingPathComponent(fileName)
+            let dstFileURL = try Self.sanitizeIconFilename(fileName, targetDirectory: targetIconsDir)
             if srcFileURL.standardizedFileURL != dstFileURL.standardizedFileURL,
                let data = try? Data(contentsOf: srcFileURL) {
-                try? data.write(to: dstFileURL, options: .atomic)
+                try data.write(to: dstFileURL, options: .atomic)
             }
         }
 

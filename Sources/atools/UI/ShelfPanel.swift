@@ -954,16 +954,24 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         }
     }
 
+    private var isSmartFavoritesProjectionActive: Bool {
+        guard let cat = selectedCategory else { return false }
+        return cat.isFavorites && ConfigManager.shared.config.smartFavoritesMode
+    }
+
     public func reloadGridForSelectedCategory() {
         guard let cat = selectedCategory else {
             shelfGrid.currentCategoryId = nil
+            shelfGrid.isReadOnlyProjection = false
             shelfGrid.reloadData(items: [], allCategoryItems: [])
             updateStatusBar()
             return
         }
         shelfGrid.currentCategoryId = cat.id
+        let isSmartFav = isSmartFavoritesProjectionActive
+        shelfGrid.isReadOnlyProjection = isSmartFav
         var allItems = cat.items
-        if cat.isFavorites && ConfigManager.shared.config.smartFavoritesMode {
+        if isSmartFav {
             allItems = ConfigManager.shared.frequentItems(limit: 16)
         }
         let topLevel = allItems.filter { $0.parentId == nil }
@@ -1101,30 +1109,51 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     public func shelfGrid(_ grid: ShelfGridView, didDeleteItem item: LauncherItem) {
         guard let cat = selectedCategory else { return }
-        ConfigManager.shared.removeItem(id: item.id, from: cat.id)
+        let hostCatId = isSmartFavoritesProjectionActive
+            ? (ConfigManager.shared.categoryContainingItem(id: item.id)?.id ?? cat.id)
+            : cat.id
+        ConfigManager.shared.removeItem(id: item.id, from: hostCatId)
         loadData()
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didDeleteItems items: [LauncherItem]) {
         guard let cat = selectedCategory else { return }
-        ConfigManager.shared.removeItems(ids: Set(items.map { $0.id }), from: cat.id)
+        if isSmartFavoritesProjectionActive {
+            for item in items {
+                let hostCatId = ConfigManager.shared.categoryContainingItem(id: item.id)?.id ?? cat.id
+                ConfigManager.shared.removeItem(id: item.id, from: hostCatId)
+            }
+        } else {
+            ConfigManager.shared.removeItems(ids: Set(items.map { $0.id }), from: cat.id)
+        }
         loadData()
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didMoveItems items: [LauncherItem], toCategoryId: UUID) {
         guard let cat = selectedCategory else { return }
-        ConfigManager.shared.moveItems(ids: Set(items.map { $0.id }), from: cat.id, to: toCategoryId)
+        if isSmartFavoritesProjectionActive {
+            for item in items {
+                if let hostCatId = ConfigManager.shared.categoryContainingItem(id: item.id)?.id {
+                    ConfigManager.shared.moveItems(ids: [item.id], from: hostCatId, to: toCategoryId)
+                }
+            }
+        } else {
+            ConfigManager.shared.moveItems(ids: Set(items.map { $0.id }), from: cat.id, to: toCategoryId)
+        }
         loadData()
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didCreateFolderWithItems items: [LauncherItem]) {
-        guard let cat = selectedCategory else { return }
+        guard let cat = selectedCategory, !isSmartFavoritesProjectionActive else { return }
         _ = ConfigManager.shared.createFolderWithItems(itemIds: Set(items.map { $0.id }), inCategoryId: cat.id)
         loadData()
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didRequestEditItem item: LauncherItem) {
-        LauncherItemEditorDialog.present(for: item, in: selectedCategory?.id) { [weak self] _ in
+        let targetCatId = isSmartFavoritesProjectionActive
+            ? (ConfigManager.shared.categoryContainingItem(id: item.id)?.id ?? selectedCategory?.id)
+            : selectedCategory?.id
+        LauncherItemEditorDialog.present(for: item, in: targetCatId) { [weak self] _ in
             self?.loadData()
         }
     }
@@ -1202,7 +1231,10 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             promptRelocateItem(item)
         } else if response == .alertSecondButtonReturn {
             if let cat = selectedCategory {
-                ConfigManager.shared.removeItem(id: item.id, from: cat.id)
+                let hostCatId = isSmartFavoritesProjectionActive
+                    ? (ConfigManager.shared.categoryContainingItem(id: item.id)?.id ?? cat.id)
+                    : cat.id
+                ConfigManager.shared.removeItem(id: item.id, from: hostCatId)
                 loadData()
             }
         }
@@ -1228,19 +1260,22 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         }
 
         if panel.runModalAboveFloatingWindows() == .OK, let url = panel.url {
-            ConfigManager.shared.relocateItem(id: item.id, in: selectedCategory?.id, newTarget: url.path)
+            let hostCatId = isSmartFavoritesProjectionActive
+                ? ConfigManager.shared.categoryContainingItem(id: item.id)?.id
+                : selectedCategory?.id
+            ConfigManager.shared.relocateItem(id: item.id, in: hostCatId, newTarget: url.path)
             loadData()
         }
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didMoveItemFrom fromIndex: Int, to toIndex: Int) {
-        guard let cat = selectedCategory else { return }
+        guard let cat = selectedCategory, !isSmartFavoritesProjectionActive else { return }
         ConfigManager.shared.moveItem(from: fromIndex, to: toIndex, in: cat.id)
         loadData()
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didSwapItemAt indexA: Int, with indexB: Int) {
-        guard let cat = selectedCategory else { return }
+        guard let cat = selectedCategory, !isSmartFavoritesProjectionActive else { return }
         ConfigManager.shared.swapItems(at: indexA, and: indexB, in: cat.id)
         loadData()
     }
@@ -1275,7 +1310,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didMoveExternalItemWithID id: UUID, toIndex: Int) {
-        guard let cat = selectedCategory else { return }
+        guard let cat = selectedCategory, !isSmartFavoritesProjectionActive else { return }
         if ConfigManager.shared.moveItem(id: id, toCategoryId: cat.id, at: toIndex) {
             loadData()
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
@@ -1283,7 +1318,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func shelfGrid(_ grid: ShelfGridView, didAddPaths paths: [String]) {
-        guard let cat = selectedCategory else { return }
+        guard let cat = selectedCategory, !isSmartFavoritesProjectionActive else { return }
         var newItems: [LauncherItem] = []
         for path in paths {
             var name = FileManager.default.displayName(atPath: path)
@@ -1365,6 +1400,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     public func closeFolderOverlay(animated: Bool = true) {
         setInteractionSuspended(false)
         guard let overlay = activeFolderOverlay else { return }
+        // K-07: 关闭文件夹浮层前自动提交正在编辑的文件夹名称，防止切分类或按 Esc 丢失改名
+        overlay.dismissEditingIfNeeded()
         overlay.prepareForClose()
         if animated {
             NSAnimationContext.runAnimationGroup({ ctx in
@@ -1396,10 +1433,19 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
 
     public func shelfGrid(_ grid: ShelfGridView, didMergeItemsIntoFolder sourceId: UUID, targetId: UUID) {
         guard let cat = selectedCategory,
-              let srcItem = cat.items.first(where: { $0.id == sourceId }),
+              !isSmartFavoritesProjectionActive,
               let targetItem = cat.items.first(where: { $0.id == targetId }) else { return }
 
+        // K-02: 支持同分类与跨分类拖拽合并文件夹
+        let sameCategorySource = cat.items.first(where: { $0.id == sourceId })
+        let crossCategoryHost = (sameCategorySource == nil) ? ConfigManager.shared.categoryContainingItem(id: sourceId) : nil
+        let resolvedSource = sameCategorySource ?? crossCategoryHost?.items.first(where: { $0.id == sourceId })
+        guard let srcItem = resolvedSource, !srcItem.isVirtualGroup else { return }
+
         if targetItem.isVirtualGroup {
+            if let hostCat = crossCategoryHost, hostCat.id != cat.id {
+                _ = ConfigManager.shared.moveItem(id: srcItem.id, toCategoryId: cat.id)
+            }
             var updatedSrc = srcItem
             updatedSrc.parentId = targetItem.id
             ConfigManager.shared.updateItem(updatedSrc, in: cat.id)

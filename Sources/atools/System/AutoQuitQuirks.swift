@@ -262,7 +262,7 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         return nil
     }
 
-    /// 启发式幽灵图层过滤（核心安全前提：调用方已由 AX 树确诊无业务窗口，或者由纯几何层清洗掉明显非业务微元）
+    /// 启发式幽灵图层过滤（Y-01：收窄在屏窗口尺寸启发式，仅针对特定 BundleID 离屏图层或无标题微元过滤，保护正常小面板与工具条）
     public func isGhostWindow(
         bundleID: String?,
         ownerName: String?,
@@ -278,12 +278,14 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         if Self.systemProxyNames.contains(lower) { return true }
         if Self.internalCefViewNames.contains(lower) { return true }
 
-        // 2. 菜单栏横条与微型状态/光标层 (不属于业务标准窗口)
-        if height <= 48 { return true }
-        if width <= 80 && height <= 60 { return true }
+        // 2. 极小状态栏图标/光标微元（对在屏有标题的工具面板予以保留，仅过滤无标题状态横条或 <=44x44 微元）
+        if width <= 44 && height <= 44 { return true }
+        if height <= 36 && trimmed.isEmpty { return true }
+        if !isOnScreen && height <= 48 { return true }
+        if !isOnScreen && width <= 80 && height <= 60 { return true }
 
-        // 3. 通用 CEF 离屏缓冲模板尺寸（如果是无名且符合 CEF 离屏模板）
-        if trimmed.isEmpty {
+        // 3. 通用 CEF 离屏缓冲模板尺寸（仅在离屏或特定已知 CEF 应用无标题时生效）
+        if trimmed.isEmpty && (!isOnScreen || matchRule(bundleID: bundleID, ownerName: ownerName) != nil) {
             for size in Self.genericCefGhostSizes {
                 if size.matches(width: width, height: height) {
                     return true

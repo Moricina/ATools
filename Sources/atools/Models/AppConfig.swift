@@ -268,6 +268,17 @@ public enum AutoAddPolicyMode: String, Codable {
     case existingCategory = "existingCategory"
 }
 
+public enum ConfigDecodeError: LocalizedError {
+    case criticalFieldCorrupted(field: String, underlying: Error)
+
+    public var errorDescription: String? {
+        switch self {
+        case .criticalFieldCorrupted(let field, let underlying):
+            return "配置文件核心字段「\(field)」已损坏（\(underlying.localizedDescription)）"
+        }
+    }
+}
+
 public struct AtoolsConfig: Codable {
     public var version: Int
     public var shelfHotkey: HotkeyBinding
@@ -432,14 +443,14 @@ public struct AtoolsConfig: Codable {
         self.enableCalculator = enableCalculator
         self.enableDictionary = enableDictionary
         self.enableFullDiskSearch = enableFullDiskSearch
-        self.searchResultLimit = searchResultLimit
+        self.searchResultLimit = max(AppConstants.searchResultLimitRange.lowerBound, min(AppConstants.searchResultLimitRange.upperBound, searchResultLimit))
         self.shelfWidth = shelfWidth
         self.shelfHeight = shelfHeight
         self.categoryOrientation = categoryOrientation
         self.shelfIconSize = shelfIconSize
         self.sidebarWidth = sidebarWidth
         self.theme = theme
-        self.shelfIconScale = shelfIconScale
+        self.shelfIconScale = max(AppConstants.shelfIconScaleRange.lowerBound, min(AppConstants.shelfIconScaleRange.upperBound, shelfIconScale))
         self.shelfItemSpacing = max(2.0, min(24.0, shelfItemSpacing))
         let resolvedOpacity = themeOpacity ?? theme.defaultOpacity
         self.themeOpacity = max(0.40, min(1.00, resolvedOpacity))
@@ -518,11 +529,24 @@ public struct AtoolsConfig: Codable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.version = (try? container.decode(Int.self, forKey: .version)) ?? 4
-        self.categories = (try? container.decode([Category].self, forKey: .categories)) ?? []
+        if container.contains(.categories) {
+            if (try? container.decodeNil(forKey: .categories)) == true {
+                self.categories = []
+            } else {
+                do {
+                    self.categories = try container.decode([Category].self, forKey: .categories)
+                } catch {
+                    throw ConfigDecodeError.criticalFieldCorrupted(field: "categories", underlying: error)
+                }
+            }
+        } else {
+            self.categories = []
+        }
         self.enableCalculator = (try? container.decode(Bool.self, forKey: .enableCalculator)) ?? true
         self.enableDictionary = (try? container.decode(Bool.self, forKey: .enableDictionary)) ?? true
         self.enableFullDiskSearch = (try? container.decode(Bool.self, forKey: .enableFullDiskSearch)) ?? true
-        self.searchResultLimit = (try? container.decode(Int.self, forKey: .searchResultLimit)) ?? 80
+        let rawLimit = (try? container.decode(Int.self, forKey: .searchResultLimit)) ?? 80
+        self.searchResultLimit = max(AppConstants.searchResultLimitRange.lowerBound, min(AppConstants.searchResultLimitRange.upperBound, rawLimit))
         self.shelfWidth = (try? container.decode(Double.self, forKey: .shelfWidth)) ?? 540
         self.shelfHeight = (try? container.decode(Double.self, forKey: .shelfHeight)) ?? 360
         self.categoryOrientation = (try? container.decode(CategoryOrientation.self, forKey: .categoryOrientation)) ?? .horizontal
@@ -532,7 +556,7 @@ public struct AtoolsConfig: Codable {
         let resolvedTheme = AppTheme.migrated(from: rawTheme) ?? .macosLiquidLight
         self.theme = resolvedTheme
         let rawScale = (try? container.decode(Double.self, forKey: .shelfIconScale)) ?? 1.0
-        self.shelfIconScale = max(0.70, min(1.30, rawScale))
+        self.shelfIconScale = max(AppConstants.shelfIconScaleRange.lowerBound, min(AppConstants.shelfIconScaleRange.upperBound, rawScale))
         let rawSpacing = (try? container.decode(Double.self, forKey: .shelfItemSpacing)) ?? 6.0
         self.shelfItemSpacing = max(2.0, min(24.0, rawSpacing))
         let rawOpacity = (try? container.decode(Double.self, forKey: .themeOpacity)) ?? resolvedTheme.defaultOpacity
@@ -639,6 +663,7 @@ public struct AtoolsConfig: Codable {
         try container.encode(sidebarWidth, forKey: .sidebarWidth)
         try container.encode(theme, forKey: .theme)
         try container.encode(shelfIconScale, forKey: .shelfIconScale)
+        try container.encode(shelfItemSpacing, forKey: .shelfItemSpacing)
         try container.encode(themeOpacity, forKey: .themeOpacity)
         try container.encode(enableShelfPanel, forKey: .enableShelfPanel)
         try container.encode(enableSearchPanel, forKey: .enableSearchPanel)
