@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
 VERSION="${ATOOLS_VERSION:-1.3.44}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-69}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-70}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,23 +114,16 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 核心加固与单窗口应用关窗退出系统性根治更新说明
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 稳定性加固与抽屉网格手势崩溃彻底修复
 
-### 🎯 AutoQuit 零窗守护立体加固与单窗口桌面应用矩阵全面闭环
-1. **彻底根治吸附悬浮挂件阻断缺陷（AX 树微元门禁升级）**：
-   - 深入重构 \`isStandardBusinessWindow\`，为 \`AXDialog\` / \`AXSystemDialog\` / \`AXSheet\` 增设物理微元尺寸门禁；
-   - 凡既无关闭按钮又无最小化按钮且物理尺寸小于 160x90 的吸附挂件（如夸克 40x40 桌面吸附悬浮球、截图栏、取词浮标），坚决不计入标准业务窗口，彻底消除假窗口阻断零窗退出。
-2. **离屏主视窗全尺寸清洗与伴生 Helper 联动清理**：
-   - 彻底解决腾讯元宝、夸克等单窗口应用点击红叉后仅通过 \`orderOut:\` 离屏隐藏导致 WindowServer 误判的问题；
-   - 引入 \`cleanAllOffscreenWindows: true\`，全面支持用户任意缩放窗口尺寸；支持动态会话标题模糊匹配；
-   - 主应用退出时联动终止 \`Helper (Renderer)\`、\`Helper (Player)\` 等伴生进程，杜绝僵尸进程常驻。
-3. **同系列单窗口桌面应用矩阵一揽子纳入**：
-   - 专用规则覆盖：夸克网盘、腾讯元宝、网易云音乐、微信读书、百度网盘、迅雷、QQ音乐、钉钉、飞书、腾讯文档；
-   - 统一享受全尺寸离屏清洗与渲染子进程协同清理。
-4. **关窗因果律与在屏双检终审机制**：
-   - 新增 \`windowServerOnScreenWindowCount\` 仅统计 \`isOnScreen == true\` 的在屏有效窗口；
-   - 引入关窗因果律（\`recentlyHadCloseEvent\`）：仅在用户真实点击红叉/⌘W 且在屏窗口归零时放行退出；
-   - 严格维持后台 Chromium / Chrome / 夸克在多 Space 遮挡或频繁切换应用时的坚挺保活，绝不误杀。
+### 🎯 修复抽屉网格拖拽手势无限递归栈溢出 (Stack Overflow) 闪退
+1. **彻底阻断 Responder 响应链循环回旋**：
+   - 修复在抽屉网格处于空分类、按住修饰键移窗或未设置拖拽起始坐标时，误调 \`super.mouseDragged(with:)\` 导致向上冒泡至父视图 \`ShelfGridView\`、再被转发回 \`contentView\` 形成的无限死循环；
+   - 未启动框选拖拽态时直接安全快速返回，彻底根治 SIGSEGV 栈溢出闪退。
+2. **多层防重入安全锁**：
+   - 为 \`ShelfGridView\` 的 \`mouseDown\`、\`mouseDragged\` 与 \`mouseUp\` 增加 \`isDispatching*\` 防重入保护，坚决杜绝任何极端手势下的二次重入。
+3. **空分类移窗标志与子视图事件派发修复**：
+   - 空分类拖动时准确标记移窗态，修复子视图点击事件的直接分发通道。
 
 ---
 
