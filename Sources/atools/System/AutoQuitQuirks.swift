@@ -32,6 +32,7 @@ public struct AppQuirkRule: Sendable {
     public let companionBundleIDs: [String]
     public let terminateHelpersInBundle: Bool
     public let cleanAllOffscreenWindows: Bool
+    public let cleanEmptyTitleOffscreenWindows: Bool
 
     public init(
         id: String,
@@ -43,7 +44,8 @@ public struct AppQuirkRule: Sendable {
         isVirtualizationOrContainer: Bool = false,
         companionBundleIDs: [String] = [],
         terminateHelpersInBundle: Bool = false,
-        cleanAllOffscreenWindows: Bool = false
+        cleanAllOffscreenWindows: Bool = false,
+        cleanEmptyTitleOffscreenWindows: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -55,6 +57,7 @@ public struct AppQuirkRule: Sendable {
         self.companionBundleIDs = companionBundleIDs
         self.terminateHelpersInBundle = terminateHelpersInBundle
         self.cleanAllOffscreenWindows = cleanAllOffscreenWindows
+        self.cleanEmptyTitleOffscreenWindows = cleanEmptyTitleOffscreenWindows
     }
 
     public func matches(bundleID: String?, ownerName: String?) -> Bool {
@@ -79,6 +82,9 @@ public struct AppQuirkRule: Sendable {
             return true
         }
         let lowerTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if cleanEmptyTitleOffscreenWindows && lowerTitle.isEmpty {
+            return true
+        }
         if !lowerTitle.isEmpty {
             if offscreenTitles.contains(lowerTitle) {
                 return true
@@ -179,7 +185,9 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             bundleIDPrefixes: ["com.kingsoft.wpsoffice"],
             ownerNameKeywords: ["wps", "wpsoffice"],
             offscreenTitles: ["wps office", "首页", "稻壳素材", "快速访问工具栏"],
-            ghostSizes: [GhostWindowSize(w: 420, h: 154, tolerance: 15)]
+            ghostSizes: [GhostWindowSize(w: 420, h: 154, tolerance: 15)],
+            terminateHelpersInBundle: true,
+            cleanEmptyTitleOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "quark",

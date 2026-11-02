@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.44}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-70}"
+VERSION="${ATOOLS_VERSION:-1.3.45}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-71}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,22 +114,25 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 稳定性加固与抽屉网格手势崩溃彻底修复
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) WPS 关窗自动退出彻底加固与多 Space 文档零误杀闭环
 
-### 🎯 修复抽屉网格拖拽手势无限递归栈溢出 (Stack Overflow) 闪退
-1. **彻底阻断 Responder 响应链循环回旋**：
-   - 修复在抽屉网格处于空分类、按住修饰键移窗或未设置拖拽起始坐标时，误调 \`super.mouseDragged(with:)\` 导致向上冒泡至父视图 \`ShelfGridView\`、再被转发回 \`contentView\` 形成的无限死循环；
-   - 未启动框选拖拽态时直接安全快速返回，彻底根治 SIGSEGV 栈溢出闪退。
-2. **多层防重入安全锁**：
-   - 为 \`ShelfGridView\` 的 \`mouseDown\`、\`mouseDragged\` 与 \`mouseUp\` 增加 \`isDispatching*\` 防重入保护，坚决杜绝任何极端手势下的二次重入。
-3. **空分类移窗标志与子视图事件派发修复**：
-   - 空分类拖动时准确标记移窗态，修复子视图点击事件的直接分发通道。
+### 📝 WPS Office 关窗自动退出与跨 Space 深度治理
+1. **细粒度无名离屏底板清洗（cleanEmptyTitleOffscreenWindows）**：
+   - 针对 WPS Office 关窗执行 \`orderOut:\` 隐藏至离屏后的全屏空标题底板（1512x830），增设精准清洗开关；
+   - 彻底打破 WindowServer 离屏特征 B 的虚假零窗死锁，让零在屏窗口精准触发调度退出。
+2. **跨 Space 真实多文档绝对保活（零误杀）**：
+   - 严格拒绝一刀切全尺寸离屏清洗；用户在其他虚拟桌面（Space）打开的 Word/Excel/PPT/PDF 真实文档（标题非空）受到物理级保活防护，坚挺常驻绝不误杀。
+3. **状态机 AX 通知降级自愈**：
+   - 针对 WPS 根级拒绝 AXObserver 通知（-25204）导致关窗事件丢失的死穴，引入降级自愈标记；
+   - 轮询调度放行降级应用，彻底破解失焦后轮询停摆与永久常驻后台的缺陷。
+4. **伴生进程协同清理**：
+   - 退出时联动清理 \`/Applications/wpsoffice.app/Contents/\` 内部的 \`wpscloudsvr\` 等伴生云服务进程，杜绝僵尸进程常驻。
 
 ---
 
 ### 🛡️ 架构质量与自动化诊断验证
 - 全套 19 大项综合诊断套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过；
-- 兼容性与边界防护严密闭环，编译零错误、零警告。"
+- 新增针对 WPS 离屏底板识别、在屏窗口保活、跨 Space 真实文档绝对保活、以及 Chrome 等通用应用隔离性的全套回归断言。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

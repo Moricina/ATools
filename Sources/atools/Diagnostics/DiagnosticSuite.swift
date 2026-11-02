@@ -2083,6 +2083,15 @@ public enum DiagnosticSuite {
 
         // 验证幽灵图层清洗逻辑
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice", ownerName: "WPS Office", title: "首页", width: 420, height: 154, isOnScreen: false) == true, "WPS offscreen home ghost window must be cleaned")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office")?.cleanEmptyTitleOffscreenWindows == true, "WPS rule must have cleanEmptyTitleOffscreenWindows enabled")
+        TestAssertions.expect(quirks.shouldTerminateHelpersInBundle(for: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office") == true, "WPS must allow bundle helper termination")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "", width: 1512, height: 830, isOnScreen: false) == true, "WPS offscreen untitled main window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "", width: 1512, height: 830, isOnScreen: true) == false, "WPS onscreen untitled window must never be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "财务报表.xlsx", width: 1512, height: 830, isOnScreen: false) == false, "WPS offscreen named document in another Space must not be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "文档1", width: 1000, height: 700, isOnScreen: false) == false, "WPS offscreen new doc must not be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "", width: 1512, height: 830, isOnScreen: false) == false, "WPS offscreen untitled window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "财务报表.xlsx", width: 1512, height: 830, isOnScreen: false) == true, "WPS offscreen real document must be standard candidate to protect multi-Space")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.google.Chrome", ownerName: "Google Chrome", rawName: "", width: 1512, height: 830, isOnScreen: false) == true, "Chrome offscreen untitled large window must remain candidate for multi-process protection")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark", ownerName: "夸克", title: "分享链接", width: 640, height: 480, isOnScreen: false) == true, "Quark offscreen ghost window must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "cc.atools.aurapane", ownerName: "AuraPane", title: "设置", width: 400, height: 300, isOnScreen: false) == true, "AuraPane offscreen settings must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.oplus.devicespace", ownerName: "O+Connect", title: "OPPO 互联", width: 1252, height: 710, isOnScreen: false) == true, "OPPO Connect offscreen hidden window must be cleaned")

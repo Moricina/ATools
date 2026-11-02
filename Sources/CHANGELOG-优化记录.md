@@ -4651,3 +4651,43 @@
   - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**；
   - **正式打包与部署拉起**：发布 `v1.3.44 (build 70)`，替换至 `/Applications/ATools.app` 并拉起新版本进程。
 
+
+---
+
+### [2026-11-02] 第 136 项：彻底修复 WPS Office 关窗未自动退出缺陷与多 Space 文档零误杀闭环 (AutoQuitQuirks & AutoQuitManager 加固)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：检查 wps 没有关窗退出的原因。
+  - **现场排查与深度事实确证 (PID 42128)**：
+    1. **WindowServer 离屏无名底板击穿业务窗口门禁**：WPS Office 在用户点击窗口红色关闭按钮后，调用 AppKit 原生 `[NSWindow orderOut:]` 将窗口隐藏移入离屏。此时窗口尺寸保留为屏幕视窗全屏（如 `1512x830`），标题被置为空字符串 `""`。在 `AutoQuitManager.isStandardWindowCandidate` 离屏分支中，该窗口命中了 Chromium 特征 B（`width >= 400 && height >= 260`）；而 `AutoQuitQuirks` 原规则仅清洗 `420x154` 底板和特定有标题离屏窗口，未开启离屏空标题清洗，导致 WindowServer 窗口计数常驻为 `wsCount = 1`，死锁了双零窗确诊门禁；
+    2. **WPS 根级拒绝 AXObserver 通知导致因果律放行断流**：ATools 挂载 WPS 时日志实锤 `AXObserverAddNotification warnings for pid 42128: created=-25204, closed=-25204, destroyed=-25204`（`kAXErrorNotificationNotRegistered`）。关窗时未能捕获任何销毁事件，`entry.lastCloseEventDate` 恒为 `.distantPast`，因果律放行条件 `recentlyHadCloseEvent` 恒为 `false`；
+    3. **失焦后轮询停摆与永久驻留**：5 次防抖复查耗尽后判定安全中止（`decision: .aborted`）；随后用户焦点切换至其他应用，WPS 进入非激活态（`app.isActive == false`），`fallbackPoll` 原有的 `isActive || recentlyHadCloseEvent` 门禁将失焦且无通知能力的 WPS 彻底排除在后续评估之外，导致 WPS 永久隐形常驻后台。
+
+- **代码级加固与修复方案（军师审定方案 C）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **扩展细粒度无名离屏清洗开关**：在 `AppQuirkRule` 中新增 `cleanEmptyTitleOffscreenWindows: Bool = false` 属性，并在 `shouldCleanOffscreen` 中精准支持 `if cleanEmptyTitleOffscreenWindows && lowerTitle.isEmpty { return true }`；
+     - **升级 WPS Office 专用规则**：为 `id: "wps"`（BundleID `com.kingsoft.wpsoffice`）启用 `cleanEmptyTitleOffscreenWindows: true` 与 `terminateHelpersInBundle: true`。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **状态机 AX 通知降级自愈标记**：在 `WatchedApp` 状态模型中引入 `isAXObserverDegraded: Bool`；当应用三项通知均注册失败时（`-25204`）自动打上降级标记；
+     - **打破失焦轮询停摆死锁**：在 `fallbackPoll` 轮询调度中扩展判定：`if isActive || recentlyHadCloseEvent || entry.isAXObserverDegraded`，确保失焦且无 AX 通知能力的应用依然得到秒级持续守护；
+     - **放行降级应用失焦门禁**：在 `evaluateAppWindows` 与 `executePendingQuit` 中豁免降级应用的失焦瞬态阻断，允许零在屏、零真实文档的 WPS 顺畅进入退出流程。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在第 12 项自动化诊断中扩充 9 项全新自动化断言，涵盖 WPS 规则命中、无名离屏底板识别、在屏窗口保活、跨 Space 真实文档绝对保活、以及 Chrome 等通用应用隔离性校验。
+
+- **兼容性与边界防护策略**：
+  - **物理级规则隔离（零外部泄露）**：`cleanEmptyTitleOffscreenWindows` 仅为 WPS 单独开启，对 Chrome、Safari、TextEdit 等所有其他 100+ 应用默认均为 `false`，绝不干扰 Chromium 后台无标题大视窗（特征 B）的正常保活机制；
+  - **跨 Space 多文档绝对保活（零误杀）**：军师严防一刀切全尺寸清洗（方案 A）。WPS 在其他虚拟桌面（Space 2）打开的任何真实文档，由于窗口标题非空（如 `"财务报表.xlsx"`、`"文档1"`），`isGhostWindow` 坚决返回 `false`，WindowServer 准确计入标准业务窗口，彻底杜绝切桌面误杀与未保存数据丢失；
+  - **伴生进程协同治理**：退出时协同联动清理 `/Applications/wpsoffice.app/Contents/` 内部的伴生进程（如 `wpscloudsvr`，PID 42185），杜绝僵尸进程常驻。
+
+- **验证与测试结果**：
+  - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**；
+  - **针对 WPS 的 9 项专用断言全部通过**：
+    * `WPS rule must have cleanEmptyTitleOffscreenWindows enabled: PASSED`
+    * `WPS must allow bundle helper termination: PASSED`
+    * `WPS offscreen untitled main window must be cleaned: PASSED`
+    * `WPS onscreen untitled window must never be cleaned: PASSED`
+    * `WPS offscreen named document in another Space must not be cleaned: PASSED`
+    * `WPS offscreen new doc must not be cleaned: PASSED`
+    * `WPS offscreen untitled window must not be standard candidate: PASSED`
+    * `WPS offscreen real document must be standard candidate to protect multi-Space: PASSED`
+    * `Chrome offscreen untitled large window must remain candidate for multi-process protection: PASSED`。

@@ -50,6 +50,8 @@ public final class AutoQuitManager {
         var lastActiveDate: Date
         /// 最近一次收到窗口关闭/销毁事件的时间戳
         var lastCloseEventDate: Date
+        /// 针对无法注册应用级 AXObserver 通知（如 WPS 报错 -25204）的架构降级标记
+        var isAXObserverDegraded: Bool
     }
 
     private var watched: [pid_t: WatchedApp] = [:]
@@ -463,7 +465,8 @@ public final class AutoQuitManager {
         let errCreated = AXObserverAddNotification(obs, axApp, kAXWindowCreatedNotification as CFString, nil)
         let errClosed = AXObserverAddNotification(obs, axApp, kAXWindowClosedNotification, nil)
         let errDestroyed = AXObserverAddNotification(obs, axApp, kAXUIElementDestroyedNotification as CFString, nil)
-        if errCreated != .success && errClosed != .success && errDestroyed != .success {
+        let isAXObserverDegraded = (errCreated != .success && errClosed != .success && errDestroyed != .success)
+        if isAXObserverDegraded {
             runtimeLog("[AutoQuit] AXObserverAddNotification warnings for pid \(pid): created=\(errCreated.rawValue), closed=\(errClosed.rawValue), destroyed=\(errDestroyed.rawValue)")
         }
 
@@ -491,7 +494,8 @@ public final class AutoQuitManager {
             registeredWindowRefs: registeredRefs,
             hadWindows: hadWindows,
             lastActiveDate: app.isActive ? Date() : .distantPast,
-            lastCloseEventDate: .distantPast
+            lastCloseEventDate: .distantPast,
+            isAXObserverDegraded: isAXObserverDegraded
         )
 
         os_unfair_lock_lock(&lock)
@@ -694,7 +698,7 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 3.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
+        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
             cancelPendingQuitLocked(pid)
             cancelPendingRecheckLocked(pid)
             os_unfair_lock_unlock(&lock)
@@ -817,7 +821,7 @@ public final class AutoQuitManager {
             } else {
                 let isActive = entry.app.isActive
                 let recentlyHadCloseEvent = now.timeIntervalSince(entry.lastCloseEventDate) < 3.0
-                if isActive || recentlyHadCloseEvent {
+                if isActive || recentlyHadCloseEvent || entry.isAXObserverDegraded {
                     activeToEvaluate.append(pid)
                 }
             }
@@ -964,7 +968,7 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 5.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
+        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
             os_unfair_lock_unlock(&lock)
             return
         }
