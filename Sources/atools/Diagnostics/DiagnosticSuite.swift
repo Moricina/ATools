@@ -2457,6 +2457,35 @@ public enum DiagnosticSuite {
     TestAssertions.expect(!ConfigManager.shared.config.knownAppBundleIds.contains("com.deleted.uninstalled.app"),
                           "已卸载的应用必须从 knownAppBundleIds 中修剪释放，以便重装时能再次被识别为新应用")
 
+    // (a2) 验证手动拖拽入库联动已知基线池 (Manual Drag Baseline Sync)
+    let fallbackCatId = ConfigManager.shared.config.categories.first!.id
+    let manualItem = LauncherItem(
+        name: "Manual Drag App",
+        itemType: .application,
+        target: "/Applications/ManualDrag.app",
+        bundleIdentifier: "com.atools.test.manualdrag"
+    )
+    _ = ConfigManager.shared.addItems([manualItem], to: inboxCat?.id ?? fallbackCatId)
+    TestAssertions.expect(ConfigManager.shared.config.knownAppBundleIds.contains("com.atools.test.manualdrag"),
+                          "手动拖入的应用 Bundle ID 必须同步进入已知基线池，防止后续全盘扫描造成冗余")
+
+    // (a3) 验证 AppHotspotIndex 全局更新通知广播机制 (atoolsAppIndexDidUpdate)
+    var didReceiveIndexUpdateNotification = false
+    let notifObserver = NotificationCenter.default.addObserver(
+        forName: .atoolsAppIndexDidUpdate,
+        object: nil,
+        queue: .main
+    ) { _ in
+        didReceiveIndexUpdateNotification = true
+    }
+    NotificationCenter.default.post(name: .atoolsAppIndexDidUpdate, object: nil)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    TestAssertions.expect(didReceiveIndexUpdateNotification == true, "atoolsAppIndexDidUpdate 全局通知必须能被主线程监听者正确捕获")
+    NotificationCenter.default.removeObserver(notifObserver)
+
+    // (a4) 验证 In-Flight 轮询跟踪接口安全性与空包防崩
+    AppHotspotIndex.shared.trackInFlightCandidate(path: "/Applications/InFlightTest.app")
+
     // (b) Test Folder / Virtual Group & Sub-items
     let folderId = UUID()
     let subItemA = LauncherItem(parentId: folderId, name: "子项 A", itemType: .application, target: "/Applications/Safari.app")

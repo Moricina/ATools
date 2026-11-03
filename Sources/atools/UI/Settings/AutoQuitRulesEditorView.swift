@@ -126,10 +126,31 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         // 下一个 runloop 周期装填数据：此时 sheet 已在屏幕上、表格已有最终尺寸，
         // NSTableView 只构建可见的十几行（约 30-60ms），打开瞬间不冻结。
         if window != nil {
+            NotificationCenter.default.removeObserver(self, name: .atoolsAppIndexDidUpdate, object: nil)
+            NotificationCenter.default.addObserver(self, selector: #selector(handleAppIndexDidUpdate), name: .atoolsAppIndexDidUpdate, object: nil)
             DispatchQueue.main.async { [weak self] in
                 self?.loadDataIfNeeded()
             }
+        } else {
+            NotificationCenter.default.removeObserver(self, name: .atoolsAppIndexDidUpdate, object: nil)
         }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleAppIndexDidUpdate() {
+        assert(Thread.isMainThread)
+        guard window != nil else { return }
+        // 军师加固点 3：暂存可视区域坐标，重载后还原，消除滚动跳动
+        let visibleRect = tableView.visibleRect
+        apps = AppHotspotIndex.shared.allSelectableApps
+        rebuildFiltered()
+        tableView.reloadData()
+        updateCountLabel()
+        tableView.scroll(visibleRect.origin)
+        runtimeLog("[AutoQuit] rules reloaded from atoolsAppIndexDidUpdate: \(filtered.count) selectable apps")
     }
 
     private func loadDataIfNeeded() {

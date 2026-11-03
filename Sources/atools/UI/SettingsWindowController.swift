@@ -14,6 +14,7 @@ public extension Notification.Name {
     static let atoolsDidSelectSyntaxCommand = Notification.Name("atoolsDidSelectSyntaxCommand")
     static let atoolsAutoPasteOnSummonDidChange = Notification.Name("atoolsAutoPasteOnSummonDidChange")
     static let atoolsShelfDataDidChange = Notification.Name("atoolsShelfDataDidChange")
+    static let atoolsAppIndexDidUpdate = Notification.Name("atoolsAppIndexDidUpdate")
 }
 
 private final class ModalSessionState: @unchecked Sendable {

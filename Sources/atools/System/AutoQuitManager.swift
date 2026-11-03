@@ -436,6 +436,9 @@ public final class AutoQuitManager {
     }
 
     private func attachIfEligible(_ app: NSRunningApplication) {
+        // 运行时自愈：在进程附着前，确保该运行应用已登记于 AppHotspotIndex
+        AppHotspotIndex.shared.registerRunningAppIfNeeded(app)
+
         guard let pid = AutoQuitManager.resolveProcessIdentifier(for: app), pid > 0 else {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
                 self?.attachIfEligible(app)

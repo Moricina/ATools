@@ -754,6 +754,21 @@ public final class ConfigManager {
         }
         guard !added.isEmpty else { return [] }
         self.config.categories[idx].items.append(contentsOf: added)
+
+        // 维护已知应用基线池：若用户手动拖入应用，自动同步其 Bundle ID，防止后续自动入库扫描产生冗余比对
+        var knownChanged = false
+        var knownSet = Set(self.config.knownAppBundleIds)
+        for item in added {
+            if let bid = item.bundleIdentifier, !bid.isEmpty {
+                if knownSet.insert(bid).inserted {
+                    knownChanged = true
+                }
+            }
+        }
+        if knownChanged {
+            self.config.knownAppBundleIds = Array(knownSet).sorted()
+        }
+
         save()
         NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
         return added

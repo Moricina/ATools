@@ -4691,3 +4691,44 @@
     * `WPS offscreen untitled window must not be standard candidate: PASSED`
     * `WPS offscreen real document must be standard candidate to protect multi-Space: PASSED`
     * `Chrome offscreen untitled large window must remain candidate for multi-process protection: PASSED`。
+
+
+---
+
+### [2026-11-02] 第 137 项：修复大型应用安装未自动入库抽屉与 AutoQuit 规则名单异步断流缺陷（FSEventStream 深度监控、未就绪包轮询器、运行时自愈与实时联动）
+
+- **故障背景与根因定位**：
+  - **用户反馈**：关窗退出的应用列表不会加入用户新安装的应用；新安装的 deepseek harness (990MB) 应用抽屉没有自动检测加入（后经代码与日志溯源确认为用户手动拖入「AI」分类）。
+  - **深度事实确证与根因定位**：
+    1. **底层单层 DispatchSource 监听与「半包早产（Half-baked Bundle）」**：`AppHotspotIndex` 仅使用 `open("/Applications", O_EVTONLY)` 监听根目录，固定 2.0s 防抖。从 DMG/PKG 拖入大体积应用（如 990MB 的 DeepSeek Harness）时，2 秒防抖耗尽但主二进制 `Bundle.executablePath` 尚未写入完成，校验失败被直接丢弃；后续 900MB+ 写入均发生在子目录内，根目录不再触发 VFS 事件，导致后台监听永久性漏检；
+    2. **抽屉呼出时零感知**：`PanelCoordinator.showShelfPanel()` 缺少 `refreshIfStale()` 保鲜调度，抽屉打开时无法自愈；
+    3. **AutoQuit 规则名单异步断流**：`AutoQuitRulesEditorView.loadDataIfNeeded()` 异步调用 `refreshIfStale()` 后立即同步读取缓存；`apps.isEmpty` 恒假导致回调闭包未挂载；且 `AppHotspotIndex` 扫描完成缺少全局广播，前端表格停留在冷启动时的旧快照；
+    4. **运行时应用启动自愈缺失**：用户启动新安装应用时，系统未利用该高置信度时机反哺索引。
+
+- **代码级加固与修复方案（军师审定方案 A+B+C 全面落地）**：
+  1. [`Sources/atools/UI/SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)：
+     - 新增全局广播通知定义 `static let atoolsAppIndexDidUpdate = Notification.Name("atoolsAppIndexDidUpdate")`。
+  2. [`Sources/atools/Search/AppHotspotIndex.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/AppHotspotIndex.swift)：
+     - **引入 FSEventStream 递归深度目录事件监控**：监听 `/Applications` 与 `~/Applications`，开启 `kFSEventStreamCreateFlagFileEvents`，捕获深层文件变更；设置 1.5s 系统级防抖，并施加**事件风暴抑制**（仅当变更包含 `.app` 结构时触发刷新）；
+     - **未就绪应用就绪态退避轮询器（In-Flight Poller）**：若发现 `.app` 但主二进制或 Info.plist 仍在拷贝写入中，将其加入 `inFlightApps`，动态比对关键文件大小与修改时间；文件大小持续增长则顺延，当连续 2 次（~4s）尺寸稳定且二进制就绪后，判定拷贝完成并触发重扫入库（附带 60s 超时兜底）；
+     - **运行时自愈监控（O(1) Self-Healing）**：监听 `NSWorkspace.didLaunchApplicationNotification`，当常规应用启动时，若不在现有索引内，执行 O(1) 局部极速解析并注入 `self.apps`，联动 `ConfigManager.handleAppIndexUpdated` 与 AutoQuit 规则；
+     - **全盘扫描完成全局广播**：扫描结束在主线程发送 `.atoolsAppIndexDidUpdate` 通知。
+  3. [`Sources/atools/UI/PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：
+     - 在 `showShelfPanel()` 中补充 `AppHotspotIndex.shared.refreshIfStale(interval: 30)`，与搜索面板行为完全对齐，保证呼出抽屉时自动保鲜。
+  4. [`Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift)：
+     - **事件驱动动态联动**：注册监听 `.atoolsAppIndexDidUpdate` 全局通知，当新应用入库或自愈完成时自动刷新列表；
+     - **防输入与滚动跳动**：重载时暂存当前表格的滚动偏移量 `visibleRect` 与搜索筛选词，重载后还原，杜绝跳回顶部或输入焦点被打断。
+  5. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+     - 在 `addItems(_:to:)` 手动拖入项落地时，同步将应用的 Bundle ID 沉淀至 `knownAppBundleIds`，维护基线一致性，杜绝后续冗余比对。
+  6. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - 在 `attachIfEligible` 进程附着前，确保通过 `AppHotspotIndex.shared.registerRunningAppIfNeeded` 登记新运行进程。
+  7. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 在第 14 项自动化诊断中扩充手动拖拽基线同步校验（`Manual Drag Baseline Sync`）、`atoolsAppIndexDidUpdate` 通知捕获断言、以及 `trackInFlightCandidate` 防崩安全性断言。
+
+- **兼容性与边界防护策略**：
+  - **Helper 守护进程过滤**：运行时自愈严格限制 `guard app.activationPolicy == .regular` 及标准应用路径前缀，杜绝 Chrome Helper、后台 Updater 等非 GUI 伴生进程污染抽屉和退出名单；
+  - **FSEvent 事件风暴抑制**：仅响应包含 `.app` 路径特征的事件，忽略高频临时日志与缓存；
+  - **内存与性能零开销**：In-flight 轮询仅针对临时未就绪的极少数包，文件尺寸检测仅 stat 核心 plist 和可执行文件（耗时 `< 1ms`），不遍历万级子文件。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**。

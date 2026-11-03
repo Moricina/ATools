@@ -319,6 +319,9 @@ public final class PanelCoordinator {
         menuTrackingBeganAt = nil
         recordPreviousFrontmostAppIfNeeded()
 
+        // 呼出抽屉时主动触发保鲜刷新（30秒节流）
+        AppHotspotIndex.shared.refreshIfStale()
+
         shelfPanel.prepareForDisplay()
         positionPanelFollowMouse(shelfPanel)
         animatePanelEntrance(shelfPanel)

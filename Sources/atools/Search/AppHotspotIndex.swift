@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Darwin
+import CoreServices
 
 public struct IndexedApp: Sendable {
     public let name: String
@@ -78,15 +79,35 @@ public final class AppHotspotIndex {
     private var directorySources: [DispatchSourceFileSystemObject] = []
     private var debounceWorkItem: DispatchWorkItem?
 
+    // MARK: - FSEventStream 递归深度监控与就绪态轮询
+    private var eventStream: FSEventStreamRef?
+    private var workspaceLaunchObserver: NSObjectProtocol?
+
+    private struct InFlightAppEntry {
+        let path: String
+        var lastSize: Int64
+        var unchangedCount: Int
+        let firstDetectedAt: Date
+    }
+    private var inFlightApps: [String: InFlightAppEntry] = [:]
+    private var inFlightCheckWorkItem: DispatchWorkItem?
+
     private init() {
         refreshIndex()
         startWatchingAppDirectories()
+        startFSEventsWatcher()
+        startWorkspaceMonitoring()
     }
 
     deinit {
         for source in directorySources {
             source.cancel()
         }
+        stopFSEventsWatcher()
+        if let obs = workspaceLaunchObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+        }
+        inFlightCheckWorkItem?.cancel()
     }
 
     private func startWatchingAppDirectories() {
@@ -110,6 +131,251 @@ public final class AppHotspotIndex {
             source.resume()
             directorySources.append(source)
         }
+    }
+
+    // MARK: - FSEventStream 递归深度目录事件监控（方案 A：捕获 DMG/PKG/解压深层文件写入）
+    private func startFSEventsWatcher() {
+        let home = NSHomeDirectory()
+        let watchPaths = ["/Applications", "\(home)/Applications"] as CFArray
+        var context = FSEventStreamContext(
+            version: 0,
+            info: Unmanaged.passUnretained(self).toOpaque(),
+            retain: nil,
+            release: nil,
+            copyDescription: nil
+        )
+
+        let flags = UInt32(kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)
+
+        let callback: FSEventStreamCallback = { (streamRef, clientCallBackInfo, numEvents, eventPaths, eventFlags, eventIds) in
+            guard let clientCallBackInfo = clientCallBackInfo else { return }
+            let index = Unmanaged<AppHotspotIndex>.fromOpaque(clientCallBackInfo).takeUnretainedValue()
+
+            // 军师加固点 1：事件风暴抑制，仅当变更包含 .app 结构或核心元数据时响应防抖刷新
+            if let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] {
+                var hasRelevantAppChange = false
+                for path in paths {
+                    if path.contains(".app") {
+                        hasRelevantAppChange = true
+                        break
+                    }
+                }
+                if hasRelevantAppChange {
+                    index.scheduleDebouncedRefresh()
+                }
+            } else {
+                index.scheduleDebouncedRefresh()
+            }
+        }
+
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            callback,
+            &context,
+            watchPaths,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            1.5,
+            flags
+        ) else { return }
+
+        self.eventStream = stream
+        FSEventStreamSetDispatchQueue(stream, queue)
+        FSEventStreamStart(stream)
+    }
+
+    private func stopFSEventsWatcher() {
+        if let stream = eventStream {
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            eventStream = nil
+        }
+    }
+
+    // MARK: - 运行时自愈监控（方案 C：应用首次启动即刻 O(1) 捕获并联动入库）
+    private func startWorkspaceMonitoring() {
+        let nc = NSWorkspace.shared.notificationCenter
+        workspaceLaunchObserver = nc.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+            self?.registerRunningAppIfNeeded(app)
+        }
+    }
+
+    /// 军师加固点 4：当常规应用启动时，若不在现有索引中，进行 O(1) 局部极速注入并同步
+    public func registerRunningAppIfNeeded(_ app: NSRunningApplication) {
+        // 严格限定为普通 GUI 窗口应用，杜绝后台守护或 Helper 进程误入抽屉和退出名单
+        guard app.activationPolicy == .regular else { return }
+        guard let bundleURL = app.bundleURL else { return }
+        let path = bundleURL.path.precomposedStringWithCanonicalMapping
+        let home = NSHomeDirectory()
+        let isStandardAppDir = path.hasPrefix("/Applications") ||
+                               path.hasPrefix("\(home)/Applications") ||
+                               path.hasPrefix("/System/Applications") ||
+                               path.hasPrefix("/System/Library/CoreServices/Applications")
+        guard isStandardAppDir else { return }
+        guard let bid = app.bundleIdentifier, !bid.isEmpty else { return }
+        guard !AutoQuitManager.systemExcludedBundleIDs.contains(bid),
+              bid != "cc.atools.app", bid != "cc.atools.app.dev" else { return }
+
+        appsLock.lock()
+        let isAlreadyKnown = apps.contains { $0.bundleId == bid || $0.path == path }
+        appsLock.unlock()
+
+        if isAlreadyKnown { return }
+
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let baseName = (path as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
+            let resourceValues = try? bundleURL.resourceValues(forKeys: [.localizedNameKey])
+            let lsName = resourceValues?.localizedName?.replacingOccurrences(of: ".app", with: "", options: .caseInsensitive)
+            let metadata = AppMetadataReader.read(appURL: bundleURL)
+            var aliases: [String] = []
+            if let ls = lsName, !ls.isEmpty && ls != baseName { aliases.append(ls) }
+            aliases.append(contentsOf: metadata.localizedNames)
+            if let disp = metadata.displayName, !disp.isEmpty { aliases.append(disp) }
+            if let bName = metadata.bundleName, !bName.isEmpty { aliases.append(bName) }
+
+            let primaryLocalizedName = aliases.first ?? lsName ?? app.localizedName ?? baseName
+            let isShelfEligible = !metadata.isBackgroundOnly && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
+
+            let indexed = IndexedApp(
+                name: baseName,
+                localizedName: primaryLocalizedName,
+                path: path,
+                bundleId: bid,
+                isRegularApp: true,
+                isShelfEligible: isShelfEligible,
+                additionalAliases: aliases
+            )
+
+            self.appsLock.lock()
+            if !self.apps.contains(where: { $0.bundleId == bid || $0.path == path }) {
+                self.apps.append(indexed)
+                let allApps = self.apps
+                self.appsLock.unlock()
+                runtimeLog("[AutoDiscovery] Self-healed runtime app: \(indexed.localizedName) (\(bid))")
+
+                ConfigManager.shared.handleAppIndexUpdated(apps: allApps)
+
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .atoolsAppIndexDidUpdate, object: nil)
+                }
+            } else {
+                self.appsLock.unlock()
+            }
+        }
+    }
+
+    // MARK: - In-Flight 大型应用就绪态轮询追踪 (军师加固点 2)
+    public func trackInFlightCandidate(path: String) {
+        guard path.hasSuffix(".app") else { return }
+        let home = NSHomeDirectory()
+        guard path.hasPrefix("/Applications") || path.hasPrefix("\(home)/Applications") else { return }
+
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            let now = Date()
+            let currentSize = self.appKeyFileSize(at: path)
+            if self.inFlightApps[path] == nil {
+                self.inFlightApps[path] = InFlightAppEntry(
+                    path: path,
+                    lastSize: currentSize,
+                    unchangedCount: 0,
+                    firstDetectedAt: now
+                )
+                self.scheduleInFlightCheck()
+            }
+        }
+    }
+
+    private func scheduleInFlightCheck() {
+        inFlightCheckWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            self?.evaluateInFlightApps()
+        }
+        inFlightCheckWorkItem = item
+        queue.asyncAfter(deadline: .now() + 2.0, execute: item)
+    }
+
+    private func evaluateInFlightApps() {
+        guard !inFlightApps.isEmpty else { return }
+        let now = Date()
+        var completedAny = false
+
+        for (path, var entry) in inFlightApps {
+            guard FileManager.default.fileExists(atPath: path) else {
+                inFlightApps.removeValue(forKey: path)
+                continue
+            }
+
+            // 60秒硬超时兜底，防止意外悬挂
+            if now.timeIntervalSince(entry.firstDetectedAt) > 60.0 {
+                inFlightApps.removeValue(forKey: path)
+                completedAny = true
+                continue
+            }
+
+            let currentSize = appKeyFileSize(at: path)
+            // 军师加固点 2：若尺寸在持续增长，重置计数并顺延检测
+            if currentSize > entry.lastSize {
+                entry.lastSize = currentSize
+                entry.unchangedCount = 0
+                inFlightApps[path] = entry
+            } else if currentSize > 0 && currentSize == entry.lastSize {
+                entry.unchangedCount += 1
+                inFlightApps[path] = entry
+                // 连续 2 次（~4秒）尺寸稳定未变，且可执行文件已落地，判定拷贝完成
+                if entry.unchangedCount >= 2 {
+                    if let execPath = Bundle(path: path)?.executablePath,
+                       FileManager.default.fileExists(atPath: execPath) {
+                        inFlightApps.removeValue(forKey: path)
+                        completedAny = true
+                    }
+                }
+            } else {
+                entry.lastSize = currentSize
+                inFlightApps[path] = entry
+            }
+        }
+
+        if completedAny {
+            refreshIndex()
+        }
+
+        if !inFlightApps.isEmpty {
+            scheduleInFlightCheck()
+        }
+    }
+
+    private func appKeyFileSize(at path: String) -> Int64 {
+        var total: Int64 = 0
+        let infoPlist = (path as NSString).appendingPathComponent("Contents/Info.plist")
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: infoPlist),
+           let s = attrs[.size] as? Int64 {
+            total += s
+        }
+        if let bundle = Bundle(path: path), let exec = bundle.executablePath {
+            if let attrs = try? FileManager.default.attributesOfItem(atPath: exec),
+               let s = attrs[.size] as? Int64 {
+                total += s
+            }
+        } else {
+            let macosDir = (path as NSString).appendingPathComponent("Contents/MacOS")
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: macosDir) {
+                for f in files {
+                    let fp = (macosDir as NSString).appendingPathComponent(f)
+                    if let attrs = try? FileManager.default.attributesOfItem(atPath: fp),
+                       let s = attrs[.size] as? Int64 {
+                        total += s
+                    }
+                }
+            }
+        }
+        return total
     }
 
     private func scheduleDebouncedRefresh() {
@@ -175,6 +441,10 @@ public final class AppHotspotIndex {
 
             // 触发新安装应用自动入库
             ConfigManager.shared.handleAppIndexUpdated(apps: results)
+
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .atoolsAppIndexDidUpdate, object: nil)
+            }
         }
     }
 
@@ -247,6 +517,11 @@ public final class AppHotspotIndex {
                         let isPrefPane = (fullPath as NSString).pathExtension.caseInsensitiveCompare("prefPane") == .orderedSame
                         let isRegular = !isPrefPane && !metadata.isUIElement && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
                         let isShelfEligible = !isPrefPane && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
+
+                        // 军师加固点 2：若发现未就绪的 .app 包（如 Info.plist 或二进制仍在拷贝），加入轮询追踪池
+                        if (!isShelfEligible || metadata.bundleIdentifier == nil) && item.hasSuffix(".app") && !isCoreServicesDaemon && !isExcluded {
+                            self.trackInFlightCandidate(path: fullPath)
+                        }
 
                         let indexed = IndexedApp(
                             name: baseName,
