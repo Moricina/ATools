@@ -256,7 +256,11 @@ public final class AutoQuitManager {
             // 1. 特征 A（有明确业务标题）：非空标题且尺寸达到常规视窗 (width > 120 && height > 70)，
             //    排除极小微元，认定为位于其他 Space、最小化或被遮挡的实体业务窗口；
             // 2. 特征 B（Chromium 无标题大视窗）：Chromium 多进程架构下部分离屏主窗口标题为空，
-            //    必须满足主视窗级尺寸门槛 (width >= 400 && height >= 260)，且处于标准层 (0...15)。
+            //    必须满足主视窗级尺寸门槛 (width >= 400 && height >= 260)，且处于标准层 (0...15)；
+            // 3. 特征 C（全屏物理视窗）：处于全屏 Space 的有效业务窗口，无论有无标题，均属标准窗口候选。
+            if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
+                return true
+            }
             return (!rawName.isEmpty && width > 120 && height > 70) || (width >= 400 && height >= 260)
         }
     }
@@ -701,7 +705,7 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 3.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
+        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
             cancelPendingQuitLocked(pid)
             cancelPendingRecheckLocked(pid)
             os_unfair_lock_unlock(&lock)
@@ -739,7 +743,7 @@ public final class AutoQuitManager {
 
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
-        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
+        let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
 
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
@@ -971,7 +975,7 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 5.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
+        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
             os_unfair_lock_unlock(&lock)
             return
         }
@@ -993,7 +997,7 @@ public final class AutoQuitManager {
         let axCount = axWindows(of: entrySnapshot.axApp)?.count
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
-        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
+        let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
 
         if app.isHidden {
             let hadCloseEvent = entrySnapshot.lastCloseEventDate != .distantPast

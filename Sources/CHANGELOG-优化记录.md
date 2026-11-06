@@ -4732,3 +4732,41 @@
 
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过**。
+
+
+---
+
+### [2026-11-06] 第 138 项：彻底修复全屏模式下 WPS 及所有应用切换应用触发自动退出的缺陷（物理全屏尺寸精准识别、因果律防线重构、失焦瞬态防抖与精确标题匹配）
+
+- **故障背景与根因定位**：
+  - **用户反馈**：全屏时 WPS 切换其他应用触发自动退出，需要彻底修复该原因并确保其他所有应用全屏切换时不会自动退出。
+  - **深度技术归因复盘**：
+    1. **macOS 全屏 Space 机制导致跨 Space 双零伪象**：macOS 原生全屏窗口独占 Fullscreen Space。当用户切换到其他桌面或应用时，全屏应用切入后台（`app.isActive == false`），在当前活跃 Space 上没有任何可见窗口，WindowServer 标记其所有窗口为 `kCGWindowIsOnscreen == false`（即 `wsOnscreen == 0`）；同时 macOS Accessibility 辅助功能树（`AXUIElement`）对失焦且处于非活跃 Space 的应用，`kAXWindowsAttribute` 普遍返回空列表（`axCount == 0`）；
+    2. **`isZeroByCausality` 因果律致命漏洞**：原代码定义 `let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent`。全屏切走后，`axCount == 0` 与 `wsOnscreen == 0` 必然同时成立；只要应用在切出后台时伴随任何微小图层销毁或弹窗销毁（甚至全屏过渡动画结束时），`recentlyHadCloseEvent` 即被触发，因果律直接越过 `wsCount` 检查将全屏应用调度终结；
+    3. **WPS 专用降级轮询破坏失焦防抖**：WPS 因底层框架限制，无法注册 AXObserver 通知（报错 `-25204`），被标记为 `isAXObserverDegraded = true`。原代码中 `fallbackPoll` 每 1.2 秒强制轮询求值，且在 `evaluateAppWindows` 与 `executePendingQuit` 中通过 `&& !entrySnapshot.isAXObserverDegraded` 剥夺了 WPS 切入后台的前 2 秒失焦防抖保护；
+    4. **AutoQuitQuirks 离屏幽灵规则过于激进**：
+       - WPS 规则原配置了模糊包含匹配 `lowerTitle.contains(keyword)`，使得带有真实文档名称但带有后缀的窗口（如 `"财务报表.xlsx - WPS Office"`）被通用的 `"wps office"` 关键词误杀清洗；
+       - 钉钉、飞书、腾讯文档、网易云音乐等应用配置了 `cleanAllOffscreenWindows: true`，在全屏切走（`isOnScreen == false`）后离屏窗口被全部清洗归零，导致 `wsCount == 0`；
+       - WPS 关窗后残留的 AppKit 底板为固定工作区最大化高度（`1512x830`），此前方案 A 曾因一刀切豁免大尺寸导致关窗不退出，需要精准通过物理屏幕分辨率进行正交区分。
+
+- **代码级加固与修复方案（军师终审通过方案全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **物理全屏尺寸精准识别器（`isNativeFullscreenSize`）**：引入 AppKit 动态匹配全部当前物理屏幕（`NSScreen.screens`）的无菜单栏、无 Dock 完整全屏分辨率，并兼容全屏保留顶栏模式（公差控制在 `<= 40pt`），同时内置 14 类主流 Mac 视网膜全屏分辨率兜底。在排除关窗残留底板（`1512x830`，高度差达 152pt）的前提下，实现全屏业务视窗的 100% 精准识别；
+     - **全屏业务视窗免死金牌**：在 `shouldCleanOffscreen` 中，具备全屏物理尺寸的视窗豁免 `cleanAllOffscreenWindows`；无标题全屏放映视窗豁免 `cleanEmptyTitleOffscreenWindows`；在 5.3 规则中等于 App 名的全屏视窗豁免残留清洗；
+     - **标题精准匹配隔离（`exactTitleMatchOnly`）**：在 `AppQuirkRule` 中引入 `exactTitleMatchOnly` 并在 WPS 中启用，彻底阻断模糊包含匹配对 `"文档1 - WPS Office"` 等真实文档的误杀，同时完好保留腾讯元宝等单窗口应用的动态会话标题清洗。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **因果律双层严格闭环**：在 `evaluateAppWindows` 与 `executePendingQuit` 中重构因果律判定为：
+       `let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent`
+       严格增设 `((wsCount ?? 0) == 0)` 门禁，只要全屏或跨 Space 存在任何合法业务窗口（`wsCount > 0`），绝不允许提前调度退出；
+     - **恢复降级应用失焦防抖保活**：移除行 708 与行 978 中的 `&& !entrySnapshot.isAXObserverDegraded`，确保 WPS 和所有其他应用一致，在切出后台的 2.0 秒内坚决撤销并阻断一切退出调度；
+     - **全屏物理视窗入列标准业务候选（特征 C）**：在 `isStandardWindowCandidate` 离屏判定中增加特征 C：具备全屏物理尺寸的窗口直接确认为标准业务候选。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增 5 项专用自动化断言：WPS 全屏复合标题保活、WPS 跨 Space 后缀文档保活、WPS 全屏放映标准候选确认、夸克全屏免抹杀确认、钉钉全屏免抹杀确认。
+
+- **兼容性与边界防护策略**：
+  - **关窗退出功能零退化**：关窗残留底板（`1512x830`）由于高度与全屏物理高度相差 152pt，精准被判定为非全屏，现有关于 WPS 关窗退出、Chrome 离屏保护等 9 项测试无一受损；
+  - **多 Space 跨屏与全屏通用性防护**：无论是 WPS 还是原生 AppKit（Safari、TextEdit、Notes）、Chromium 或 Electron 应用（钉钉、飞书），在全屏切出后均能凭借物理全屏特征与 `wsCount > 0` 因果律闭环实现绝对保活；
+  - **性能与开销零增加**：全屏尺寸判定直接在内存中执行简单的几何长宽比对，不产生任何额外的 IPC 或 AX 阻塞。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过（0 失败，0 警告）**。

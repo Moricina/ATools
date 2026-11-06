@@ -1,5 +1,8 @@
 import Foundation
 import CoreGraphics
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// 幽灵底板尺寸匹配器（支持区间容差）
 public struct GhostWindowSize: Equatable, Sendable {
@@ -33,6 +36,7 @@ public struct AppQuirkRule: Sendable {
     public let terminateHelpersInBundle: Bool
     public let cleanAllOffscreenWindows: Bool
     public let cleanEmptyTitleOffscreenWindows: Bool
+    public let exactTitleMatchOnly: Bool
 
     public init(
         id: String,
@@ -45,7 +49,8 @@ public struct AppQuirkRule: Sendable {
         companionBundleIDs: [String] = [],
         terminateHelpersInBundle: Bool = false,
         cleanAllOffscreenWindows: Bool = false,
-        cleanEmptyTitleOffscreenWindows: Bool = false
+        cleanEmptyTitleOffscreenWindows: Bool = false,
+        exactTitleMatchOnly: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -58,6 +63,7 @@ public struct AppQuirkRule: Sendable {
         self.terminateHelpersInBundle = terminateHelpersInBundle
         self.cleanAllOffscreenWindows = cleanAllOffscreenWindows
         self.cleanEmptyTitleOffscreenWindows = cleanEmptyTitleOffscreenWindows
+        self.exactTitleMatchOnly = exactTitleMatchOnly
     }
 
     public func matches(bundleID: String?, ownerName: String?) -> Bool {
@@ -79,20 +85,30 @@ public struct AppQuirkRule: Sendable {
 
     public func shouldCleanOffscreen(title: String, width: Double, height: Double) -> Bool {
         if cleanAllOffscreenWindows {
+            // 核心安全屏障：全屏尺寸（如 1512x982、2560x1440 等）属于有效全屏业务视窗，绝不被 cleanAllOffscreenWindows 清洗
+            if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
+                return false
+            }
             return true
         }
         let lowerTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if cleanEmptyTitleOffscreenWindows && lowerTitle.isEmpty {
+            // 全屏尺寸的放映/无标题全屏窗口绝不是关窗残留底板（如 1512x830）
+            if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
+                return false
+            }
             return true
         }
         if !lowerTitle.isEmpty {
             if offscreenTitles.contains(lowerTitle) {
                 return true
             }
-            // 军师加固 1：遍历特征词进行包含模糊匹配，彻底覆盖单窗口应用动态会话标题（如 "会话 - 腾讯元宝"）
-            for keyword in offscreenTitles {
-                if !keyword.isEmpty && lowerTitle.contains(keyword) {
-                    return true
+            // 军师加固 1：单窗口应用（如腾讯元宝）支持模糊包含匹配；多文档应用（如 WPS，exactTitleMatchOnly: true）严禁模糊匹配误杀多文档
+            if !exactTitleMatchOnly {
+                for keyword in offscreenTitles {
+                    if !keyword.isEmpty && lowerTitle.contains(keyword) {
+                        return true
+                    }
                 }
             }
         }
@@ -187,7 +203,8 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             offscreenTitles: ["wps office", "首页", "稻壳素材", "快速访问工具栏"],
             ghostSizes: [GhostWindowSize(w: 420, h: 154, tolerance: 15)],
             terminateHelpersInBundle: true,
-            cleanEmptyTitleOffscreenWindows: true
+            cleanEmptyTitleOffscreenWindows: true,
+            exactTitleMatchOnly: true
         ),
         AppQuirkRule(
             id: "quark",
@@ -360,6 +377,39 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         return nil
     }
 
+    /// 识别 Native 全屏物理窗口尺寸（匹配连接的任意屏幕物理尺寸，或标准全屏分辨率；严格排除 830 等关窗残留底板）
+    public static func isNativeFullscreenSize(width: Double, height: Double) -> Bool {
+        guard width >= 600 && height >= 400 else { return false }
+
+        #if canImport(AppKit)
+        for screen in NSScreen.screens {
+            let f = screen.frame
+            // 1. 物理屏幕完整全屏尺寸（无菜单栏无 Dock，例如 1512x982、2560x1440 等）
+            if abs(f.width - width) <= 4.0 && abs(f.height - height) <= 4.0 {
+                return true
+            }
+            // 2. 全屏保留顶栏模式（例如 1512x949，高度差在 40pt 内，但 1512x830 差距 152pt 严格不匹配）
+            if abs(f.width - width) <= 4.0 && abs(f.height - height) <= 40.0 {
+                return true
+            }
+        }
+        #endif
+
+        // 兜底常见 Mac / 视网膜全屏物理分辨率
+        let standardResolutions: [(w: Double, h: Double)] = [
+            (1512, 982), (1512, 949), (1728, 1117), (1728, 1084),
+            (1440, 900), (1680, 1050), (1920, 1080), (1920, 1200),
+            (2560, 1440), (2560, 1600), (3024, 1964), (3456, 2234),
+            (3840, 2160), (5120, 2880)
+        ]
+        for res in standardResolutions {
+            if abs(res.w - width) <= 4.0 && abs(res.h - height) <= 4.0 {
+                return true
+            }
+        }
+        return false
+    }
+
     /// 启发式幽灵图层过滤（Y-01：收窄在屏窗口尺寸启发式，仅针对特定 BundleID 离屏图层或无标题微元过滤，保护正常小面板与工具条）
     public func isGhostWindow(
         bundleID: String?,
@@ -420,6 +470,10 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         if let on = ownerName, !on.isEmpty {
             let lowerOn = on.lowercased()
             if lower == lowerOn {
+                // 若为全屏业务视窗，绝非关窗残留底板
+                if Self.isNativeFullscreenSize(width: width, height: height) {
+                    return false
+                }
                 return true
             }
         }
