@@ -292,9 +292,28 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         AppQuirkRule(
             id: "aurapane",
             name: "AuraPane",
-            bundleIDPrefixes: ["cc.atools.aurapane"],
+            bundleIDPrefixes: ["com.dochi.AuraPane", "cc.atools.aurapane"],
             ownerNameKeywords: ["aurapane"],
-            offscreenTitles: ["设置", "settings", "preferences", "偏好设置"]
+            offscreenTitles: ["设置", "settings", "preferences", "偏好设置"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "jianpian",
+            name: "荐片",
+            bundleIDPrefixes: ["com.jianpian."],
+            ownerNameKeywords: ["荐片", "jianpian"],
+            offscreenTitles: ["荐片", "jianpian", "荐片播放器"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "uuremote",
+            name: "UU远程",
+            bundleIDPrefixes: ["com.netease.uuremote"],
+            ownerNameKeywords: ["uu远程", "uuremote", "uu remote"],
+            offscreenTitles: ["uu远程", "uuremote"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "apple_calendar",

@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.46}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-72}"
+VERSION="${ATOOLS_VERSION:-1.3.48}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-74}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,31 +114,24 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 大型应用自动入库与 AutoQuit 名单实时联动闭环
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 彻底修复 AuraPane 与荐片/UU远程关窗退出缺陷与失焦穿透
 
-### 🚀 新特性与核心缺陷修复
-1. **FSEventStream 递归深度监控与事件风暴抑制**：
-   - 监听 \`/Applications\` 与 \`~/Applications\` 递归文件事件（\`kFSEventStreamCreateFlagFileEvents\`），捕获 DMG 拖入/PKG 解压等深层文件写入；
-   - 施加事件风暴过滤，仅当变动包含 \`.app\` 目录结构时触发防抖刷新，跳过无关临时日志和缓存。
-2. **大体积应用未就绪包退避轮询器（In-Flight Poller）**：
-   - 彻底解决 990MB+ 大型应用（如 DeepSeek Harness）因文件写入耗时引发的「半包早产（Half-baked Bundle）」漏检；
-   - 动态比对核心 plist 和可执行文件的尺寸与修改时间，未写完时持续顺延；连续两次尺寸稳定且主二进制就绪后自动入库（附带 60s 超时兜底）。
-3. **运行时自愈监控（O(1) Self-Healing）**：
-   - 监听 \`NSWorkspace.didLaunchApplicationNotification\`，任何常规应用首次启动瞬间极速解析并注入索引；
-   - 施加 Helper/守护进程过滤守卫（\`app.activationPolicy == .regular\`），杜绝无窗口伴生程序污染抽屉。
-4. **抽屉面板唤出保鲜（showShelfPanel）**：
-   - 呼出应用抽屉时主动触发 \`refreshIfStale(interval: 30)\`，与搜索面板保鲜机制完全对齐。
-5. **AutoQuit 规则名单事件驱动实时联动**：
-   - 全局派发 \`.atoolsAppIndexDidUpdate\` 通知，名单 Sheet 窗口收到后自动且平滑重载；
-   - 自动保存并恢复可视区域坐标（\`visibleRect\`）与搜索关键词，杜绝滚动跳回顶部与输入焦点被打断。
-6. **手动拖拽基线池自动沉淀**：
-   - 用户手动将应用拖入抽屉任一分类时，自动将其 Bundle ID 写入 \`knownAppBundleIds\`，消除后续重复比对。
+### 🚀 核心缺陷修复与离屏因果律加固
+1. **AppKit orderOut: 失焦门禁穿透与因果确立**：
+   - 彻底修复 AuraPane（\`com.dochi.AuraPane\`）等 AppKit/SwiftUI 应用采用 \`[NSWindow orderOut:]\` 隐藏视窗而不触发 \`kAXUIElementDestroyedNotification\`、且在关窗后自然失去焦点导致 \`fallbackPoll\` 门禁死锁的缺陷；
+   - 在失焦处理（\`handleAppDeactivated\`）中深度感知零在屏窗口状态（\`wsOnscreen == 0 && axCount == 0\`），在排除多 Space 切换瞬态的前提下主动刷新关窗因果律，打破失焦退出死锁；
+   - 更新 AuraPane 的 Bundle ID 规则映射并开启离屏底板全量清洗（\`cleanAllOffscreenWindows\`）。
+2. **Electron 架构隐藏离屏图层清洗与 Helper 伴生进程协同退出**：
+   - 彻底修复荐片（\`com.jianpian.macos\`）及同架构网易 UU远程（\`com.netease.uuremote\`）点击红叉关窗时调用 Electron \`win.hide()\` 导致底层 WindowServer 残留 900x600 离屏图层、触发 \`isStandardWindowCandidate\` 保护门禁导致退出倒计时被强行中止的缺陷；
+   - 新增专用 Quirks 规则，开启 \`cleanAllOffscreenWindows\` 与 \`terminateHelpersInBundle\`，确保离屏隐藏视窗被精准剔除，并协同清理包内所有 Helper 子进程。
+3. **多 Space 跨屏与全屏物理视窗绝对保活**：
+   - 坚决维持因果律严格门禁 \`((wsCount ?? 0) == 0)\`，结合 \`isNativeFullscreenSize\` 物理全屏识别，全屏模式在跨 Space 切出后享有绝对免死金牌，杜绝任何形式的误杀。
 
 ---
 
 ### 🛡️ 架构质量与自动化诊断验证
 - 全套 19 大项综合诊断套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过；
-- 新增手动拖拽基线同步校验、全局通知广播捕获、以及 In-Flight 轮询接口防崩测试断言。"
+- 新增针对 AuraPane、荐片与 UU远程的离屏清洗、在屏绝对保活与标准业务候选人过滤的 11 项专用回归断言。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

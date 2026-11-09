@@ -4770,3 +4770,49 @@
 
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过（0 失败，0 警告）**。
+
+---
+
+### [2026-11-08] 第 139 项：修复 AuraPane 与荐片/UU远程点击叉叉关窗无法退出的缺陷（AppKit orderOut: 失焦门禁穿透、Electron 离屏图层清洗与 Helper 伴生进程协同退出）
+
+- **故障背景与根因定位**：
+  - **用户反馈**：
+    1. AuraPane（`com.dochi.AuraPane`）点击叉叉无法触发关窗退出；
+    2. 荐片（`com.jianpian.macos`）点击叉叉提示「显示要退出了」但倒计时结束后被终止调度，实际并未退出。
+  - **深度事实确证与根因定位**：
+    1. **AuraPane（SwiftUI / AppKit 混合框架）的 `orderOut:` 机制与失焦死锁**：
+       - AuraPane 的主窗口、欢迎窗口（360x300）、设置面板（760x606）及未命名文档窗口（960x680）在关闭时采用 AppKit `[NSWindow orderOut:]` 隐藏视窗而非彻底销毁 `dealloc`；
+       - macOS 对 `orderOut:` 不会分发 `kAXUIElementDestroyedNotification` 事件；窗口隐藏后应用立即失去焦点（`isActive == false`）；
+       - `handleAppDeactivated` 原先在无近期关窗事件时直接取消一切未决退出调度，而后台保底轮询 `fallbackPoll` 对失焦应用执行旁路跳过，导致应用陷入「无事件 -> 不轮询 -> 永远不退出」的死锁；
+       - `AutoQuitQuirks` 中 AuraPane 配置的 Bundle ID 存在历史遗留偏差（原为 `cc.atools.aurapane`，实际发行版为 `com.dochi.AuraPane`），且未开启 `cleanAllOffscreenWindows: true`。
+    2. **荐片与 UU远程（Electron 架构）的隐藏离屏视窗与终止调度拦截**：
+       - 荐片运行日志确证：`[AutoQuit] Last window closed for 荐片; quitting in 1.0s.`，随后触发 `[AutoQuit] Aborted quit for 荐片: app is active and has window (AX=0, WS=1).`；
+       - 荐片在用户关闭主窗口时调用 Electron `win.hide()`，使得 AX 树中窗口归零（`AX=0`），但 WindowServer 仍驻留一块尺寸为 `900x600`（`isOnScreen == false`）的离屏图层；
+       - `AutoQuitQuirks` 原先未收录荐片（`com.jianpian.`）与 UU远程（`com.netease.uuremote`），导致 `isStandardWindowCandidate` 将离屏驻留图层视作有效业务视窗（`wsCount = 1`），在倒计时结束执行 `executePendingQuit` 时触发保护门禁强行取消退出；
+       - 伴生多进程（Renderer、GPU Process、Crashpad Helper）若主进程退出不干净，容易遗留孤儿进程。
+
+- **代码级加固与修复方案（军师审定通过方案全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **AuraPane 规则适配**：前缀列表扩充为 `["com.dochi.AuraPane", "cc.atools.aurapane"]`，启用 `cleanAllOffscreenWindows: true`，使其 `orderOut:` 残留图层进入离屏清洗判定；
+     - **荐片规则入库**：新增 `id: "jianpian"` 规则，覆盖 `bundleIDPrefixes: ["com.jianpian."]`, `ownerNameKeywords: ["荐片", "jianpian"]`，启用 `cleanAllOffscreenWindows: true` 与 `terminateHelpersInBundle: true`，确保离屏隐藏视窗在失焦或无在屏窗口时被彻底剔除，且协同清理包内所有 Helper 子进程；
+     - **UU远程同系加固**：针对具备完全相同 Electron 离屏底板特征的网易 UU远程（`com.netease.uuremote`），新增规则并开启 `cleanAllOffscreenWindows: true` 与 `terminateHelpersInBundle: true`。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **`handleAppDeactivated` 失焦瞬态深度感知与因果穿透**：
+       在失焦处理中，在确认排除多 Space 切换瞬态（`Date().timeIntervalSince(lastSpaceChangeDate) >= 2.0`）的前提下，执行在屏检测：若 `wsOnscreen == 0` 且 `axCount == 0` 且应用之前拥有过有效视窗（`hadWin == true`），表明当前应用所有在屏实体窗口均已关闭并自然失焦（如 `orderOut:` 隐藏），此时主动刷新 `lastCloseEventDate = Date()` 确立关窗因果律，打破失焦与 `fallbackPoll` 的门禁死锁，立即触发 `evaluateAppWindows(pid:)` 推进退出倒计时；
+       若窗口依然在屏或最小化，则继续严格取消未决退出，杜绝误杀。
+     - **严格保留因果律双零门禁**：坚决不放宽 `isZeroByCausality` 中的 `((wsCount ?? 0) == 0)`，杜绝跨 Space 切换误杀全屏应用。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增针对 AuraPane、荐片与 UU远程的 11 项专用回归断言：
+       * AuraPane `cleanAllOffscreenWindows` 规则匹配及设置页/未命名文档离屏清洗断言；
+       * 荐片 `cleanAllOffscreenWindows` 规则匹配、离屏主窗口清洗及在屏主窗口绝对保活断言；
+       * UU远程离屏清洗与规则匹配断言；
+       * `AutoQuitManager.isStandardWindowCandidate` 对离屏荐片排除与在屏荐片入选候选断言。
+
+- **兼容性与边界防护策略**：
+  - **多 Space 与全屏物理视窗安全**：`AutoQuitQuirks.isNativeFullscreenSize` 机制完备保证了任何全屏应用在跨 Space 切走时，离屏视窗享有绝对免死金牌，不会被 `cleanAllOffscreenWindows` 误清洗；
+  - **普通切应用安全**：当用户只是 ⌘Tab 切换应用，原应用窗口仍停留在屏幕上（`wsOnscreen > 0`），`handleAppDeactivated` 走 `else` 分支直接取消一切退出计划，无任何负面影响；
+  - **因果律铁律**：`((wsCount ?? 0) == 0)` 门禁维持不动，保持了跨 Space 全局视窗存在时的绝对安全防线。
+
+- **验证与部署结果**：
+  - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过（0 失败，0 警告）**；
+  - **正式打包与部署拉起**：发布 `v1.3.48 (build 74)`，通过 `./Scripts/package_app.sh` 完成 Release 构建、`ATools Sign` 签名与 Ed25519 验签，替换覆盖至 `/Applications/ATools.app` 并拉起新版本进程（PID `27648`）。运行时日志确认成功纳管并监听 AuraPane、荐片与 UU远程。

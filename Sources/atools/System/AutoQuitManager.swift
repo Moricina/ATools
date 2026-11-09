@@ -564,15 +564,53 @@ public final class AutoQuitManager {
     private func handleAppDeactivated(_ app: NSRunningApplication) {
         guard let pid = AutoQuitManager.resolveProcessIdentifier(for: app), pid > 0 else { return }
         os_unfair_lock_lock(&lock)
-        defer { os_unfair_lock_unlock(&lock) }
-        if var entry = watched[pid] {
-            entry.lastActiveDate = Date()
-            watched[pid] = entry
-            let recentlyHadCloseEvent = Date().timeIntervalSince(entry.lastCloseEventDate) < 3.0
-            if !recentlyHadCloseEvent {
-                cancelPendingQuitLocked(pid)
-                cancelPendingRecheckLocked(pid)
+        guard var entry = watched[pid] else {
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+        entry.lastActiveDate = Date()
+        let hadClose = Date().timeIntervalSince(entry.lastCloseEventDate) < 3.0
+        let hadWin = entry.hadWindows
+        let axApp = entry.axApp
+        let bundleId = app.bundleIdentifier
+        watched[pid] = entry
+        os_unfair_lock_unlock(&lock)
+
+        if hadClose {
+            return
+        }
+
+        // 军师加固安全防线：排除切 Space 瞬态干扰
+        let spaceChangedRecently = Date().timeIntervalSince(lastSpaceChangeDate) < 2.0
+        if spaceChangedRecently {
+            os_unfair_lock_lock(&lock)
+            cancelPendingQuitLocked(pid)
+            cancelPendingRecheckLocked(pid)
+            os_unfair_lock_unlock(&lock)
+            return
+        }
+
+        // 锁外执行轻量在屏检测
+        let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: bundleId)
+        let axList = axWindows(of: axApp)
+        let axCount = axList?.count
+
+        if (wsOnscreen ?? 0) == 0 && (axCount ?? 0) == 0 && hadWin {
+            // 该应用在屏幕上已无任何实体视窗（如 orderOut: 关窗后自然失焦）
+            // 刷新 lastCloseEventDate 确立因果律，打破 fallbackPoll 与失焦门禁死锁
+            os_unfair_lock_lock(&lock)
+            if var current = watched[pid] {
+                current.lastCloseEventDate = Date()
+                watched[pid] = current
             }
+            os_unfair_lock_unlock(&lock)
+            evaluateAppWindows(pid: pid)
+        } else {
+            // 普通切应用（窗口依然在屏/最小化），严格取消未决退出，杜绝误杀
+            os_unfair_lock_lock(&lock)
+            cancelPendingQuitLocked(pid)
+            cancelPendingRecheckLocked(pid)
+            os_unfair_lock_unlock(&lock)
         }
     }
 

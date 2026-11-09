@@ -2130,6 +2130,19 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.baidu.BaiduNetdiskMac", ownerName: "百度网盘", title: "百度网盘", width: 1000, height: 650, isOnScreen: false) == true, "BaiduNetdisk offscreen window must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.xunlei.Thunder", ownerName: "迅雷", title: "迅雷", width: 1024, height: 700, isOnScreen: false) == true, "Thunder offscreen window must be cleaned")
 
+        // 验证 AuraPane、荐片与 UU远程离屏清洗与保活机制
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.dochi.AuraPane", ownerName: "AuraPane")?.cleanAllOffscreenWindows == true, "AuraPane rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.dochi.AuraPane", ownerName: "AuraPane", title: "设置", width: 760, height: 606, isOnScreen: false) == true, "AuraPane offscreen settings must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.dochi.AuraPane", ownerName: "AuraPane", title: "未命名", width: 960, height: 680, isOnScreen: false) == true, "AuraPane offscreen untitled document must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.dochi.AuraPane", ownerName: "AuraPane", title: "未命名", width: 960, height: 680, isOnScreen: true) == false, "AuraPane onscreen document must never be cleaned")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.jianpian.macos", ownerName: "荐片")?.cleanAllOffscreenWindows == true, "JianPian rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.jianpian.macos", ownerName: "荐片", title: "荐片播放器", width: 900, height: 600, isOnScreen: false) == true, "JianPian offscreen player window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.jianpian.macos", ownerName: "荐片", title: "荐片播放器", width: 900, height: 600, isOnScreen: true) == false, "JianPian onscreen player window must never be cleaned")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.netease.uuremote", ownerName: "UU远程")?.cleanAllOffscreenWindows == true, "UURemote rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.netease.uuremote", ownerName: "UU远程", title: "UU远程", width: 1000, height: 700, isOnScreen: false) == true, "UURemote offscreen window must be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.jianpian.macos", ownerName: "荐片", rawName: "荐片播放器", width: 900, height: 600, isOnScreen: false) == false, "Offscreen JianPian window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.jianpian.macos", ownerName: "荐片", rawName: "荐片播放器", width: 900, height: 600, isOnScreen: true) == true, "Onscreen JianPian window must remain standard candidate")
+
         // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量
         let trace = AutoQuitDecisionTrace.shared
         trace.clear()
