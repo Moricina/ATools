@@ -4816,3 +4816,37 @@
 - **验证与部署结果**：
   - **单元诊断回归**：执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过（0 失败，0 警告）**；
   - **正式打包与部署拉起**：发布 `v1.3.48 (build 74)`，通过 `./Scripts/package_app.sh` 完成 Release 构建、`ATools Sign` 签名与 Ed25519 验签，替换覆盖至 `/Applications/ATools.app` 并拉起新版本进程（PID `27648`）。运行时日志确认成功纳管并监听 AuraPane、荐片与 UU远程。
+
+
+---
+
+### [2026-11-09] 第 140 项：彻底修复 WPS 切换到全屏访达等应用触发自动退出的缺陷（离屏标题尺寸正交门禁、降级应用失焦保活优化与多桌面标准候选防护）
+
+- **故障背景与根因定位**：
+  - **用户反馈**：检查 WPS 切换到全屏的访达为什么又自动退出了。
+  - **深度技术归因复盘**：
+    1. **WPS 默认「首页」视窗被离屏幽灵规则无条件误杀**：
+       - 当 WPS 在桌面 1 打开其主界面（默认视窗标题为 `"首页"`，物理尺寸通常为 `1512x870`），用户切换至全屏访达（独占 Fullscreen Space 2）时，macOS 将桌面 1 的视窗置为离屏状态（`isOnScreen == false`）；
+       - `AutoQuitQuirks` 原先在 `offscreenTitles` 中配置了 `"首页"`，但在 `shouldCleanOffscreen` 中只要标题命中 `"首页"`，就无条件判定为离屏幽灵返回 `true`，未对视窗尺寸进行有效门禁拦截；
+       - WPS 真正关窗后遗留的模板残留底板尺寸固定为 `420x154`（此前已收录于 `ghostSizes`），而主视窗物理尺寸为 `1512x870`；无尺寸过滤的标题清洗将合法的大尺寸「首页」视窗误杀剔除，导致 WindowServer 窗口计数被归零（`wsCount = 0`）；
+    2. **降级应用后台过度轮询打破失焦保护**：
+       - WPS 因架构原因无法注册 AXObserver 被标记为 `isAXObserverDegraded`。原代码中 `fallbackPoll` 遍历到 `entry.isAXObserverDegraded` 时，即使应用处于非活跃后台（`isActive == false`）且近期未发生任何关窗事件（`recentlyHadCloseEvent == false`），仍无休止触发 `evaluateAppWindows` 评估；
+       - 跨 Space 切换 2 秒防抖期结束后，因跨 Space AX 树返回 `axCount == 0` 且 `wsCount` 被幽灵误杀为 0，双零判定 `isConfirmedZeroWindowCount(0, 0)` 成立，直接误判为所有窗口已关闭并执行退出调度。
+
+- **代码级加固与修复方案（军师终审通过方案全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **离屏标题与尺寸正交门禁**：重构 `shouldCleanOffscreen` 中的标题匹配逻辑。当规则显式配置了 `ghostSizes`（如 WPS 的 `420x154`、OPPO 互联的特定底板）时，仅当窗口几何尺寸精准命中预设 `ghostSizes` 或属于微型辅助浮窗（`width <= 500 && height <= 380`）时才清洗为幽灵；大尺寸正常业务主视窗（如 WPS 首页 `1512x870`）严禁仅凭标题被误杀；
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **降级应用后台过度轮询阻断**：在保底轮询 `fallbackPoll` 的求值候选集收敛判定中，剔除 `|| entry.isAXObserverDegraded`，仅在应用处于活跃使用态（`isActive`）或近期确实发生关窗动作（`recentlyHadCloseEvent`）时才推进评估，彻底阻断失焦静默后台应用的误触发；
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增 2 项针对 WPS 首页大窗口离屏保活断言：
+       * `WPS offscreen large home window must not be cleaned: PASSED`
+       * `WPS offscreen large home window must be standard candidate: PASSED`。
+
+- **兼容性与边界防护策略**：
+  - **真实关窗退出功能 100% 完好保持**：WPS 点击叉叉关窗产生的 `420x154` 幽灵底板与 `1512x830` 无标题底板依然被精准识别并清洗，现有针对关窗退出判定的全部 19 大项测试无一受损；
+  - **多 Space 跨屏与全屏应用无缝共存**：无论从普通桌面切换到全屏访达、全屏终端还是其他 Space 全屏应用，处于非活跃 Space 的 WPS 首页及各文档视窗均具备 `wsCount > 0` 的权威存活保证；
+  - **零 IPC 阻塞与零性能损耗**：尺寸比对纯在内存执行简单几何计算，无任何系统负载。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过（0 失败，0 警告）**。

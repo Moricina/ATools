@@ -866,7 +866,7 @@ public final class AutoQuitManager {
             } else {
                 let isActive = entry.app.isActive
                 let recentlyHadCloseEvent = now.timeIntervalSince(entry.lastCloseEventDate) < 3.0
-                if isActive || recentlyHadCloseEvent || entry.isAXObserverDegraded {
+                if isActive || recentlyHadCloseEvent {
                     activeToEvaluate.append(pid)
                 }
             }

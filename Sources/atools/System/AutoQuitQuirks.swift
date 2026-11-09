@@ -100,16 +100,27 @@ public struct AppQuirkRule: Sendable {
             return true
         }
         if !lowerTitle.isEmpty {
+            let isMatchedTitle: Bool
             if offscreenTitles.contains(lowerTitle) {
-                return true
+                isMatchedTitle = true
+            } else if !exactTitleMatchOnly {
+                isMatchedTitle = offscreenTitles.contains(where: { !$0.isEmpty && lowerTitle.contains($0) })
+            } else {
+                isMatchedTitle = false
             }
-            // 军师加固 1：单窗口应用（如腾讯元宝）支持模糊包含匹配；多文档应用（如 WPS，exactTitleMatchOnly: true）严禁模糊匹配误杀多文档
-            if !exactTitleMatchOnly {
-                for keyword in offscreenTitles {
-                    if !keyword.isEmpty && lowerTitle.contains(keyword) {
+
+            if isMatchedTitle {
+                // 关键安全门禁：当规则显式配置了幽灵尺寸 (ghostSizes) 时，
+                // 仅当窗口尺寸命中预设的 ghostSizes，或属于微型辅助浮窗 (<= 500x380) 时才作为离屏幽灵清理；
+                // 正常大尺寸业务视窗（如 WPS 首页 1512x870、常规文档等）绝不可仅因标题命中离屏词典而被误杀！
+                if !ghostSizes.isEmpty {
+                    let matchesGhostSize = ghostSizes.contains(where: { $0.matches(width: width, height: height) })
+                    if matchesGhostSize || (width <= 500 && height <= 380) {
                         return true
                     }
+                    return false
                 }
+                return true
             }
         }
         for size in ghostSizes {
