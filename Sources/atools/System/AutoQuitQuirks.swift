@@ -269,7 +269,11 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             name: "百度网盘",
             bundleIDPrefixes: ["com.baidu.BaiduNetdiskMac", "com.baidu.netdisk"],
             ownerNameKeywords: ["百度网盘", "baidunetdisk"],
-            offscreenTitles: ["百度网盘", "baidunetdisk"],
+            offscreenTitles: ["百度网盘", "baidunetdisk", "同步空间", "悬浮窗"],
+            ghostSizes: [
+                GhostWindowSize(w: 200, h: 80, tolerance: 30),
+                GhostWindowSize(w: 710, h: 680, tolerance: 30)
+            ],
             terminateHelpersInBundle: true,
             cleanAllOffscreenWindows: true
         ),
@@ -342,7 +346,9 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             ghostSizes: [
                 GhostWindowSize(w: 370, h: 313, tolerance: 25),
                 GhostWindowSize(w: 1252, h: 710, tolerance: 30)
-            ]
+            ],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "gemini",
@@ -367,6 +373,99 @@ public final class AutoQuitQuirks: @unchecked Sendable {
                 GhostWindowSize(w: 500, h: 500, tolerance: 30)
             ],
             companionBundleIDs: ["com.tencent.yuanbao.helper"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "zcode",
+            name: "ZCode",
+            bundleIDPrefixes: ["dev.zcode.app", "dev.zcode."],
+            ownerNameKeywords: ["zcode"],
+            offscreenTitles: ["zcode"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "tencent_meeting",
+            name: "腾讯会议",
+            bundleIDPrefixes: ["com.tencent.meeting"],
+            ownerNameKeywords: ["tencentmeeting", "腾讯会议", "wemeet"],
+            offscreenTitles: ["tencentmeeting", "腾讯会议", "wemeet"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "artcraft_launcher",
+            name: "ArtCraft Launcher",
+            bundleIDPrefixes: ["ai.storyteller.artcraft-launcher"],
+            ownerNameKeywords: ["artcraft launcher", "artcraft"],
+            offscreenTitles: ["artcraft launcher", "artcraft"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "tgent",
+            name: "Tgent",
+            bundleIDPrefixes: ["com.dbappsecurity.sdpTgent", "com.dbappsecurity."],
+            ownerNameKeywords: ["tgent", "sdptgent", "安恒"],
+            offscreenTitles: ["tgent", "安全网关", "控制中心", "sdptgent"],
+            ghostSizes: [
+                GhostWindowSize(w: 920, h: 600, tolerance: 30)
+            ],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "dstaff",
+            name: "dstaff",
+            bundleIDPrefixes: ["com.dbappsecurity.dstaff"],
+            ownerNameKeywords: ["dstaff"],
+            offscreenTitles: ["dstaff"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "deepseek_harness",
+            name: "DeepSeek Harness",
+            bundleIDPrefixes: ["com.deepseek.dsh"],
+            ownerNameKeywords: ["deepseek", "dsh"],
+            offscreenTitles: ["deepseek", "dsh"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "atrust",
+            name: "aTrust",
+            bundleIDPrefixes: ["com.sangfor.tray", "com.sangfor.atrust"],
+            ownerNameKeywords: ["atrust", "sangfor", "深信服"],
+            offscreenTitles: ["atrust", "sangfor", "深信服"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "tscanplus",
+            name: "TscanPlus",
+            bundleIDPrefixes: ["com.wails.tscanplus"],
+            ownerNameKeywords: ["tscanplus"],
+            offscreenTitles: ["tscanplus"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "otty",
+            name: "Otty",
+            bundleIDPrefixes: ["io.appmakes.otty"],
+            ownerNameKeywords: ["otty"],
+            offscreenTitles: ["otty"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "siyuan",
+            name: "思源笔记",
+            bundleIDPrefixes: ["org.b3log.siyuan"],
+            ownerNameKeywords: ["siyuan", "思源"],
+            offscreenTitles: ["siyuan", "思源笔记", "思源"],
             terminateHelpersInBundle: true,
             cleanAllOffscreenWindows: true
         )

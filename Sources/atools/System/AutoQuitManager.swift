@@ -235,7 +235,8 @@ public final class AutoQuitManager {
         rawName: String,
         width: Double,
         height: Double,
-        isOnScreen: Bool
+        isOnScreen: Bool,
+        layer: Int = 0
     ) -> Bool {
         let quirks = AutoQuitQuirks.shared
         if quirks.isGhostWindow(
@@ -250,6 +251,11 @@ public final class AutoQuitManager {
         }
 
         if isOnScreen {
+            // Layer > 0 属于浮动层/小面板/常驻桌面小挂件（如百度网盘 200x80 悬浮窗）
+            // 真实业务主窗口必须在 Layer 0 (kCGNormalWindowLevel)，或如果位于 Layer > 0 必须具备主视窗尺寸门槛 (width >= 360 && height >= 240)
+            if layer > 0 {
+                return width >= 360 && height >= 240
+            }
             return (width > 120 && height > 70) || !rawName.isEmpty
         } else {
             // 军师审定方案：离屏窗口 (isOnScreen == false) 必须已通过 isGhostWindow 清洗
@@ -293,7 +299,8 @@ public final class AutoQuitManager {
                 rawName: rawName,
                 width: width,
                 height: height,
-                isOnScreen: isOnScreen
+                isOnScreen: isOnScreen,
+                layer: layer
             ) {
                 count += 1
             }
@@ -329,7 +336,8 @@ public final class AutoQuitManager {
                 rawName: rawName,
                 width: width,
                 height: height,
-                isOnScreen: true
+                isOnScreen: true,
+                layer: layer
             ) {
                 count += 1
             }
@@ -743,7 +751,7 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 3.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
+        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
             cancelPendingQuitLocked(pid)
             cancelPendingRecheckLocked(pid)
             os_unfair_lock_unlock(&lock)
@@ -781,7 +789,18 @@ public final class AutoQuitManager {
 
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
-        let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
+
+        // 当屏幕上实体在屏视窗确已归零且应用此前确有视窗时，确立关窗因果律
+        if (wsOnscreen ?? 0) == 0 && (axCount == 0 || axCount == nil) {
+            os_unfair_lock_lock(&lock)
+            if var current = watched[pid], current.hadWindows {
+                current.lastCloseEventDate = Date()
+                watched[pid] = current
+            }
+            os_unfair_lock_unlock(&lock)
+        }
+
+        let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0)
 
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
@@ -866,7 +885,8 @@ public final class AutoQuitManager {
             } else {
                 let isActive = entry.app.isActive
                 let recentlyHadCloseEvent = now.timeIntervalSince(entry.lastCloseEventDate) < 3.0
-                if isActive || recentlyHadCloseEvent {
+                let isDegraded = entry.isAXObserverDegraded
+                if isActive || recentlyHadCloseEvent || isDegraded {
                     activeToEvaluate.append(pid)
                 }
             }
@@ -1013,7 +1033,7 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 5.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent {
+        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
             os_unfair_lock_unlock(&lock)
             return
         }
@@ -1094,9 +1114,24 @@ public final class AutoQuitManager {
         runtimeLog("[AutoQuit] Terminating \(app.localizedName ?? "pid \(pid)") after last window closed.")
         app.terminate()
         terminateCompanionHelpers(for: app)
+
+        // 终极保底：若应用因托盘拦截、后台任务未响应 polite terminate，在 1.5s 后升级为 SIGTERM，2.5s 后强制回收
+        let targetPid = pid
+        let targetApp = app
+        let appName = app.localizedName ?? "pid \(pid)"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            guard !targetApp.isTerminated else { return }
+            runtimeLog("[AutoQuit] App \(appName) did not exit after 1.5s; escalating with SIGTERM.")
+            _ = kill(targetPid, SIGTERM)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                guard !targetApp.isTerminated else { return }
+                runtimeLog("[AutoQuit] App \(appName) still alive after 2.5s; forcing termination.")
+                targetApp.forceTerminate()
+            }
+        }
     }
 
-    /// 伴生 Helper 联动退出（含军师加固点 3：APFS Unicode NFC 规范化前缀校验）
+    /// 伴生 Helper 联动退出（含军师加固点 3：APFS Unicode NFC 规范化前缀校验与内核进程表深潜扫描）
     private func terminateCompanionHelpers(for mainApp: NSRunningApplication) {
         guard let rawMainBundlePath = mainApp.bundleURL?.path else { return }
         let mainBundlePath = rawMainBundlePath.precomposedStringWithCanonicalMapping
@@ -1107,6 +1142,7 @@ public final class AutoQuitManager {
 
         guard !companions.isEmpty || terminateInBundle else { return }
 
+        // 1. 终止 NSWorkspace 注册的常规 GUI 伴生进程
         for running in NSWorkspace.shared.runningApplications {
             guard running.processIdentifier != mainApp.processIdentifier, !running.isTerminated else { continue }
             guard let rawHelperPath = running.bundleURL?.path else { continue }
@@ -1119,6 +1155,27 @@ public final class AutoQuitManager {
             if (isExplicitCompanion || terminateInBundle) && isPhysicallyInsideBundle {
                 runtimeLog("[AutoQuit] Terminating companion helper \(running.localizedName ?? helperBid) (pid: \(running.processIdentifier)) inside \(mainApp.localizedName ?? mainBid)")
                 running.terminate()
+            }
+        }
+
+        // 2. 终止 Bundle 内部所有非 GUI / daemon / 辅助二进制守护进程（如 aitrust-server, netdisk_service）
+        if terminateInBundle {
+            let bundlePrefix = mainBundlePath.hasSuffix("/") ? mainBundlePath : (mainBundlePath + "/")
+            var pids = [pid_t](repeating: 0, count: 2048)
+            let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * pids.count))
+            let count = Int(bytes) / MemoryLayout<pid_t>.size
+            var pathBuffer = [CChar](repeating: 0, count: 4096)
+            for i in 0..<count {
+                let p = pids[i]
+                guard p > 0, p != mainApp.processIdentifier, p != ProcessInfo.processInfo.processIdentifier else { continue }
+                let len = proc_pidpath(p, &pathBuffer, UInt32(pathBuffer.count))
+                if len > 0 {
+                    let path = String(cString: pathBuffer).precomposedStringWithCanonicalMapping
+                    if path.hasPrefix(bundlePrefix + "Contents/") {
+                        runtimeLog("[AutoQuit] Terminating non-GUI daemon helper in bundle (pid: \(p), path: \(path))")
+                        _ = kill(p, SIGTERM)
+                    }
+                }
             }
         }
     }

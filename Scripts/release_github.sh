@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.48}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-74}"
+VERSION="${ATOOLS_VERSION:-1.3.52}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-78}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,24 +114,26 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 彻底修复 AuraPane 与荐片/UU远程关窗退出缺陷与失焦穿透
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 彻底攻克名单内多软件关窗退出异常与伴生进程假死残留
 
-### 🚀 核心缺陷修复与离屏因果律加固
-1. **AppKit orderOut: 失焦门禁穿透与因果确立**：
-   - 彻底修复 AuraPane（\`com.dochi.AuraPane\`）等 AppKit/SwiftUI 应用采用 \`[NSWindow orderOut:]\` 隐藏视窗而不触发 \`kAXUIElementDestroyedNotification\`、且在关窗后自然失去焦点导致 \`fallbackPoll\` 门禁死锁的缺陷；
-   - 在失焦处理（\`handleAppDeactivated\`）中深度感知零在屏窗口状态（\`wsOnscreen == 0 && axCount == 0\`），在排除多 Space 切换瞬态的前提下主动刷新关窗因果律，打破失焦退出死锁；
-   - 更新 AuraPane 的 Bundle ID 规则映射并开启离屏底板全量清洗（\`cleanAllOffscreenWindows\`）。
-2. **Electron 架构隐藏离屏图层清洗与 Helper 伴生进程协同退出**：
-   - 彻底修复荐片（\`com.jianpian.macos\`）及同架构网易 UU远程（\`com.netease.uuremote\`）点击红叉关窗时调用 Electron \`win.hide()\` 导致底层 WindowServer 残留 900x600 离屏图层、触发 \`isStandardWindowCandidate\` 保护门禁导致退出倒计时被强行中止的缺陷；
-   - 新增专用 Quirks 规则，开启 \`cleanAllOffscreenWindows\` 与 \`terminateHelpersInBundle\`，确保离屏隐藏视窗被精准剔除，并协同清理包内所有 Helper 子进程。
-3. **多 Space 跨屏与全屏物理视窗绝对保活**：
-   - 坚决维持因果律严格门禁 \`((wsCount ?? 0) == 0)\`，结合 \`isNativeFullscreenSize\` 物理全屏识别，全屏模式在跨 Space 切出后享有绝对免死金牌，杜绝任何形式的误杀。
+### 🚀 核心缺陷修复与系统性治理
+1. **Layer > 0 桌面悬浮窗/小挂件精准过滤（百度网盘等）**：
+   - 彻底修复百度网盘常驻 Layer 3 悬浮挂件（\`200x80\`）在主窗口关闭后被误计为有效主业务视窗（\`WS=1\`）导致触发防误杀保护而中止退出的缺陷；
+   - \`isStandardWindowCandidate\` 引入层级感知机制，对于 \`layer > 0\` 的悬浮窗设立主视窗级尺寸门槛（\`>= 360x240\`），精准排除常驻小挂件。
+2. **AXObserver 降级（-25204）应用的失焦因果律死锁（Tgent/WPS等）**：
+   - 彻底修复无法注册系统级 AX 关窗通知的应用在关窗失焦时，被防误杀门禁误判为“用户通过 Cmd+Tab 切换应用”而静默取消退出的死锁缺陷；
+   - 在 \`fallbackPoll\` 与 \`evaluateAppWindows\` 中放行降级应用并确立在屏零窗因果律，彻底打通退出调度链路。
+3. **内核级进程表深潜扫描联动清理与超时强制退出保底**：
+   - 引入内核 \`proc_listpids\` + \`proc_pidpath\` 深度遍历，协同清理 Bundle 内部所有非 GUI 守护子进程（如 \`aitrust-server\`、\`netdisk_service\`、\`chrome_crashpad_handler\` 等）；
+   - 引入 1.5s 礼貌退出超时保底机制（\`terminate()\` -> \`SIGTERM\` -> \`forceTerminate()\`），坚决杜绝假死滞留。
+4. **疑难及多框架应用 Quirks 全量收录**：
+   - 新增收录 Tgent、dstaff、DeepSeek Harness、aTrust、TscanPlus、Otty、思源笔记等专属规则，并升级百度网盘与 OPPO 互联规则。
 
 ---
 
 ### 🛡️ 架构质量与自动化诊断验证
 - 全套 19 大项综合诊断套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过；
-- 新增针对 AuraPane、荐片与 UU远程的离屏清洗、在屏绝对保活与标准业务候选人过滤的 11 项专用回归断言。"
+- 新增针对 Layer 3 挂件过滤、Tgent 伴生联动、百度网盘同步空间清洗及全部新增规则的专用回归断言。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then

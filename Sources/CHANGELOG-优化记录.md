@@ -4850,3 +4850,152 @@
 
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test`，全套 19 大项自动化测试 **100% 全部 PASSED 通过（0 失败，0 警告）**。
+
+---
+
+### [2026-11-10] 第 141 项：彻底修复 ZCode 关窗退出失败缺陷（Electron 离屏驻留视窗清洗与 Helper 伴生子进程联动退出）(v1.3.50, build 76)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：检查 zcode 为什么退出失败。
+  - **深度技术归因复盘**：
+    1. **AX 零窗与 WindowServer 离屏底板误判死锁**：
+       - 排查 ATools 运行时追踪日志（`~/Library/Logs/ATools/runtime.log`），确证每次关闭 ZCode 窗口时均发生调度退回死锁：
+         `[AutoQuit] Last window closed for ZCode; quitting in 1.0s.`
+         `[AutoQuit] Aborted quit for ZCode: app is active and has window (AX=0, WS=1).`
+       - ZCode（`dev.zcode.app`，所有者名称 `"ZCode"`）基于 Electron/Chromium 多进程架构构建。在用户点击红叉或按快捷键关闭其最后一个主窗口时，AX 辅助功能树立即返回空窗口集合（`AX=0`），从而触发 ATools 1.0 秒退出倒计时；
+       - 但在 WindowServer 层面，ZCode 的 WebContents/BrowserWindow 会进入离屏隐藏状态（`isOnScreen == false`），在 Layer 0 上遗留大尺寸隐藏底板（尺寸如 `1512x870`、`500x500` 等）；
+       - 由于 `AutoQuitQuirks.builtinRules` 原先未收录 ZCode，其专用 Quirks 规则缺失：
+         * 通用 AppKit 幽灵匹配规则要求窗口标题精准与应用名称相同（`lower == lowerOn`），而 ZCode 在带工程或工作区时标题为工作区或文件名，不命中同名规则；
+         * 离屏无名/通用底板规则仅收录有限微元，大尺寸离屏视窗在未经 App 专属规则清洗的情况下，直接流入 `isStandardWindowCandidate` 兜底规则 `(width >= 400 && height >= 260)` 并被判定为有效候选视窗；
+         * 导致 1.0 秒后 `executePendingQuit` 执行终审时，WindowServer 返回 `wsCount = 1`；
+       - 此时因用户关窗后 ZCode 仍处于前台激活态（`app.isActive == true`），命中 `AutoQuitManager.swift:1047` 的主动防误杀保护屏障，硬性中止退出（`Aborted quit`），导致 ZCode 无法退出。
+    2. **Electron 伴生 Helper 进程残留隐患**：
+       - ZCode 运行期在 `/Applications/ZCode.app/Contents/Frameworks/` 下启动了多个子进程（`ZCode Helper`、`ZCode Helper (Renderer)`、`ZCode Helper (GPU)`、`zcode-cli` 等）；
+       - 缺少 `terminateHelpersInBundle: true` 配置会导致即使主进程退出，相关后台伴生进程可能遗留为孤儿进程。
+
+- **代码级加固与修复方案（全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **ZCode 规则全量入库**：在 `builtinRules` 中新增 `id: "zcode"` 专属规则，覆盖 `bundleIDPrefixes: ["dev.zcode.app", "dev.zcode."]` 与 `ownerNameKeywords: ["zcode"]`；
+     - **开启离屏清洗与伴生联动**：配置 `cleanAllOffscreenWindows: true` 与 `terminateHelpersInBundle: true`。在用户关窗且无真实在屏视窗时，全量清洗其离屏 Electron 残留底板，使其 `wsCount` 真实归零，并在退出时联动清理 Bundle 内全部 Helper 子进程；
+     - **全屏 Space 保活天堑**：依托 `isNativeFullscreenSize` 核心屏障，处于全屏 Space 的有效业务视窗 100% 豁免清洗，多 Space 穿梭不误杀。
+  2. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 扩充 7 项针对 ZCode 的自动化回归测试断言：
+       * `ZCode rule must have cleanAllOffscreenWindows enabled`
+       * `ZCode rule must have terminateHelpersInBundle enabled`
+       * `ZCode offscreen main window must be cleaned`
+       * `ZCode offscreen workspace window must be cleaned`
+       * `ZCode onscreen window must never be cleaned`
+       * `Offscreen ZCode window must not be standard candidate`
+       * `Onscreen ZCode window must remain standard candidate`。
+  3. 版本号自增更新至 `v1.3.50 (build 76)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **在屏视窗 100% 绝对保护**：只要 ZCode 拥有任意在屏窗口（`isOnScreen == true`），Quirks 引擎在 Step 4 立即短路返回 `false`，标准候选判定恒为 `true`，坚决不被误杀；
+  - **多 Space 跨屏保活无损**：多 Space 切换时无关窗事件触发，`fallbackPoll` 与 `handleAppDeactivated` 坚固防线完整有效；
+  - **测试断言兼容**：现有 19 大项自动化回归测试套件 100% 全部 PASSED 通过。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**19 大项自动化测试套件全部 PASSED 通过（0 失败，0 警告）**。
+
+---
+
+### [2026-11-10] 第 142 项：彻底攻克腾讯会议与 ArtCraft Launcher 关窗退出异常（引擎底板离屏清洗、托盘隐藏行为治理与全量回归验证）(v1.3.51, build 77)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：检查腾讯会议、ArtCraft Launcher为什么退出失败。
+  - **深度技术归因复盘**：
+    1. **腾讯会议（`com.tencent.meeting`）离屏底板与中英文双名称死锁**：
+       - 排查 ATools 运行日志与系统 WindowServer 视窗树：
+         * 用户点击关闭腾讯会议主视窗后，AX 辅助功能树视窗数已如期清零（`AX count: 0`），并正确发起 `[AutoQuit] Evaluate request for 腾讯会议 (reason: lastWindowClosed, delay: 0.0s)`；
+         * 但在 WindowServer 层面，腾讯会议常驻一个 Layer 0 离屏视频/画布底板：`WS #33943: name="TencentMeeting", size=1280x720, layer=0, onScreen=false`；
+         * 腾讯会议的进程所有者名称为中文 `"腾讯会议"`，但底层引擎窗口的名称为英文 `"TencentMeeting"`；
+         * `AutoQuitQuirks.isGhostWindow` 在 Step 6 检查同名规则时，`lower == lowerOn`（`"tencentmeeting" == "腾讯会议"`）匹配失败；由于缺乏 AppQuirkRule 专属收录，其 `1280x720` 的大尺寸视窗直接流入 `isStandardWindowCandidate` 兜底规则 `(width >= 400 && height >= 260)` 并被计入有效视窗；
+         * 导致 ATools 在 `evaluateAppWindows` 连续重试 5 次后，始终检测到 `wsCount == 1`，判定为应用依然持有窗口，放弃执行自动退出。
+    2. **ArtCraft Launcher（`ai.storyteller.artcraft-launcher`）Close to Tray 拦截与离屏底板双重机制**：
+       - 深度分析 ArtCraft Launcher 的配置与运行行为（读取 `~/Library/Application Support/ai.storyteller.artcraft-launcher/app.ron`）：
+         * 默认启用了配置项 `close_to_tray: true`；
+         * 用户点击窗口左上角红叉时，ArtCraft Launcher 并未真正销毁窗口或触发关窗流程，而是调用底层 `[NSApp hide:nil]` 将应用最小化/隐藏至托盘菜单；
+         * 此时操作系统不分发 `kAXWindowClosedNotification`，AX 窗口树中窗口依然存在（`AX count: 1`），且应用状态转为 `app.isHidden == true`；
+         * ATools 为保护用户通过快捷键 `Cmd+H` 隐藏应用的使用习惯，在所有巡检路径严格设置了屏障 `guard !app.isHidden || axCount == 0`，坚决不误杀隐藏应用；
+         * 此外，即使未来用户在设置中关闭「Close to Tray」或通过菜单关闭窗口，ArtCraft Launcher 在 WindowServer 层依然残留有 `1120x760` 与 `500x500` 的离屏底板，若无专属规则同样会遭遇 `WS=1` 退出阻塞。
+
+- **代码级加固与修复方案（全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **新增 `tencent_meeting` 专属 Quirks 规则**：
+       * 绑定 `bundleIDPrefixes: ["com.tencent.meeting"]`；
+       * 覆盖中英文关键字映射 `ownerNameKeywords: ["tencentmeeting", "腾讯会议", "wemeet"]`；
+       * 启用 `cleanAllOffscreenWindows: true` 与 `terminateHelpersInBundle: true`，在无在屏视窗时无死角清洗 `1280x720` 离屏底板，并确保彻底联动清理伴生进程；
+     - **新增 `artcraft_launcher` 专属 Quirks 规则**：
+       * 绑定 `bundleIDPrefixes: ["ai.storyteller.artcraft-launcher"]`；
+       * 覆盖 `ownerNameKeywords: ["artcraft launcher", "artcraft"]`；
+       * 启用 `cleanAllOffscreenWindows: true` 与 `terminateHelpersInBundle: true`，彻底消除 `1120x760` 离屏幽灵底板对关窗退出的拦截。
+  2. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 扩充 12 项针对腾讯会议与 ArtCraft Launcher 的全量自动化回归测试断言：
+       * `TencentMeeting rule must have cleanAllOffscreenWindows enabled`
+       * `TencentMeeting rule must have terminateHelpersInBundle enabled`
+       * `TencentMeeting offscreen main panel must be cleaned`
+       * `TencentMeeting offscreen engine window must be cleaned`
+       * `TencentMeeting onscreen window must never be cleaned`
+       * `Offscreen TencentMeeting window must not be standard candidate`
+       * `Onscreen TencentMeeting window must remain standard candidate`
+       * `ArtCraft Launcher rule must have cleanAllOffscreenWindows enabled`
+       * `ArtCraft Launcher rule must have terminateHelpersInBundle enabled`
+       * `ArtCraft Launcher offscreen window must be cleaned`
+       * `ArtCraft Launcher onscreen window must never be cleaned`
+       * `Offscreen ArtCraft Launcher window must not be standard candidate`
+       * `Onscreen ArtCraft Launcher window must remain standard candidate`。
+  3. 版本号自增更新至 `v1.3.51 (build 77)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **在屏窗口零破坏**：只要腾讯会议处于开会状态（`isOnScreen == true`）或 ArtCraft Launcher 窗口正常显示，WindowServer 权威在屏判定短路保护，绝对不触发自动退出；
+  - **托盘常驻与 Cmd+H 语义隔离**：严格保持 ATools 对隐藏状态（`isHidden`）的免杀保护原则，尊重用户按 Cmd+H 暂时隐藏窗口的意图；针对托盘常驻类应用，若需点叉即完全退出，可在其自身偏好设置中关闭「最小化到托盘/Close to Tray」，关闭后即可完美触发 ATools 自动秒退；
+  - **跨 Space 保活一致性**：多桌面切换及全屏视频会议时，完全依托 `isNativeFullscreenSize` 与非活跃 Space 豁免防线，保障会议永不中断。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项自动化测试套件全部 100% PASSED 通过（0 失败，0 警告）**。
+
+---
+
+### [2026-11-10] 第 143 项：全域排查与彻底解决名单内多应用关窗退出失败缺陷（Layer 3 悬浮挂件过滤、AX 降级失焦死锁攻克、伴生守护内核级深度回收与保底强制退出）(v1.3.52, build 78)
+
+- **故障背景与统一排查归因**：
+  - **用户反馈**：tgent 、百度网盘、夸克也退出失败，这么多软件同时退出失败，请统一排查，为什么在名单内但是都失败了，检查其他软件是不是也这样。
+  - **全域排查与技术根因定位**：
+    1. **Layer > 0 桌面悬浮窗/小挂件误判为有效主窗口（以百度网盘为代表）**：
+       - 百度网盘等软件常驻一个桌面悬浮挂件（位于 `layer = 3`, 尺寸如 `200x80`, `onScreen = true`）；
+       - ATools 原有逻辑在 `windowServerStandardWindowCount` 中对 `(0...15)` 层级一视同仁，且在屏判定阈值为 `(width > 120 && height > 70)`；
+       - 当用户关闭百度网盘 Layer 0 主视窗后，AX 视窗清零（`AX=0`），但 WindowServer 依然抓取到 Layer 3 的悬浮挂件（`200x80`），导致 `wsCount == 1`；终审阶段因 `AX=0, WS=1` 触发防误杀保护，造成退出死锁（`Aborted quit for 百度网盘`）。
+    2. **AXObserver 降级（-25204）应用的失焦因果律死锁（以 Tgent 为代表）**：
+       - Tgent、WPS、以及部分基于非标准 Cocoa 架构构建的应用无法向系统注册 AXObserver 通知（报错 `-25204`），被标记为 `isAXObserverDegraded`；
+       - 由于无法收到 `kAXWindowClosedNotification`，`entry.lastCloseEventDate` 始终保持 `.distantPast`；
+       - 用户关闭窗口后应用自然失去焦点（`!app.isActive`），`evaluateAppWindows` 命中屏障 `if !app.isActive && lastActiveDate < 2.0 && !recentlyHadCloseEvent`，误将用户关窗失焦判定为「用户通过 Cmd+Tab 切换到了其他应用」，静默取消退出；
+       - 且此前在 `fallbackPoll` 中移除了降级应用的轮询入队资格，导致降级应用关窗后被完全遗忘。
+    3. **伴生守护子进程残留与礼貌退出无响应假死**：
+       - Tgent 的底层安全进程（如 `/Applications/Tgent.app/Contents/Resources/extraResources/darwin/aitrust-server`）与百度网盘的 `netdisk_service` 并非标准的 `.app` GUI 包，`NSWorkspace.shared.runningApplications` 完全无法检索，主应用退出后留下孤儿守护进程；
+       - 部分应用在收到 `app.terminate()`（AppleEvent）时因托盘常驻或后台传输忽略退出事件，而 ATools 原先在 `app.terminate()` 后缺乏超时强制回收机制，导致应用长期保持运行。
+    4. **疑难及自建应用规则缺失**：
+       - 用户名单中的 Tgent、dstaff、DeepSeek Harness、aTrust、TscanPlus、Otty、思源笔记等原先缺乏专属 Quirks 规则，离屏残留底板（如 Tgent 920x600 视窗）未能自动清洗。
+
+- **代码级加固与修复方案（全面落地）**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **Layer > 0 桌面悬浮挂件过滤**：`isStandardWindowCandidate` 新增 `layer: Int = 0` 参数，当 `isOnScreen == true && layer > 0`（如 Layer 3 悬浮窗、挂件等）时，必须达到标准主视窗尺寸门槛（`width >= 360 && height >= 240`），将类似百度网盘 `200x80` 的常驻悬浮挂件权威排除在有效主视窗候选之外；
+     - **解开失焦与保底轮询死锁**：
+       * 在 `fallbackPoll` 中对 `entry.isAXObserverDegraded` 应用重新放行评估；
+       * 在 `evaluateAppWindows` 中增加 `&& !entrySnapshot.isAXObserverDegraded` 豁免，并在检测到在屏实体视窗确已归零（`wsOnscreen == 0 && (axCount == 0 || axCount == nil)`）时，原子刷新 `lastCloseEventDate = Date()`，确立因果律；
+     - **内核级进程表深潜扫描联动清理**：`terminateCompanionHelpers` 引入内核 `proc_listpids` + `proc_pidpath` 深度遍历，凡位于应用 Bundle 的 `Contents/` 目录内的非 GUI 守护进程（如 `aitrust-server`），统一发送 `SIGTERM` 协同回收；
+     - **礼貌退出超时保底机制**：调用 `app.terminate()` 后启动 1.5 秒异步保底，若进程未退出则升级为 `kill(pid, SIGTERM)`，并在 2.5 秒后保底调用 `forceTerminate()` 坚决回收。
+  2. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - 新增收录 `tgent`、`dstaff`、`deepseek_harness`、`atrust`、`tscanplus`、`otty`、`siyuan` 7 大专属 Quirks 规则，全量开启离屏底板清洗与伴生清理；
+     - 升级 `baidu_netdisk` 规则，收录 `同步空间` 离屏标题与 `200x80` 悬浮尺寸；
+     - 升级 `oppo_connect` 规则，全量开启 `cleanAllOffscreenWindows` 与 `terminateHelpersInBundle`。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 扩充 18 项针对 Layer 3 悬浮窗过滤、Tgent 伴生联动、百度网盘同步空间清洗及全部新增规则的自动化回归测试断言。
+  4. 版本号自增更新至 `v1.3.52 (build 78)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **在屏真正主业务窗口 100% 保活**：Layer 0 文档窗口及 Layer 3 大型模态对话框（>= 360x240）依然严格计为标准候选，绝不误杀；
+  - **单测源兼容**：`isStandardWindowCandidate` 采用参数默认值 `layer: Int = 0`，现有全部 19 大项回归测试无需更改原有调用点；
+  - **系统级防假死保证**：通过双阶升级退出（`terminate` -> `SIGTERM` -> `forceTerminate`），彻底杜绝名单内应用因托盘拦截或后台僵死导致退不掉的问题。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项自动化测试套件全部 100% PASSED 通过（0 失败，0 警告）**。

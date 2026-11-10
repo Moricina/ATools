@@ -2146,6 +2146,57 @@ public enum DiagnosticSuite {
         TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.jianpian.macos", ownerName: "荐片", rawName: "荐片播放器", width: 900, height: 600, isOnScreen: false) == false, "Offscreen JianPian window must not be standard candidate")
         TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.jianpian.macos", ownerName: "荐片", rawName: "荐片播放器", width: 900, height: 600, isOnScreen: true) == true, "Onscreen JianPian window must remain standard candidate")
 
+        // 验证 ZCode 离屏清洗、Helper 联动与保活机制
+        TestAssertions.expect(quirks.matchRule(bundleID: "dev.zcode.app", ownerName: "ZCode")?.cleanAllOffscreenWindows == true, "ZCode rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "dev.zcode.app", ownerName: "ZCode")?.terminateHelpersInBundle == true, "ZCode rule must have terminateHelpersInBundle enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "dev.zcode.app", ownerName: "ZCode", title: "ZCode", width: 1512, height: 870, isOnScreen: false) == true, "ZCode offscreen main window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "dev.zcode.app", ownerName: "ZCode", title: "atools — ZCode", width: 1512, height: 870, isOnScreen: false) == true, "ZCode offscreen workspace window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "dev.zcode.app", ownerName: "ZCode", title: "atools — ZCode", width: 1512, height: 870, isOnScreen: true) == false, "ZCode onscreen window must never be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "dev.zcode.app", ownerName: "ZCode", rawName: "atools — ZCode", width: 1512, height: 870, isOnScreen: false) == false, "Offscreen ZCode window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "dev.zcode.app", ownerName: "ZCode", rawName: "atools — ZCode", width: 1512, height: 870, isOnScreen: true) == true, "Onscreen ZCode window must remain standard candidate")
+
+        // 验证 腾讯会议 离屏清洗、Helper 联动与保活机制
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.tencent.meeting", ownerName: "腾讯会议")?.cleanAllOffscreenWindows == true, "TencentMeeting rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.tencent.meeting", ownerName: "腾讯会议")?.terminateHelpersInBundle == true, "TencentMeeting rule must have terminateHelpersInBundle enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.meeting", ownerName: "腾讯会议", title: "腾讯会议", width: 720, height: 480, isOnScreen: false) == true, "TencentMeeting offscreen main panel must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.meeting", ownerName: "腾讯会议", title: "TencentMeeting", width: 1280, height: 720, isOnScreen: false) == true, "TencentMeeting offscreen engine window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.tencent.meeting", ownerName: "腾讯会议", title: "腾讯会议", width: 720, height: 480, isOnScreen: true) == false, "TencentMeeting onscreen window must never be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.tencent.meeting", ownerName: "腾讯会议", rawName: "TencentMeeting", width: 1280, height: 720, isOnScreen: false) == false, "Offscreen TencentMeeting window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.tencent.meeting", ownerName: "腾讯会议", rawName: "腾讯会议", width: 720, height: 480, isOnScreen: true) == true, "Onscreen TencentMeeting window must remain standard candidate")
+
+        // 验证 ArtCraft Launcher 离屏清洗与保活机制
+        TestAssertions.expect(quirks.matchRule(bundleID: "ai.storyteller.artcraft-launcher", ownerName: "ArtCraft Launcher")?.cleanAllOffscreenWindows == true, "ArtCraft Launcher rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "ai.storyteller.artcraft-launcher", ownerName: "ArtCraft Launcher")?.terminateHelpersInBundle == true, "ArtCraft Launcher rule must have terminateHelpersInBundle enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "ai.storyteller.artcraft-launcher", ownerName: "ArtCraft Launcher", title: "ArtCraft Launcher", width: 1120, height: 760, isOnScreen: false) == true, "ArtCraft Launcher offscreen window must be cleaned")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "ai.storyteller.artcraft-launcher", ownerName: "ArtCraft Launcher", title: "ArtCraft Launcher", width: 1120, height: 760, isOnScreen: true) == false, "ArtCraft Launcher onscreen window must never be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "ai.storyteller.artcraft-launcher", ownerName: "ArtCraft Launcher", rawName: "ArtCraft Launcher", width: 1120, height: 760, isOnScreen: false) == false, "Offscreen ArtCraft Launcher window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "ai.storyteller.artcraft-launcher", ownerName: "ArtCraft Launcher", rawName: "ArtCraft Launcher", width: 1120, height: 760, isOnScreen: true) == true, "Onscreen ArtCraft Launcher window must remain standard candidate")
+
+        // 验证 Layer > 0 桌面悬浮窗/小挂件过滤机制（如百度网盘 200x80 悬浮球）
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.baidu.netdisk", ownerName: "百度网盘", rawName: "百度网盘", width: 200, height: 80, isOnScreen: true, layer: 3) == false, "Layer 3 small floating widget must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.baidu.netdisk", ownerName: "百度网盘", rawName: "百度网盘", width: 200, height: 80, isOnScreen: true, layer: 0) == true, "Layer 0 named window must remain standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.baidu.netdisk", ownerName: "百度网盘", rawName: "百度网盘", width: 600, height: 400, isOnScreen: true, layer: 3) == true, "Layer 3 large window must remain standard candidate")
+
+        // 验证 Tgent 离屏清洗与伴生进程联动机制
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.dbappsecurity.sdpTgent", ownerName: "Tgent")?.cleanAllOffscreenWindows == true, "Tgent rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.dbappsecurity.sdpTgent", ownerName: "Tgent")?.terminateHelpersInBundle == true, "Tgent rule must have terminateHelpersInBundle enabled")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.dbappsecurity.sdpTgent", ownerName: "Tgent", rawName: "Tgent", width: 920, height: 600, isOnScreen: false, layer: 0) == false, "Offscreen Tgent window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.dbappsecurity.sdpTgent", ownerName: "Tgent", rawName: "Tgent", width: 920, height: 600, isOnScreen: true, layer: 0) == true, "Onscreen Tgent window must remain standard candidate")
+
+        // 验证 百度网盘 离屏异名视窗（同步空间）清洗机制
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.baidu.netdisk", ownerName: "百度网盘", title: "同步空间", width: 710, height: 680, isOnScreen: false) == true, "BaiduNetdisk offscreen sync space window must be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.baidu.netdisk", ownerName: "百度网盘", rawName: "同步空间", width: 710, height: 680, isOnScreen: false, layer: 0) == false, "Offscreen BaiduNetdisk sync space window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.baidu.netdisk", ownerName: "百度网盘", rawName: "同步空间", width: 710, height: 680, isOnScreen: true, layer: 0) == true, "Onscreen BaiduNetdisk sync space window must remain standard candidate")
+
+        // 验证 常见名单内疑难应用（dstaff、DeepSeek、aTrust、TscanPlus、Otty、思源、OPPO互联）Quirks 纳管
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.dbappsecurity.dstaff", ownerName: "dstaff")?.cleanAllOffscreenWindows == true, "dstaff rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.deepseek.dsh", ownerName: "DeepSeek Harness")?.cleanAllOffscreenWindows == true, "DeepSeek Harness rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.sangfor.tray", ownerName: "aTrust")?.cleanAllOffscreenWindows == true, "aTrust rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.wails.tscanplus", ownerName: "TscanPlus")?.cleanAllOffscreenWindows == true, "TscanPlus rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "io.appmakes.otty", ownerName: "Otty")?.cleanAllOffscreenWindows == true, "Otty rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "org.b3log.siyuan", ownerName: "思源笔记")?.cleanAllOffscreenWindows == true, "SiYuan rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.oplus.devicespace", ownerName: "OPPO 互联")?.cleanAllOffscreenWindows == true, "OPPO Connect rule must have cleanAllOffscreenWindows enabled")
+
         // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量
         let trace = AutoQuitDecisionTrace.shared
         trace.clear()
