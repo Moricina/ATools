@@ -345,6 +345,27 @@ public final class AutoQuitManager {
         return count
     }
 
+    /// WindowServer 层面全屏物理视窗数（Layer 0...15，严格匹配当前连接屏幕物理全屏尺寸，用于跨 Space 全屏保活判断）
+    public static func windowServerFullscreenWindowCount(for pid: pid_t) -> Int {
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return 0
+        }
+        var count = 0
+        for w in list {
+            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
+            guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
+            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
+                  let width = bounds["Width"] as? Double,
+                  let height = bounds["Height"] as? Double else { continue }
+            if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
+                count += 1
+            }
+        }
+        return count
+    }
+
     /// 实例级别零窗确认：结合当前进程的 AX 查询与 WindowServer 计数
     public static func isConfirmedZeroWindows(pid: pid_t, axCount: Int?, bundleID: String? = nil) -> Bool {
         let wsCount = windowServerStandardWindowCount(for: pid, bundleID: bundleID)
@@ -789,6 +810,7 @@ public final class AutoQuitManager {
 
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
+        let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: pid)
 
         // 当屏幕上实体在屏视窗确已归零且应用此前确有视窗时，确立关窗因果律
         if (wsOnscreen ?? 0) == 0 && (axCount == 0 || axCount == nil) {
@@ -800,7 +822,7 @@ public final class AutoQuitManager {
             os_unfair_lock_unlock(&lock)
         }
 
-        let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0)
+        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0)
 
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
@@ -1055,7 +1077,8 @@ public final class AutoQuitManager {
         let axCount = axWindows(of: entrySnapshot.axApp)?.count
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
-        let isZeroByCausality = (axCount == 0) && ((wsCount ?? 0) == 0) && ((wsOnscreen ?? 0) == 0) && recentlyHadCloseEvent
+        let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: pid)
+        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent
 
         if app.isHidden {
             let hadCloseEvent = entrySnapshot.lastCloseEventDate != .distantPast

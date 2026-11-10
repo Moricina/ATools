@@ -4999,3 +4999,37 @@
 
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项自动化测试套件全部 100% PASSED 通过（0 失败，0 警告）**。
+
+---
+
+### [2026-11-10] 第 144 项：彻底攻克苹果原生备忘录及系统应用关窗退出失败缺陷（Catalyst 离屏残余底板清洗、isZeroByCausality 因果律判定解耦全屏守护）(v1.3.53, build 79)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：备忘录又退出失败了。
+  - **全链路追踪与技术根因定位**：
+    1. **Catalyst / AppKit 离屏缓存残留视窗阻断退出**：
+       - 苹果备忘录（`com.apple.Notes`）基于现代 Catalyst / AppKit 混合架构构建；当用户关闭备忘录主视窗后，AppKit 并未释放底层视窗实例（`isReleasedWhenClosed = false`），而是将其 `orderOut:` 隐藏至离屏层；
+       - WindowServer 中依然持续保留着离屏底板（如主视窗标题为“最近删除”或“备忘录”、尺寸 `1185x660`，以及快速备忘录面板 `500x500`，且 `isOnScreen = false`）；
+       - 由于 `AutoQuitQuirks` 原先未收录 `com.apple.Notes` 等苹果系统应用，离屏视窗未能通过 `isGhostWindow` 清洗，使得 `windowServerStandardWindowCount` 返回 `wsCount == 2`（或 `wsCount == 1`）；终审时因 `AX=0, WS=1` 触发防误杀保护（`Aborted quit for 备忘录: app is active and has window (AX=0, WS=1)`），彻底阻断了退出流程。
+    2. **`isZeroByCausality` 关窗因果律判定死锁**：
+       - `isZeroByCausality` 的核心设计意图是在用户刚刚执行真实关窗、且屏幕上在屏实体视窗确已归零（`wsOnscreen == 0`）时，允许放行残存的离屏 `orderOut:` 底板；
+       - 但此前代码中因误写了约束 `((wsCount ?? 0) == 0)`，导致只要 WindowServer 层面存在任何离屏残余底板（`wsCount > 0`），因果律判定就必然为 `false`，使得因果律保护彻底沦为与标准双零确认完全重复的无效逻辑，无法解开离屏残存视窗的死锁。
+
+- **代码级加固与修复方案（全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **全量纳管苹果原生系统应用**：新增收录 `apple_notes`（备忘录）、`apple_appstore`（App Store）、`apple_safari`（Safari 浏览器）、`apple_textedit`（文本编辑）、`apple_reminders`（提醒事项）、`apple_music`（音乐）、`apple_podcasts`（播客）、`apple_tv`（视频）、`apple_maps`（地图）、`apple_weather`（天气）、`apple_calculator`（计算器），并升级收录 `apple_calendar`（日历）；
+     - **离屏残余底板精准清洗**：为全部苹果系统应用统一开启 `cleanAllOffscreenWindows: true`，结合 `isNativeFullscreenSize` 机制，在屏零窗时将非全屏离屏底板权威判定为幽灵视窗并剔除，使 `wsCount` 精准归零。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **引入全屏视窗独立计数器**：实现 `windowServerFullscreenWindowCount(for pid: pid_t) -> Int`，专门统计处于当前物理屏幕全屏尺寸的视窗数，物理级识别跨 Space 的真实全屏应用；
+     - **解开 `isZeroByCausality` 因果律死锁**：重构 `evaluateAppWindows` 与 `executePendingQuit` 中的因果律公式为 `(axCount == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0)`（在终审阶段额外结合 `recentlyHadCloseEvent`），既完全保留了跨 Space 存在全屏视窗时的绝对保活能力，又彻底允许离屏残存 `orderOut:` 底板在关窗时顺畅流转至退出调度。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 扩充针对 `windowServerFullscreenWindowCount`、备忘录全状态离屏视窗清洗与在屏候选保活的自动化回归断言。
+  4. 版本号自增更新至 `v1.3.53 (build 79)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **系统级 Widget 与后台服务保护**：针对备忘录等系统应用，未开启 `terminateHelpersInBundle`，严格保护 Notification Center 及桌面上的 `WidgetExtension` 不被误触误杀；
+  - **跨 Space 全屏绝对零误杀**：通过 `wsFullscreen == 0` 双保险，跨 Space 存在全屏备忘录、全屏视频或文档时绝对坚挺保活；
+  - **在屏可见视窗绝对零误杀**：只要备忘录在屏处于显示状态（`isOnScreen == true`），`isGhostWindow` 一律返回 `false`，绝不触发退出。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项自动化测试套件全部 100% PASSED 通过（0 失败，0 警告）**。

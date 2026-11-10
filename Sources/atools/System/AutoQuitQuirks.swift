@@ -333,9 +333,99 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         AppQuirkRule(
             id: "apple_calendar",
             name: "日历",
-            bundleIDPrefixes: ["com.apple.ical"],
-            ownerNameKeywords: ["calendar", "日历"],
-            offscreenTitles: ["calendar", "日历"]
+            bundleIDPrefixes: ["com.apple.ical", "com.apple.mobilecal", "com.apple.Calendar"],
+            ownerNameKeywords: ["calendar", "日历", "ical"],
+            offscreenTitles: ["calendar", "日历"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_notes",
+            name: "备忘录",
+            bundleIDPrefixes: ["com.apple.Notes"],
+            ownerNameKeywords: ["notes", "备忘录"],
+            offscreenTitles: ["备忘录", "notes", "最近删除", "所有 icloud", "所有icloud", "快速备忘录", "quick note"],
+            ghostSizes: [GhostWindowSize(w: 500, h: 500, tolerance: 30)],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_appstore",
+            name: "App Store",
+            bundleIDPrefixes: ["com.apple.AppStore"],
+            ownerNameKeywords: ["app store", "appstore"],
+            offscreenTitles: ["app store", "appstore", "商店"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_safari",
+            name: "Safari 浏览器",
+            bundleIDPrefixes: ["com.apple.Safari"],
+            ownerNameKeywords: ["safari"],
+            offscreenTitles: ["safari", "start page", "起始页"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_textedit",
+            name: "文本编辑",
+            bundleIDPrefixes: ["com.apple.TextEdit"],
+            ownerNameKeywords: ["textedit", "文本编辑"],
+            offscreenTitles: ["textedit", "文本编辑"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_reminders",
+            name: "提醒事项",
+            bundleIDPrefixes: ["com.apple.reminders"],
+            ownerNameKeywords: ["reminders", "提醒事项"],
+            offscreenTitles: ["reminders", "提醒事项"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_music",
+            name: "音乐",
+            bundleIDPrefixes: ["com.apple.Music"],
+            ownerNameKeywords: ["music", "音乐"],
+            offscreenTitles: ["music", "音乐", "mini player", "迷你播放程序"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_podcasts",
+            name: "播客",
+            bundleIDPrefixes: ["com.apple.podcasts"],
+            ownerNameKeywords: ["podcasts", "播客"],
+            offscreenTitles: ["podcasts", "播客", "mini player", "迷你播放程序"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_tv",
+            name: "视频",
+            bundleIDPrefixes: ["com.apple.TV"],
+            ownerNameKeywords: ["tv", "视频"],
+            offscreenTitles: ["tv", "视频"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_maps",
+            name: "地图",
+            bundleIDPrefixes: ["com.apple.Maps"],
+            ownerNameKeywords: ["maps", "地图"],
+            offscreenTitles: ["maps", "地图"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_weather",
+            name: "天气",
+            bundleIDPrefixes: ["com.apple.weather"],
+            ownerNameKeywords: ["weather", "天气"],
+            offscreenTitles: ["weather", "天气"],
+            cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "apple_calculator",
+            name: "计算器",
+            bundleIDPrefixes: ["com.apple.calculator"],
+            ownerNameKeywords: ["calculator", "计算器"],
+            offscreenTitles: ["calculator", "计算器"],
+            cleanAllOffscreenWindows: true
         ),
         AppQuirkRule(
             id: "oppo_connect",

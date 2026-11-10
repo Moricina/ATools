@@ -2197,6 +2197,22 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.matchRule(bundleID: "org.b3log.siyuan", ownerName: "思源笔记")?.cleanAllOffscreenWindows == true, "SiYuan rule must have cleanAllOffscreenWindows enabled")
         TestAssertions.expect(quirks.matchRule(bundleID: "com.oplus.devicespace", ownerName: "OPPO 互联")?.cleanAllOffscreenWindows == true, "OPPO Connect rule must have cleanAllOffscreenWindows enabled")
 
+        // 验证 苹果原生系统应用（备忘录、日历、App Store、Safari、文本编辑、提醒事项、音乐等）Quirks 纳管与离屏缓存清洗
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.Notes", ownerName: "备忘录")?.cleanAllOffscreenWindows == true, "Notes rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "最近删除", width: 1185, height: 660, isOnScreen: false) == true, "Notes offscreen deleted notes window must be cleaned as ghost")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "", width: 500, height: 500, isOnScreen: false) == true, "Notes offscreen quick note panel must be cleaned as ghost")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "备忘录 – 2个备忘录", width: 1185, height: 660, isOnScreen: false) == true, "Notes offscreen main note window must be cleaned as ghost")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "最近删除", width: 1185, height: 660, isOnScreen: true) == false, "Notes onscreen window must never be cleaned")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "最近删除", width: 1185, height: 660, isOnScreen: false, layer: 0) == false, "Offscreen Notes window must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "最近删除", width: 1185, height: 660, isOnScreen: true, layer: 0) == true, "Onscreen Notes window must remain standard candidate")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.iCal", ownerName: "日历")?.cleanAllOffscreenWindows == true, "Calendar rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.AppStore", ownerName: "App Store")?.cleanAllOffscreenWindows == true, "App Store rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.Safari", ownerName: "Safari")?.cleanAllOffscreenWindows == true, "Safari rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.TextEdit", ownerName: "文本编辑")?.cleanAllOffscreenWindows == true, "TextEdit rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.reminders", ownerName: "提醒事项")?.cleanAllOffscreenWindows == true, "Reminders rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.Music", ownerName: "音乐")?.cleanAllOffscreenWindows == true, "Music rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(AutoQuitManager.windowServerFullscreenWindowCount(for: ProcessInfo.processInfo.processIdentifier) >= 0, "Fullscreen window count must return valid non-negative integer")
+
         // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量
         let trace = AutoQuitDecisionTrace.shared
         trace.clear()

@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.52}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-78}"
+VERSION="${ATOOLS_VERSION:-1.3.53}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-79}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,26 +114,21 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 彻底攻克名单内多软件关窗退出异常与伴生进程假死残留
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 彻底修复苹果原生备忘录及系统应用关窗退出失败缺陷
 
 ### 🚀 核心缺陷修复与系统性治理
-1. **Layer > 0 桌面悬浮窗/小挂件精准过滤（百度网盘等）**：
-   - 彻底修复百度网盘常驻 Layer 3 悬浮挂件（\`200x80\`）在主窗口关闭后被误计为有效主业务视窗（\`WS=1\`）导致触发防误杀保护而中止退出的缺陷；
-   - \`isStandardWindowCandidate\` 引入层级感知机制，对于 \`layer > 0\` 的悬浮窗设立主视窗级尺寸门槛（\`>= 360x240\`），精准排除常驻小挂件。
-2. **AXObserver 降级（-25204）应用的失焦因果律死锁（Tgent/WPS等）**：
-   - 彻底修复无法注册系统级 AX 关窗通知的应用在关窗失焦时，被防误杀门禁误判为“用户通过 Cmd+Tab 切换应用”而静默取消退出的死锁缺陷；
-   - 在 \`fallbackPoll\` 与 \`evaluateAppWindows\` 中放行降级应用并确立在屏零窗因果律，彻底打通退出调度链路。
-3. **内核级进程表深潜扫描联动清理与超时强制退出保底**：
-   - 引入内核 \`proc_listpids\` + \`proc_pidpath\` 深度遍历，协同清理 Bundle 内部所有非 GUI 守护子进程（如 \`aitrust-server\`、\`netdisk_service\`、\`chrome_crashpad_handler\` 等）；
-   - 引入 1.5s 礼貌退出超时保底机制（\`terminate()\` -> \`SIGTERM\` -> \`forceTerminate()\`），坚决杜绝假死滞留。
-4. **疑难及多框架应用 Quirks 全量收录**：
-   - 新增收录 Tgent、dstaff、DeepSeek Harness、aTrust、TscanPlus、Otty、思源笔记等专属规则，并升级百度网盘与 OPPO 互联规则。
+1. **全面攻克苹果备忘录（Notes）等原生应用离屏残余视窗阻断退出缺陷**：
+   - 彻底修复系统应用（备忘录、日历、App Store、Safari、文本编辑等）在主视窗关闭后，AppKit/Catalyst 框架保留离屏缓存视窗（如备忘录“最近删除”、500x500 面板等）导致 WindowServer 误报有效视窗（\`WS=1\` 或 \`WS=2\`）从而中止退出的缺陷；
+   - 在 \`AutoQuitQuirks\` 全量纳管苹果原生系统应用（备忘录、日历、App Store、Safari、文本编辑、提醒事项、音乐、播客、视频、地图、天气、计算器），启用 \`cleanAllOffscreenWindows\` 机制精准清除离屏残余底板。
+2. **彻底解开 \`isZeroByCausality\` 关窗因果律判定死锁**：
+   - 修复关窗因果律逻辑中因错误约束 \`((wsCount ?? 0) == 0)\` 导致所有存在离屏残余底板的应用均无法触发因果律退出的逻辑硬伤；
+   - 引入专用物理全屏计数器 \`windowServerFullscreenWindowCount\`，在确保护航跨 Space 实体全屏视窗不被误杀的同时，放行在屏零窗且无全屏视窗的已确认关窗调度链路。
 
 ---
 
 ### 🛡️ 架构质量与自动化诊断验证
 - 全套 19 大项综合诊断套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过；
-- 新增针对 Layer 3 挂件过滤、Tgent 伴生联动、百度网盘同步空间清洗及全部新增规则的专用回归断言。"
+- 新增针对 \`windowServerFullscreenWindowCount\`、苹果备忘录全生命周期离屏清洗与候选视窗断言。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
 if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
