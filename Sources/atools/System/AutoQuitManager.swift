@@ -228,6 +228,45 @@ public final class AutoQuitManager {
         return ax == 0 && ws == 0
     }
 
+    // MARK: - CoreGraphics / SkyLight Space 解析
+
+    private typealias CGSConnectionID = Int32
+    private typealias CGSCopySpacesForWindowsFunc = @convention(c) (CGSConnectionID, Int32, CFArray) -> Unmanaged<CFArray>?
+    private typealias CGSMainConnectionIDFunc = @convention(c) () -> CGSConnectionID
+    private typealias CGSGetActiveSpaceFunc = @convention(c) (CGSConnectionID) -> UInt64
+
+    private static let cgsMainConnectionID: CGSMainConnectionIDFunc? = {
+        guard let sym = dlsym(dlopen(nil, RTLD_LAZY), "CGSMainConnectionID") else { return nil }
+        return unsafeBitCast(sym, to: CGSMainConnectionIDFunc.self)
+    }()
+
+    private static let cgsCopySpacesForWindows: CGSCopySpacesForWindowsFunc? = {
+        guard let sym = dlsym(dlopen(nil, RTLD_LAZY), "CGSCopySpacesForWindows") else { return nil }
+        return unsafeBitCast(sym, to: CGSCopySpacesForWindowsFunc.self)
+    }()
+
+    private static let cgsGetActiveSpace: CGSGetActiveSpaceFunc? = {
+        guard let sym = dlsym(dlopen(nil, RTLD_LAZY), "CGSGetActiveSpace") else { return nil }
+        return unsafeBitCast(sym, to: CGSGetActiveSpaceFunc.self)
+    }()
+
+    /// 获取当前用户正在浏览的活跃 Space ID（安全动态绑定，Fail-Safe 兜底为 0）
+    public static func currentActiveSpace() -> UInt64 {
+        guard let getCid = cgsMainConnectionID, let getActive = cgsGetActiveSpace else { return 0 }
+        let cid = getCid()
+        return getActive(cid)
+    }
+
+    /// 查询窗口所属的用户桌面 Space 列表（安全动态绑定，Fail-Safe 兜底为空数组）
+    public static func windowSpaces(for windowID: CGWindowID) -> [UInt64] {
+        guard windowID > 0 else { return [] }
+        guard let getCid = cgsMainConnectionID, let copySpaces = cgsCopySpacesForWindows else { return [] }
+        let cid = getCid()
+        guard let spacesRef = copySpaces(cid, 0x7, [windowID] as CFArray) else { return [] }
+        let rawArr = (spacesRef.takeRetainedValue() as [AnyObject])
+        return rawArr.compactMap { ($0 as? NSNumber)?.uint64Value }
+    }
+
     /// 判断单个 WindowServer 窗口是否符合标准有效业务窗口（纯函数，供 windowServerStandardWindowCount 与单元测试共用）
     public static func isStandardWindowCandidate(
         bundleID: String?,
@@ -236,7 +275,9 @@ public final class AutoQuitManager {
         width: Double,
         height: Double,
         isOnScreen: Bool,
-        layer: Int = 0
+        layer: Int = 0,
+        spaces: [UInt64] = [],
+        currentSpace: UInt64 = 0
     ) -> Bool {
         let quirks = AutoQuitQuirks.shared
         if quirks.isGhostWindow(
@@ -245,7 +286,9 @@ public final class AutoQuitManager {
             title: rawName,
             width: width,
             height: height,
-            isOnScreen: isOnScreen
+            isOnScreen: isOnScreen,
+            spaces: spaces,
+            currentSpace: currentSpace
         ) {
             return false
         }
@@ -258,16 +301,20 @@ public final class AutoQuitManager {
             }
             return (width > 120 && height > 70) || !rawName.isEmpty
         } else {
-            // 军师审定方案：离屏窗口 (isOnScreen == false) 必须已通过 isGhostWindow 清洗
-            // 1. 特征 A（有明确业务标题）：非空标题且尺寸达到常规视窗 (width > 120 && height > 70)，
-            //    排除极小微元，认定为位于其他 Space、最小化或被遮挡的实体业务窗口；
-            // 2. 特征 B（Chromium 无标题大视窗）：Chromium 多进程架构下部分离屏主窗口标题为空，
-            //    必须满足主视窗级尺寸门槛 (width >= 400 && height >= 260)，且处于标准层 (0...15)；
-            // 3. 特征 C（全屏物理视窗）：处于全屏 Space 的有效业务窗口，无论有无标题，均属标准窗口候选。
+            // 军师审定加固逻辑：离屏窗口 (isOnScreen == false) 必须已通过 isGhostWindow 清洗
+            // 1. 全屏物理放映/视窗（如全屏 Keynote/WPS 放映）：必须具备物理全屏尺寸
             if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
                 return true
             }
-            return (!rawName.isEmpty && width > 120 && height > 70) || (width >= 400 && height >= 260)
+            // 2. 跨 Space 真实业务视窗：必须严格满足是位于其他未激活 Space、且处于标准业务层 (layer == 0)、且尺寸达到业务主窗门槛
+            if AutoQuitQuirks.isWindowOnAnotherSpace(spaces: spaces, currentSpace: currentSpace) {
+                if layer == 0 && width > 120 && height > 70 {
+                    return true
+                }
+            }
+            // 3. 其余一切离屏视窗（包括属于当前 Space 但不可见的底板、脱离 Space 的孤儿底板、以及 Layer > 0 的辅助层）：
+            //    一律返回 false，坚决不计入有效业务视窗！
+            return false
         }
     }
 
@@ -278,6 +325,7 @@ public final class AutoQuitManager {
             return nil
         }
         let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let activeSpace = currentActiveSpace()
 
         var count = 0
         for w in list {
@@ -289,6 +337,8 @@ public final class AutoQuitManager {
                   let height = bounds["Height"] as? Double,
                   width > 40, height > 40 else { continue }
 
+            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? 0
+            let spaces = windowSpaces(for: winID)
             let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
             let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
@@ -300,7 +350,9 @@ public final class AutoQuitManager {
                 width: width,
                 height: height,
                 isOnScreen: isOnScreen,
-                layer: layer
+                layer: layer,
+                spaces: spaces,
+                currentSpace: activeSpace
             ) {
                 count += 1
             }
@@ -326,10 +378,13 @@ public final class AutoQuitManager {
                   let height = bounds["Height"] as? Double,
                   width > 40, height > 40 else { continue }
 
+            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? 0
+            let spaces = windowSpaces(for: winID)
             let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
             let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
 
+            let activeSpace = currentActiveSpace()
             if isOnScreen && isStandardWindowCandidate(
                 bundleID: resolvedBundleID,
                 ownerName: ownerName,
@@ -337,12 +392,62 @@ public final class AutoQuitManager {
                 width: width,
                 height: height,
                 isOnScreen: true,
-                layer: layer
+                layer: layer,
+                spaces: spaces,
+                currentSpace: activeSpace
             ) {
                 count += 1
             }
         }
         return count
+    }
+
+    /// WindowServer 层面跨 Space 活跃视窗数（仅统计明确归属于其他未激活桌面 Space 的标准业务视窗）
+    public static func windowServerAnotherSpaceWindowCount(for pid: pid_t, bundleID: String? = nil, currentSpace: UInt64? = nil) -> Int {
+        let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return 0
+        }
+        let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let activeSpace = currentSpace ?? currentActiveSpace()
+
+        var count = 0
+        for w in list {
+            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
+            guard let layer = w[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
+                  let width = bounds["Width"] as? Double,
+                  let height = bounds["Height"] as? Double,
+                  width > 120, height > 70 else { continue }
+
+            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? 0
+            let spaces = windowSpaces(for: winID)
+            guard AutoQuitQuirks.isWindowOnAnotherSpace(spaces: spaces, currentSpace: activeSpace) else { continue }
+
+            let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
+            let rawName = (w[kCGWindowName as String] as? String) ?? ""
+
+            if isStandardWindowCandidate(
+                bundleID: resolvedBundleID,
+                ownerName: ownerName,
+                rawName: rawName,
+                width: width,
+                height: height,
+                isOnScreen: false,
+                layer: layer,
+                spaces: spaces,
+                currentSpace: activeSpace
+            ) {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// 兼容接口：统计跨 Space 活跃业务视窗数
+    public static func windowServerSpaceWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int {
+        return windowServerAnotherSpaceWindowCount(for: pid, bundleID: bundleID)
     }
 
     /// WindowServer 层面全屏物理视窗数（Layer 0...15，严格匹配当前连接屏幕物理全屏尺寸，用于跨 Space 全屏保活判断）
@@ -599,9 +704,6 @@ public final class AutoQuitManager {
         }
         entry.lastActiveDate = Date()
         let hadClose = Date().timeIntervalSince(entry.lastCloseEventDate) < 3.0
-        let hadWin = entry.hadWindows
-        let axApp = entry.axApp
-        let bundleId = app.bundleIdentifier
         watched[pid] = entry
         os_unfair_lock_unlock(&lock)
 
@@ -619,28 +721,12 @@ public final class AutoQuitManager {
             return
         }
 
-        // 锁外执行轻量在屏检测
-        let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: bundleId)
-        let axList = axWindows(of: axApp)
-        let axCount = axList?.count
-
-        if (wsOnscreen ?? 0) == 0 && (axCount ?? 0) == 0 && hadWin {
-            // 该应用在屏幕上已无任何实体视窗（如 orderOut: 关窗后自然失焦）
-            // 刷新 lastCloseEventDate 确立因果律，打破 fallbackPoll 与失焦门禁死锁
-            os_unfair_lock_lock(&lock)
-            if var current = watched[pid] {
-                current.lastCloseEventDate = Date()
-                watched[pid] = current
-            }
-            os_unfair_lock_unlock(&lock)
-            evaluateAppWindows(pid: pid)
-        } else {
-            // 普通切应用（窗口依然在屏/最小化），严格取消未决退出，杜绝误杀
-            os_unfair_lock_lock(&lock)
-            cancelPendingQuitLocked(pid)
-            cancelPendingRecheckLocked(pid)
-            os_unfair_lock_unlock(&lock)
-        }
+        // 普通切应用失焦：严格取消未决退出，杜绝切应用/切全屏瞬态误杀
+        // 军师加固铁律：失焦转入后台绝对不是关窗事件，严禁在此伪造 lastCloseEventDate！
+        os_unfair_lock_lock(&lock)
+        cancelPendingQuitLocked(pid)
+        cancelPendingRecheckLocked(pid)
+        os_unfair_lock_unlock(&lock)
     }
 
     private func detach(pid: pid_t) {
@@ -811,18 +897,14 @@ public final class AutoQuitManager {
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: pid)
+        let wsAnotherSpace = AutoQuitManager.windowServerAnotherSpaceWindowCount(for: pid, bundleID: app.bundleIdentifier)
 
-        // 当屏幕上实体在屏视窗确已归零且应用此前确有视窗时，确立关窗因果律
-        if (wsOnscreen ?? 0) == 0 && (axCount == 0 || axCount == nil) {
-            os_unfair_lock_lock(&lock)
-            if var current = watched[pid], current.hadWindows {
-                current.lastCloseEventDate = Date()
-                watched[pid] = current
-            }
-            os_unfair_lock_unlock(&lock)
-        }
-
-        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0)
+        // 军师审定因果律公式：
+        // 1. axCount 确切为 0；
+        // 2. wsAnotherSpace 必须为 0（在其他未激活桌面 Space 上已无实体视窗）；
+        // 3. 在屏视窗归零 (wsOnscreen == 0) 且无全屏视窗 (wsFullscreen == 0)；
+        // 4. 且刚刚发生过真实关窗 (recentlyHadCloseEvent)。
+        let isZeroByCausality = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent
 
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
@@ -830,8 +912,8 @@ public final class AutoQuitManager {
 
         // Y-01 & 军师第三层因果律防线：
         // 1. 标准双零确认 (axCount == 0 && wsCount == 0)；
-        // 2. 真实关窗因果律确认：axCount == 0 且在屏窗口 wsOnscreen == 0 且刚刚发生真实关窗 (recentlyHadCloseEvent)。
-        //    说明当前屏幕上已没有任何可见窗口，残存的 wsCount 均为 orderOut: 离屏残余底板，放行调度！
+        // 2. 真实关窗因果律确认：axCount == 0 且在屏窗口 wsOnscreen == 0 且其他 Space 窗口归零 (wsAnotherSpace == 0) 且刚刚发生真实关窗 (recentlyHadCloseEvent)。
+        //    说明当前所有桌面 Space 上已没有任何可见实体窗口，残存的 wsCount 均为脱离 Space 的 orderOut: 离屏残余底板，放行调度！
         if isZeroByCausality || AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) {
             recheckCounts.removeValue(forKey: pid)
             cancelPendingRecheckLocked(pid)
@@ -1078,7 +1160,8 @@ public final class AutoQuitManager {
         let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: pid)
-        let isZeroByCausality = (axCount == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent
+        let wsAnotherSpace = AutoQuitManager.windowServerAnotherSpaceWindowCount(for: pid, bundleID: app.bundleIdentifier)
+        let isZeroByCausality = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent
 
         if app.isHidden {
             let hadCloseEvent = entrySnapshot.lastCloseEventDate != .distantPast

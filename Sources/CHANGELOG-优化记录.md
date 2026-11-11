@@ -5033,3 +5033,215 @@
 
 - **验证与测试结果**：
   - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项自动化测试套件全部 100% PASSED 通过（0 失败，0 警告）**。
+
+
+---
+
+### [2026-11-10] 第 145 项：彻底攻克所有应用切换到全屏应用时被 AutoQuit 误退缺陷（CoreGraphics/SkyLight 原生 Space 归属识别、isGhostWindow 桌面空间最高豁免权、真实关窗因果律解耦）(v1.3.54, build 80)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：备忘录切换到全屏 wps 时自动退出了，我没点红叉，排查所有应用切换到全屏应用时是否都会触发自动退出，若会，请统一修复，方案让子代理审核之后再实施。
+  - **全链路追踪与技术根因定位**：
+    1. **macOS 全屏 Space 机制下 `kCGWindowIsOnscreen == false` 误判**：
+       - 当 WPS 或任意应用进入 macOS 原生全屏时，WindowServer 将其置于专属 Fullscreen Space；
+       - 当用户切入全屏应用后，位于其他普通桌面 Space（如 Space 1）上的全部窗口（如备忘录，标题“备忘录”，尺寸 `1255x627`），在 WindowServer（`CGWindowListCopyWindowInfo`）中其 `kCGWindowIsOnscreen` 必然为 `false`（这是 macOS 标识窗口当前未在活跃屏幕/Space 显示的标准行为，绝非窗口被关闭）；
+    2. **`cleanAllOffscreenWindows` 暴力清洗失控**：
+       - 包括备忘录在内的 36 款应用此前配置了 `cleanAllOffscreenWindows: true`。在 `shouldCleanOffscreen` 中，只要 `isOnScreen == false` 且尺寸非全屏物理分辨率，即被判定为幽灵底板强行抹除，使得 `windowServerStandardWindowCount`（`wsCount`）被暴力误清为 0；
+    3. **失焦与屏上归零盲目伪造关窗事件**：
+       - 旧逻辑在 `handleAppDeactivated` 中，一旦 `wsOnscreen == 0 && axCount == 0` 即假定为 `orderOut:` 关窗并伪造 `lastCloseEventDate = Date()`；
+       - `evaluateAppWindows` 中因屏上归零同样盲目刷新 `lastCloseEventDate = Date()`，导致切应用或切 Space 瞬态丢失防误杀门禁；
+    4. **大范围通用性实锤**：
+       - 全域 36 款纳管应用在普通桌面拥有窗口时，只要一切到全屏应用，`wsCount` 与 `wsOnscreen` 均归零，AX 树因跨 Space 失效，导致应用在无任何用户关窗动作下被直接调用 `app.terminate()` 强制退出。
+
+- **代码级加固与修复方案（经军师技术层审核通过并落地）**：
+  1. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **CoreGraphics / SkyLight Space 动态解析引擎**：通过 `dlsym(RTLD_LAZY, "CGSCopySpacesForWindows")` 与 `CGSMainConnectionID()` 安全动态绑定系统级 Space 查询接口，实现 `windowSpaces(for windowID: CGWindowID) -> [UInt64]`；
+     - **Space 活跃窗口权威计数器**：实现 `windowServerSpaceWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int`，仅统计明确归属于任意真实桌面 Space（`!spaces.isEmpty`）的标准有效视窗；
+     - **彻底铲除失焦与屏上检测伪造关窗事件**：完全删除 `handleAppDeactivated` 与 `evaluateAppWindows` 中基于 `wsOnscreen == 0` 盲目刷新 `lastCloseEventDate = Date()` 的逻辑，严格限定 `lastCloseEventDate` 仅由真实 AX 关窗与销毁通知记录；
+     - **重构 `isZeroByCausality` 关窗因果律公式**：精准定义 `let isZeroByCausality = (axCount == 0) && (wsSpaceCount == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent`，只要应用在任一桌面 Space 仍有实体窗口（`wsSpaceCount > 0`），因果律绝对禁止放行退出。
+  2. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **桌面 Space 实体视窗最高豁免权**：在 `isGhostWindow` 与 `shouldCleanOffscreen` 中引入 `spaces: [UInt64]` 参数；明确只要窗口明确归属于真实桌面 Space（`!spaces.isEmpty`）且具备基础业务视窗尺寸（`width > 120 && height > 70`），坚决豁免 `cleanAllOffscreenWindows` 清洗，一律认定为有效业务窗口；
+     - **保留备忘录脱壳底板精准清洗能力**：真实关窗后脱离桌面 Space（`spaces.isEmpty`）的 `orderOut:` 孤儿底板依然能够被正常清洗，实现既有规则与单测 100% 顺畅闭环。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增针对跨 Space 离屏实体视窗（`isOnScreen == false, spaces: [1]`）最高豁免保活、脱壳底板（`spaces.isEmpty`）精准清洗、`windowServerSpaceWindowCount` 及纯函数容错边界的自动化回归断言。
+  4. 版本号自增更新至 `v1.3.54 (build 80)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`ATools.app/Contents/Info.plist`](file:///Users/aurora/Downloads/atools/ATools.app/Contents/Info.plist)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **动态符号解析与零崩坏保证**：CGS 私有函数全走 `dlsym` 动态加载，接口缺失时安全退回空数组，绝无硬依赖与崩溃风险；
+  - **向下兼容单测调用**：`isStandardWindowCandidate`、`isGhostWindow`、`shouldCleanOffscreen` 的 `spaces` 参数采用默认值 `[]`，现有既有测试无需修改任何原有入参；
+  - **真实关窗零倒退**：脱离 Space 的 `orderOut:` 残余底板（`spaces.isEmpty`）依然能够在发生真实关窗时正常触发因果律退出。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项自动化测试套件全部 100% PASSED 通过（0 失败，0 警告）**。
+
+
+---
+
+### [2026-11-11] 第 146 项：彻底解决 WPS 及备忘录关窗退出失败问题（CGSGetActiveSpace 相对空间几何分流、离屏底板与缓存层候选门禁收窄、因果律精准解耦与降级应用闭环）(v1.3.55, build 81)
+
+- **故障背景与根因定位**：
+  - **用户反馈**：wps 为什么又关窗退出失败了。
+  - **全链路追踪与技术根因定位**：
+    1. **实机现场捕捉与全域排查**：
+       - 排查实机现场与运行时日志，捕获关键日志：`[AutoQuit] Last window closed for 备忘录; quitting in 1.0s.`，随后紧跟 `[AutoQuit] Aborted quit for 备忘录: app is active and has window (AX=0, WS=1).`；
+       - 证实不仅 WPS，备忘录等已开启离屏清洗的系统应用在点击红叉关窗后同样触发了防误杀保护而中止退出；
+    2. **macOS Cocoa/AppKit 的 Space 机制在关窗时的底层事实**：
+       - 在 build 80 中，为解决切全屏应用误杀后台应用问题，引入了 `!spaces.isEmpty && width > 120 && height > 70` 赋予离屏窗口最高豁免权；
+       - 但真实 macOS 的底层事实是：当 Cocoa 应用（如备忘录 WinID 342）被用户点击红叉关窗时，AppKit 执行 `orderOut:` 使 `kCGWindowIsOnscreen` 变为 `false`，**但 WindowServer 绝不会抹去其所属 Space，它依然保有 `spaces = [1]`**；
+       - 此外，WPS 内部的 CEF/Qt 缓存层（Layer 3 / Layer 8，如 WinID 763, 577, 775, 468）在当前 Space 1 同样常驻 `spaces = [1]`；
+       - 结果：`!spaces.isEmpty` 盲目将这些“在当前 Space 1 上已被关掉/隐藏的孤儿视窗”误当成了“位于其他桌面 Space 的活跃业务视窗”，导致 `isGhostWindow` 返回 `false`、`isStandardWindowCandidate` 返回 `true`，导致 `wsCount` 锁死为 1（备忘录）和 5（WPS）；
+    3. **WPS 关窗脱壳底板击穿业务候选门禁**：
+       - 用户关闭 WPS 文档后，WindowServer 残留脱离 Space 的离屏视窗（WinID 936，`spaces = []`，`isOnScreen = false`）；
+       - `isStandardWindowCandidate` 离屏分支旧代码中保留了兜底：`(!rawName.isEmpty && width > 120 && height > 70) || (width >= 400 && height >= 260)`，将已关窗脱壳的孤儿视窗直接误判为标准业务候选；
+    4. **因果律死锁与降级应用双重阻断**：
+       - build 80 因果律公式强制要求 `wsSpaceCount == 0`，由于备忘录关窗后 WinID 342 仍属 Space 1，因果律直接失效，降级为常规双零确认，常规双零因 `wsCount = 1` 再次流产；
+       - WPS 属于 `isAXObserverDegraded`（-25204），无法收到 AX 关窗通知，`recentlyHadCloseEvent` 恒为 `false` 无法走因果律，只能依赖 `isConfirmedZeroWindowCount(axCount: 0, windowServerCount: wsCount)`；但受上述 `wsCount = 5` 阻断，关窗后彻底无法退出。
+
+- **代码级加固与修复方案（经军师技术层审核通过并全面落地）**：
+  1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+     - **空间几何判定公理（相对空间分流）**：实现 `isWindowOnAnotherSpace(spaces: [UInt64], currentSpace: UInt64) -> Bool`，充要判定窗口是否真正物理位于其他未激活的桌面 Space；
+     - **嵌入军师 Fail-Safe 兜底防线**：当系统未能获取当前活跃 Space ID（`currentSpace == 0`）时，保守判定为处于其他 Space，绝不贸然清洗，宁保活不误杀；
+     - **幽灵图层收敛清洗**：`isGhostWindow` 与 `shouldCleanOffscreen` 严格限定仅当窗口真正物理位于其他未激活 Space（`isWindowOnAnotherSpace`）时才享有保活豁免权；当前 Space 上离屏不可见的孤儿底板坚决按既有规则清洗。
+  2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+     - **动态安全绑定 `CGSGetActiveSpace`**：实现 `currentActiveSpace() -> UInt64`，动态解析当前用户正在浏览的活跃 Space ID；
+     - **重构 `isStandardWindowCandidate` 纯函数**：新增 `currentSpace: UInt64 = 0` 参数，彻底移除无条件放行大尺寸无 Space 底板的旧代码，离屏视窗严格收窄仅放行两类：1) 原生物理全屏视窗（`isNativeFullscreenSize`）；2) 真正位于其他 Space（`isWindowOnAnotherSpace`）、且处于标准业务层（`layer == 0`）、且尺寸大于 120x70 的视窗；
+     - **实现 `windowServerAnotherSpaceWindowCount` 计数器**：精准统计物理处于其他未激活桌面 Space 的有效业务主视窗；
+     - **解耦因果律与退出闭环**：因果律判定公式更新为 `let isZeroByCausality = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent`，发生真实关窗时秒级放行；WPS 等降级应用关窗后 `axCount == 0, wsCount == 0`，常规双零确认顺畅触发退出。
+  3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 补齐历史跨 Space 视窗断言的 `spaces: [2], currentSpace: 1` 语义上下文；
+     - 新增 3 项核心负例断言：备忘录同 Space 关窗残留（`spaces: [1], currentSpace: 1`）-> `false`、WPS 关窗脱壳底板（`spaces: [], currentSpace: 1`）-> `false`、WPS Layer 8 辅助缓存（`layer: 8, spaces: [1], currentSpace: 1`）-> `false`。
+  4. 版本号自增更新至 `v1.3.55 (build 81)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`ATools.app/Contents/Info.plist`](file:///Users/aurora/Downloads/atools/ATools.app/Contents/Info.plist)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **空间相对性绝对精准**：无论在单桌面、多桌面切换、还是普通桌面切入全屏应用，系统均基于 `currentActiveSpace` 进行相对几何推导，兼顾跨 Space 保活与当前 Space 关窗退出；
+  - **Fail-Safe 零崩溃兜底**：CGS 私有函数全面动态绑定，遇未知异常安全降级，绝无硬崩溃风险；
+  - **全域应用无缝覆盖**：对 WPS、备忘录、ZCode、夸克等 36+ 款疑难架构应用统一生效。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项 111 个专项测试全部 100% PASSED 通过（0 失败，0 警告）**。
+
+
+---
+
+### [2026-11-11] 第 147 项：应用抽屉清理失效项面板与确认后完成提示弹窗居中对齐与拖动性保持优化 (v1.3.56, build 82)
+
+- **优化背景与人机工学痛点定位**：
+  - **用户反馈**：检查应用抽屉清理失效项面板以及确认清理之后的出现位置，能不能让它出现在应用抽屉面板的中央，方便用户点击，同时保持现有的可拖动性。
+  - **全链路追踪与技术根因定位**：
+    1. **原生 AppKit 居中机制与抽屉脱节**：
+       - 当用户在应用抽屉空白区域右键触发「一键清理失效项」时，系统调用 `NSAlert.runModalAboveFloatingWindows()`；
+       - 在 macOS AppKit 底层中，`NSAlert.runModal()` 会在窗口准备阶段强行调用 `-[NSAlertPanel center]`，将弹窗置于当前激活屏幕的物理中央偏上（Screen Center）；
+       - 若应用抽屉停靠在屏幕边缘、侧边或副屏上，弹出的确认清理弹窗与抽屉面板距离极远，操作动线严重割裂；用户必须跨越整个屏幕寻找并点击「立即清理」；
+    2. **连续两次弹窗位移加剧割裂**：
+       - 点击「立即清理」后，紧接着弹出的「清理完成」提示面板（`doneAlert`）同样作为独立模态弹出，再次出现在屏幕中央，迫使用户二次大幅跨屏点击「好」；
+    3. **拖动性保护与初始纠偏公理**：
+       - 开发者若单纯在窗口更新循环（如 `didUpdateNotification`）中不断强制 `setFrameOrigin`，会导致弹窗被锁死在中间，用户一拖就被瞬间弹回原点，失去 `isMovableByWindowBackground` 拖拽能力；
+       - 因此，必须实现「首次呈现即时压制 AppKit 居中并精确定位至抽屉中心 + 首次完成后彻底解除位置干涉，保持原生丝滑拖拽」的生命周期状态机。
+
+- **代码级加固与修复方案**：
+  1. [`Sources/atools/UI/SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)：
+     - **扩展 `NSAlert` 与 `NSWindow` 模态宿主居中接口**：为 `NSAlert.runModalAboveFloatingWindows` 与 `NSWindow.runModalAboveFloatingWindows` 统一新增 `centeredIn parentWindow: NSWindow? = nil` 可选参数，保持现有调用链 100% 向下兼容；
+     - **物理中心计算与屏幕安全边界 Clamping**：当传入 `parentWindow` 时，自动调用 `layout()` 获取确切尺寸，计算与宿主窗口几何中心完全重合的 `targetOrigin`；同时基于 `parentWindow.screen?.visibleFrame` 或 `NSScreen.main?.visibleFrame` 进行 12pt 安全边缘 Clamp，防止小尺寸或贴边抽屉导致弹窗溢出屏幕可视区；
+     - **压制 AppKit 重置并保持完全可拖动**：
+       - 显式声明 `alertWin.isMovable = true` 与 `alertWin.isMovableByWindowBackground = true`；
+       - 通过 `RunLoop.main.perform(inModes: [.common, RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode")])` 在进入模态循环的第一时间精准纠偏 AppKit `-[NSApplication _orderFrontModalWindow:relativeToWindow:]` 内部的屏幕居中，使弹窗瞬间以 `alphaValue = 1.0` 在抽屉中心上屏；
+       - 纠偏仅在模态初始化时单次执行，之后彻底放行所有后续事件，用户随鼠标拖动时位置完美保持，绝不回弹。
+  2. [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - 在 `shelfGridDidRequestCleanMissingItems(_:)` 中提取宿主窗口 `let parentWin = self.view.window ?? PanelCoordinator.shared.shelfPanel`；
+     - 「无需清理」弹窗、确认清理弹窗（「确认一键清理 N 个失效启动项？」）以及确认清理后的完成提示弹窗（「清理完成」）全部传入 `centeredIn: parentWin`；
+     - 同步对「启动项目标已失效」提示弹窗（`promptMissingItemAction`）与「确认删除分类」弹窗（`categoryBar(_:didRequestDeleteCategory:)`）接入 `centeredIn: parentWin`，使应用抽屉内所有模态对话框均浑然一体呈现于抽屉正中心。
+  3. [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift) 与 [`Sources/atools/UI/Settings/GeneralTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/GeneralTabView.swift)：
+     - 设置页中的「一键清理失效项」与「清理完成」弹窗统一接入 `centeredIn: self.window`，在设置窗口内触发时同样精准居中于设置窗口中央。
+  4. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 新增 `13.2.1` 专项自动化测试：模拟应用抽屉面板，验证确认清理弹窗与清理完成弹窗在屏幕 Clamping 约束下的宿主几何居中对齐、模态响应、以及用户拖拽后坐标稳定保留与 `isMovableByWindowBackground == true` 属性。
+  5. 版本号自增更新至 `v1.3.56 (build 82)`：同步更新 [`README.md`](file:///Users/aurora/Downloads/atools/README.md)、[`RELEASING.md`](file:///Users/aurora/Downloads/atools/RELEASING.md)、[`ATools.app/Contents/Info.plist`](file:///Users/aurora/Downloads/atools/ATools.app/Contents/Info.plist)、[`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)。
+
+- **兼容性与边界防护策略**：
+  - **默认参数零侵入**：`centeredIn` 为可选默认参数（`nil`），未指定宿主窗口的其他全局弹窗继续遵循默认行为，零破坏性；
+  - **多屏与贴边极致安全**：无论应用抽屉处于主屏、副屏、屏幕死角还是窄小尺寸，经 Clamping 计算后的坐标始终完整留存在屏幕工作区内，绝不遮挡 Dock 与菜单栏；
+  - **原生拖动毫无保留**：保持原生窗口的 `isMovableByWindowBackground` 特性，用户若需移开弹窗查看抽屉底层图标，只需按住空白处拖曳即可，体验极其顺畅自然。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项 112 个专项测试全部 100% PASSED 通过（0 失败，0 警告）**。
+
+
+---
+
+## 2026-11-11（增量更新 v1.3.57 build 83：抽屉屏幕边缘自动吸附与感应唤出、固定桌面启动自动关闭解耦与驻留形态三选一）
+
+- **背景与痛点**：
+  1. **自动吸附屏幕边缘与感应唤出诉求**：用户希望抽屉面板支持贴靠屏幕边缘自动隐藏，当鼠标悬停移动到吸附位置时自动滑出唤出面板，鼠标移出面板或在面板内点击启动应用后自动收起缩回边缘；
+  2. **固定桌面状态下点击启动关闭解耦诉求**：当前代码在 `didLaunchItem` 中存在 `!isShelfPinned` 硬编码门禁，且 `hideShelfPanel` 默认受固定桌面保护直接 return，导致用户开启了「点击启动应用后自动关闭」后，只要固定了桌面，点击应用后依然无法自动关闭；
+  3. **架构与心智模型融合（解法 A）**：经统帅设计与子代理（军师）技术审查，确定将抽屉驻留形态升级为分段胶囊三选一（自由浮动 / 固定桌面 / 边缘停靠），彻底解耦桌面常驻展开态与边缘隐匿停靠态，杜绝状态冲突与移出无法收起的死锁。
+
+- **代码级加固与实现方案**：
+  1. [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：
+     - **扩展驻留形态与停靠边缘枚举**：新增 `ShelfPresentationMode`（`.floating`, `.pinned`, `.docked`）与 `ShelfDockEdge`（`.autoNearest`, `.left`, `.right`, `.top`）；
+     - **安全向下兼容**：`AtoolsConfig` 增加 `shelfPresentationMode`、`shelfDockEdge`、`shelfDockDelayMs`（默认 220ms），在 Codable 编解码中同时兼容旧版 `isShelfPinned` 字段，实现旧配置加载零破坏、新旧状态双向同步。
+  2. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift) 与 [`Sources/atools/UI/SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)：
+     - 新增 `updateShelfPresentationMode(_:)` 与 `updateShelfDockEdge(_:)`，并发送广播通知 `.atoolsShelfPresentationModeDidChange` 与 `.atoolsShelfDockEdgeDidChange`；
+     - `updateIsShelfPinned(_:)` 保持向后兼容，并在状态切换时联动更新 `shelfPresentationMode`。
+  3. [`Sources/atools/UI/EdgeSensorWindow.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/EdgeSensorWindow.swift) *(新设)*：
+     - **零权限、零轮询开销边缘传感器**：创建 1.5pt 微型无边框透明面板（`styleMask = [.borderless, .nonactivatingPanel]`, `level = .statusBar`），使用原生 `NSTrackingArea` 侦测鼠标进入；
+     - **系统触发角与安全边界避让**：感应条两端严格避让屏幕四个顶角各 28pt（防止阻断 macOS 调度中心/锁屏等 Hot Corners），根据 `visibleFrame` 避开 Dock 所在边缘；
+     - **防误触防抖**：进入感应区后启动 220ms 防抖计时器，鼠标划过移出立即 cancel，彻底杜绝甩光标误唤出；覆写 `mouseDown` 穿透底层避免影响边缘点击。
+  4. [`Sources/atools/UI/PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：
+     - **引入 `isTemporarilyUnfurledFromDock` 状态机**：打通边缘感应临时滑出展开态，移出或点击外部时优先放行收起，彻底杜绝“固定桌面 + 边缘悬停”死锁；
+     - **边缘贴靠定位与多屏自适应**：实现 `positionPanelAtDockEdge` 与 `syncEdgeSensorState`，监听 `didChangeScreenParametersNotification`，外接显示器热插拔时自动重定位；
+     - **支持强制收起**：`hideShelfPanel` 适配 `forceHidePinned` 参数，支持启动时绕过桌面常驻强制收起抽屉。
+  5. [`Sources/atools/UI/ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：
+     - **启动后自动关闭彻底解耦**：在 `didLaunchItem` 和 `folderOverlay didSelectItem` 中移除 `!isShelfPinned` 限制，改为：开启 `autoCloseOnLaunch` 时无条件调用 `hideShelfPanel(restoreFocus: false, forceHidePinned: true)`；未开启时保持桌面固定；
+     - **移出关闭行为放行**：`evaluateMouseExitState` 与 `scheduleMouseExitAutoCloseIfNeeded` 中，若处于边缘停靠形态或临时展开态，移出后平滑缩回；
+     - **窗口拖动贴边磁吸**：监听 `NSWindow.didMoveNotification`，拖动靠近屏幕边缘 $\le 24\text{pt}$ 时自动吸附对齐并触发触觉震动反馈。
+  6. [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift)：
+     - 在「驻留形态与关闭行为」页将原开关升级为原生液态水滴次级分段切换胶囊 `SettingsLiquidSegmentedControl`（自由浮动 / 固定桌面 / 边缘停靠）；
+     - 切换至边缘停靠时动态展示「边缘吸附停靠方位」下拉选项；优化启动后自动关闭的文案说明。
+  7. [`Sources/atools/App/AppDelegate.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/App/AppDelegate.swift)：
+     - 启动后若为边缘停靠形态，自动同步激活边缘感应窗。
+  8. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+     - 扩充 `shelfPresentationMode` 与 `shelfDockEdge` 序列化编解码往返单测；
+     - 增加在固定桌面（`isShelfPinned == true`）下，模拟 `autoCloseOnLaunch` 触发 `hideShelfPanel(forceHidePinned: true)` 成功收起抽屉的断言回归。
+
+- **兼容性与边界防护策略**：
+  - **100% 配置向下兼容**：旧版 `config.json` 缺少新字段时自动根据原 `isShelfPinned` 推断为 `.pinned` 或 `.floating`，绝不丢失老用户配置；
+  - **零辅助功能权限依赖**：基于原生微型透明窗口与 AppKit 事件响应链，无需向用户索要辅助功能提权；
+  - **屏幕热角与多屏几何隔离**：四角 28pt 安全裁剪，严格遵守 `visibleFrame`，多显示器主副屏（含负坐标）完美自适应；
+  - **前台焦点零抢夺**：启动外部应用时传递 `restoreFocus: false`，保证新 App 顺畅获得键盘焦点。
+
+- **验证与测试结果**：
+  - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项 112+ 个专项测试全部 100% PASSED 通过（0 失败，0 警告）**。
+
+
+- **紧急修复（点击启动应用导致主线程断言崩溃退出问题）**：
+  - **崩溃根因定位**：根据系统崩溃日志 `/Users/aurora/Library/Logs/DiagnosticReports/ATools-2026-11-11-223958.ips` 排查，当用户在抽屉中点击启动软件时，`NSWorkspace.openApplication` 的成功完成回调是在后台异步队列 `com.apple.launchservices.open-queue` 上触发；随后触发了 `ConfigManager.recordItemLaunch` 广播 `.atoolsShelfDataDidChange`，导致 `ShelfViewController.loadData()` 直接在非主线程操作 AppKit 视图层级（`subview.removeFromSuperview`），触发系统 `NSISEngine` 断言异常与 `SIGABRT` 崩溃；
+  - **三重主线程防御落地**：
+    1. [`LauncherExecutor.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/LauncherExecutor.swift)：在 `openApplication` 成功与失败分支，以及 `open(item:completion:)` 中强制切换至 `DispatchQueue.main.async` 回调；
+    2. [`ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：在 `recordItemLaunch` 内部对 `.atoolsShelfDataDidChange` 广播加入主线程判断，确保后台调用时自动调度到主线程；
+    3. [`ShelfPanel.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/ShelfPanel.swift)：`handleShelfDataChanged` 与 `handleFavoritesToggleChanged` 统一加入 `Thread.isMainThread` 校验并包裹 `DispatchQueue.main.async`，构筑 UI 安全底线；
+  - **打包与部署同步**：通过 `./Scripts/package_app.sh` 编译并签名，同步更新覆盖 `/Applications/ATools.app`，彻底消除闪退隐患。
+
+---
+
+## 2026-11-11（边缘停靠体验重构：移除屏幕顶部与双侧智能自适应）
+
+### 1. 需求与冲突背景
+- **问题反馈**：用户反馈开启边缘停靠或自适应最近时，在屏幕顶部进行日常操作（如右键窗口工具栏自定义菜单、双击标题栏缩放窗口、点击标签页切换、或触发系统菜单栏）时，极易频繁误触发抽屉面板，遮挡操作视线；
+- **交互冲突评估**：macOS 屏幕顶部为系统菜单栏、状态栏、通知中心及应用窗口三色胶囊按钮（红黄绿）和工具栏/标签栏高度密集聚集区。在宽屏显示器下垂直高度较窄，光标在屏幕上半区操作时极易被「自适应最近」判定为靠顶，产生严重的交互打架；
+- **优化决策**：果断切除「屏幕顶部」吸附边缘，停靠方位精简为**「自适应两侧」、「屏幕左侧」、「屏幕右侧」**。自适应模式下仅在屏幕左边缘与右边缘之间智能判定。
+
+### 2. 代码修改与实现逻辑
+1. [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：
+   - **精简枚举**：`ShelfDockEdge` 移除 `.top`，保留 `.autoNearest`（自适应两侧）、`.left`（屏幕左侧）、`.right`（屏幕右侧）；
+   - **历史存量配置安全降级**：在 Codable 反序列化中，若读取到历史老配置中的 `"top"` 字符串，自动优雅降级回退为 `.autoNearest`，杜绝任何配置反序列化崩溃；
+2. [`Sources/atools/UI/EdgeSensorWindow.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/EdgeSensorWindow.swift)：
+   - **移除顶部感应区**：彻底清除 `inTopZone` 探测逻辑与相关的顶部边界离开判定；
+   - **自适应边缘精准监听**：在 `shelfDockEdge == .autoNearest` 时，仅部署并监听左、右两侧感应条，光标靠近哪边就激活哪边，避开顶部与底部系统控件；
+3. [`Sources/atools/UI/PanelCoordinator.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/PanelCoordinator.swift)：
+   - **重构自适应定位算法**：移除顶部展开坐标计算分支；在 `positionPanelAtDockEdge` 中，通过光标到左边界与右边界的水平绝对距离比较（`distRight < distLeft ? .right : .left`），精准实现从鼠标靠近的一侧顺畅滑出；
+4. [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift)：
+   - **偏好设置界面联动**：停靠方位选择器自动联动 `ShelfDockEdge.allCases`，精简为「自适应两侧」、「屏幕左侧」、「屏幕右侧」；优化副标题文案为“靠近左侧或右侧屏幕边缘感应唤出，避开顶部菜单栏与窗口控制误触”；
+5. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+   - 增加针对历史存量 `"top"` 配置自动降级回退至 `.autoNearest` 的单元测试断言，确保长效稳定性。
+
+### 3. 诊断验证结果
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项 112+ 个专项测试全部 100% PASSED 通过（0 失败，0 警告）**。

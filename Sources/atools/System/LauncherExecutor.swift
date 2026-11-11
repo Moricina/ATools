@@ -26,10 +26,19 @@ public enum LauncherExecutor {
     /// Launches a LauncherItem while honoring its custom executionContext (arguments, workingDirectory, environmentVars, runAsAdmin, terminalMode).
     public static func open(item: LauncherItem, completion: ((Bool) -> Void)? = nil) {
         let wrappedCompletion: (Bool) -> Void = { success in
-            if success {
-                ConfigManager.shared.recordItemLaunch(itemId: item.id)
+            if Thread.isMainThread {
+                if success {
+                    ConfigManager.shared.recordItemLaunch(itemId: item.id)
+                }
+                completion?(success)
+            } else {
+                DispatchQueue.main.async {
+                    if success {
+                        ConfigManager.shared.recordItemLaunch(itemId: item.id)
+                    }
+                    completion?(success)
+                }
             }
-            completion?(success)
         }
         switch item.itemType {
         case .application, .fileOrFolder:
@@ -213,7 +222,9 @@ public enum LauncherExecutor {
                         completion?(ok)
                     }
                 } else {
-                    completion?(true)
+                    DispatchQueue.main.async {
+                        completion?(true)
+                    }
                 }
             }
         } else {

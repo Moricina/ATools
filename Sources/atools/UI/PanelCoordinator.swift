@@ -65,6 +65,9 @@ public final class PanelCoordinator {
         return SearchPanel()
     }()
 
+    /// 标记抽屉当前是否由屏幕边缘停靠感应临时滑出展开
+    public private(set) var isTemporarilyUnfurledFromDock: Bool = false
+
     /// App that was frontmost before a panel was summoned; it gets keyboard focus back on dismiss.
     private var previousFrontmostApp: NSRunningApplication?
 
@@ -125,6 +128,18 @@ public final class PanelCoordinator {
             queue: .main
         ) { [weak self] _ in
             self?.handleAppResignedActive()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.syncEdgeSensorState()
+        }
+
+        EdgeDockSensorCoordinator.shared.onEdgeTriggered = { [weak self] edge in
+            self?.handleEdgeSensorTriggered(edge: edge)
         }
 
         workspaceActivationObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -309,10 +324,41 @@ public final class PanelCoordinator {
         shelfPanel.shelfViewController.updatePinButtonState(isPinned: ConfigManager.shared.config.isShelfPinned)
     }
 
-    public func showShelfPanel() {
+    public func handlePresentationModeChanged(_ mode: ShelfPresentationMode) {
+        syncEdgeSensorState()
+    }
+
+    public func handleDockEdgeChanged(_ edge: ShelfDockEdge) {
+        syncEdgeSensorState()
+    }
+
+    public func syncEdgeSensorState() {
+        let mode = ConfigManager.shared.config.shelfPresentationMode
+        guard ConfigManager.shared.config.enableShelfPanel, mode == .docked else {
+            EdgeDockSensorCoordinator.shared.stopMonitoring()
+            return
+        }
+
+        if isShelfPanelVisible {
+            EdgeDockSensorCoordinator.shared.stopMonitoring()
+        } else {
+            EdgeDockSensorCoordinator.shared.startMonitoring()
+        }
+    }
+
+    private func handleEdgeSensorTriggered(edge: ShelfDockEdge) {
+        guard ConfigManager.shared.config.enableShelfPanel,
+              ConfigManager.shared.config.shelfPresentationMode == .docked else { return }
+        showShelfPanel(fromEdge: true, targetEdge: edge)
+    }
+
+    public func showShelfPanel(fromEdge: Bool = false, targetEdge: ShelfDockEdge? = nil) {
         guard ConfigManager.shared.config.enableShelfPanel else { return }
         // 关键防护：双向互斥保障，若偏好设置窗口处于打开态，呼出抽屉时自动收起偏好设置
         SettingsWindowController.shared.closeSettingsWindow()
+
+        isTemporarilyUnfurledFromDock = fromEdge || (ConfigManager.shared.config.shelfPresentationMode == .docked)
+        EdgeDockSensorCoordinator.shared.stopMonitoring()
 
         panelPresentationGeneration &+= 1
         isRightClickMenuOpen = false
@@ -323,13 +369,18 @@ public final class PanelCoordinator {
         AppHotspotIndex.shared.refreshIfStale()
 
         shelfPanel.prepareForDisplay()
-        positionPanelFollowMouse(shelfPanel)
+        if fromEdge || ConfigManager.shared.config.shelfPresentationMode == .docked {
+            let edgeToUse = targetEdge ?? ConfigManager.shared.config.shelfDockEdge
+            positionPanelAtDockEdge(shelfPanel, edge: edgeToUse)
+        } else {
+            positionPanelFollowMouse(shelfPanel)
+        }
         animatePanelEntrance(shelfPanel)
         NSApp.activate(ignoringOtherApps: true)
         shelfPanel.makeKeyAndOrderFront(nil)
         shelfPanel.orderFrontRegardless()
         shelfPanel.makeKey()
-        shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow(summonedDirectly: true)
+        shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow(summonedDirectly: !fromEdge)
 
         activePanel = .shelf
         installGlobalOutsideClickMonitor()
@@ -337,10 +388,12 @@ public final class PanelCoordinator {
 
     public func hideShelfPanel(restoreFocus: Bool = true, animated: Bool = true, forceHidePinned: Bool = false) {
         guard shelfPanelCreated && shelfPanel.isVisible else { return }
-        if isShelfPinned && !forceHidePinned {
+        let isPinned = isShelfPinned
+        if isPinned && !forceHidePinned && !isTemporarilyUnfurledFromDock {
             runtimeLog("[Panel] hideShelfPanel ignored: shelf is pinned to desktop")
             return
         }
+        isTemporarilyUnfurledFromDock = false
         shelfPanel.shelfViewController.stopMouseExitMonitoring()
         shelfPanel.shelfViewController.closeFolderOverlay(animated: false)
         panelPresentationGeneration &+= 1
@@ -356,6 +409,7 @@ public final class PanelCoordinator {
         } else {
             shelfPanel.orderOut(nil)
             resetPanelEntrance(shelfPanel)
+            syncEdgeSensorState()
         }
 
         if activePanel == nil {
@@ -590,6 +644,7 @@ public final class PanelCoordinator {
                 }
                 panel.orderOut(nil)
                 self.resetPanelEntrance(panel)
+                self.syncEdgeSensorState()
                 runtimeLog("[Panel] orderOut done panel=\(panel) visibleAfter=\(panel.isVisible) alpha=\(panel.alphaValue)")
             }
         )
@@ -657,19 +712,63 @@ public final class PanelCoordinator {
             return
         }
 
-        // 仅应用抽屉可见时，若已固定在桌面，点击外部绝不收起；未固定时按外部点击收起
+        // 仅应用抽屉可见时，若已固定在桌面且非边缘临时展开态，点击外部绝不收起；未固定时按外部点击收起
         if shelfPanelCreated && shelfPanel.isVisible {
-            if isShelfPinned { return }
+            if isShelfPinned && !isTemporarilyUnfurledFromDock { return }
             let visibleFrame = shelfPanel.frame
             if !NSPointInRect(clickLoc, visibleFrame) {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }
                     if self.isDraggingActive || NSApp.modalWindow != nil || self.isModalDialogOpen || self.isEffectiveMenuOpen { return }
-                    if self.isShelfPinned { return }
+                    if self.isShelfPinned && !self.isTemporarilyUnfurledFromDock { return }
                     self.hideShelfPanel(restoreFocus: true)
                 }
             }
         }
+    }
+
+    private func positionPanelAtDockEdge(_ panel: NSPanel, edge: ShelfDockEdge) {
+        let mouseLoc = NSEvent.mouseLocation
+        let activeScreen = NSScreen.screens.first { NSMouseInRect(mouseLoc, $0.frame, false) }
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        guard let screen = activeScreen else { return }
+        let visible = screen.visibleFrame
+
+        // 尺寸自适应安全限制
+        let maxSafeW = max(240, min(panel.frame.width, visible.width - 32))
+        let maxSafeH = max(180, min(panel.frame.height, visible.height - 32))
+        if maxSafeW != panel.frame.width || maxSafeH != panel.frame.height {
+            panel.setContentSize(NSSize(width: maxSafeW, height: maxSafeH))
+        }
+
+        var x: CGFloat = visible.minX
+        var y: CGFloat = visible.minY + (visible.height - panel.frame.height) / 2.0
+
+        // 动态解析真实停靠边缘（左右双侧智能感知，避开顶部系统菜单与窗口控制冲突）
+        let resolvedEdge: ShelfDockEdge
+        if edge == .autoNearest {
+            let distLeft = abs(mouseLoc.x - visible.minX)
+            let distRight = abs(visible.maxX - mouseLoc.x)
+            resolvedEdge = (distRight < distLeft) ? .right : .left
+        } else {
+            resolvedEdge = edge
+        }
+
+        switch resolvedEdge {
+        case .left:
+            x = visible.minX
+            let targetY = mouseLoc.y - panel.frame.height / 2.0
+            y = min(max(targetY, visible.minY + 8), visible.maxY - panel.frame.height - 8)
+        case .right:
+            x = visible.maxX - panel.frame.width
+            let targetY = mouseLoc.y - panel.frame.height / 2.0
+            y = min(max(targetY, visible.minY + 8), visible.maxY - panel.frame.height - 8)
+        case .autoNearest:
+            break
+        }
+
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
     private func positionPanelFollowMouse(_ panel: NSPanel) {

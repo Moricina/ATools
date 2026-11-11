@@ -353,12 +353,13 @@ public final class GeneralTabView: NSView {
     }
 
     @objc private func cleanMissingItemsClicked() {
+        let parentWin = self.window
         let missing = ConfigManager.shared.scanMissingItems()
         guard !missing.isEmpty else {
             let alert = NSAlert()
             alert.messageText = "无需清理"
             alert.informativeText = "当前所有分类中的启动项路径均有效，未发现失效项目。"
-            alert.runModalAboveFloatingWindows()
+            alert.runModalAboveFloatingWindows(centeredIn: parentWin)
             return
         }
 
@@ -372,14 +373,14 @@ public final class GeneralTabView: NSView {
         alert.addButton(withTitle: "立即清理")
         alert.addButton(withTitle: "取消")
 
-        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+        if alert.runModalAboveFloatingWindows(centeredIn: parentWin) == .alertFirstButtonReturn {
             let removedCount = ConfigManager.shared.removeAllMissingItems()
             refresh()
             let done = NSAlert()
             done.messageText = "清理完成"
             done.informativeText = "已成功清理 \(removedCount) 个失效启动项。"
             done.alertStyle = .informational
-            done.runModalAboveFloatingWindows()
+            done.runModalAboveFloatingWindows(centeredIn: parentWin)
         }
     }
 

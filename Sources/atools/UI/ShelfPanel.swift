@@ -616,13 +616,16 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             stopMouseExitMonitoring()
             return
         }
-        // 固定在桌面时，绝对不受「移出面板自动关闭」影响
-        guard !PanelCoordinator.shared.isShelfPinned else {
+        // 固定在桌面时，绝对不受「移出面板自动关闭」影响（除非当前处于边缘停靠形态或临时展开态）
+        let isPinned = PanelCoordinator.shared.isShelfPinned
+        let isEdgeUnfurled = PanelCoordinator.shared.isTemporarilyUnfurledFromDock
+        let isDockedMode = ConfigManager.shared.config.shelfPresentationMode == .docked
+        if isPinned && !isEdgeUnfurled && !isDockedMode {
             mouseExitWorkItem?.cancel()
             mouseExitWorkItem = nil
             return
         }
-        guard ConfigManager.shared.config.autoCloseOnMouseExit else {
+        guard ConfigManager.shared.config.autoCloseOnMouseExit || isDockedMode || isEdgeUnfurled else {
             mouseExitWorkItem?.cancel()
             mouseExitWorkItem = nil
             return
@@ -649,8 +652,11 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     private func scheduleMouseExitAutoCloseIfNeeded() {
-        guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
-        guard !PanelCoordinator.shared.isShelfPinned else { return }
+        let isPinned = PanelCoordinator.shared.isShelfPinned
+        let isEdgeUnfurled = PanelCoordinator.shared.isTemporarilyUnfurledFromDock
+        let isDockedMode = ConfigManager.shared.config.shelfPresentationMode == .docked
+        guard ConfigManager.shared.config.autoCloseOnMouseExit || isDockedMode || isEdgeUnfurled else { return }
+        if isPinned && !isEdgeUnfurled && !isDockedMode { return }
         guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
         if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isEffectiveMenuOpen { return }
 
@@ -658,13 +664,16 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.mouseExitWorkItem = nil
-            guard ConfigManager.shared.config.autoCloseOnMouseExit else { return }
-            guard !PanelCoordinator.shared.isShelfPinned else { return }
+            let isPinnedNow = PanelCoordinator.shared.isShelfPinned
+            let isEdgeUnfurledNow = PanelCoordinator.shared.isTemporarilyUnfurledFromDock
+            let isDockedModeNow = ConfigManager.shared.config.shelfPresentationMode == .docked
+            guard ConfigManager.shared.config.autoCloseOnMouseExit || isDockedModeNow || isEdgeUnfurledNow else { return }
+            if isPinnedNow && !isEdgeUnfurledNow && !isDockedModeNow { return }
             guard !PanelCoordinator.shared.isDraggingActive, NSEvent.pressedMouseButtons == 0 else { return }
             if NSApp.modalWindow != nil || PanelCoordinator.shared.isModalDialogOpen || PanelCoordinator.shared.isEffectiveMenuOpen { return }
             let mouseLoc = NSEvent.mouseLocation
             if let window = self.view.window, window.isVisible, !NSPointInRect(mouseLoc, window.frame) {
-                PanelCoordinator.shared.hideShelfPanel()
+                PanelCoordinator.shared.hideShelfPanel(forceHidePinned: isEdgeUnfurledNow || isDockedModeNow)
             }
         }
         mouseExitWorkItem = work
@@ -672,11 +681,23 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     @objc private func handleFavoritesToggleChanged() {
-        loadData()
+        if Thread.isMainThread {
+            loadData()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.loadData()
+            }
+        }
     }
 
     @objc private func handleShelfDataChanged() {
-        loadData()
+        if Thread.isMainThread {
+            loadData()
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.loadData()
+            }
+        }
     }
 
     private func setupLayout() {
@@ -1039,6 +1060,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
     }
 
     public func categoryBar(_ bar: CategoryBarView, didRequestDeleteCategory category: Category) {
+        let parentWin = self.view.window ?? (PanelCoordinator.shared.isShelfPanelCreated ? PanelCoordinator.shared.shelfPanel : nil)
         let alert = NSAlert()
         alert.messageText = "删除分类"
         alert.informativeText = "确定要删除分类「\(category.name)」吗？该分类下的 \(category.items.count) 个项目将一并移除。"
@@ -1046,7 +1068,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         alert.addButton(withTitle: "删除")
         alert.addButton(withTitle: "取消")
 
-        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+        if alert.runModalAboveFloatingWindows(centeredIn: parentWin) == .alertFirstButtonReturn {
             let success = ConfigManager.shared.deleteCategory(id: category.id)
             if success {
                 self.selectedCategory = nil
@@ -1101,8 +1123,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             promptMissingItemAction(for: item)
             return
         }
-        if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
-            PanelCoordinator.shared.hideShelfPanel()
+        if ConfigManager.shared.config.autoCloseOnLaunch {
+            PanelCoordinator.shared.hideShelfPanel(restoreFocus: false, forceHidePinned: true)
         }
         executeLauncherItem(item)
     }
@@ -1184,12 +1206,14 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         PanelCoordinator.shared.isModalDialogOpen = true
         defer { PanelCoordinator.shared.isModalDialogOpen = false }
 
+        let parentWin = self.view.window ?? (PanelCoordinator.shared.isShelfPanelCreated ? PanelCoordinator.shared.shelfPanel : nil)
+
         let missing = ConfigManager.shared.scanMissingItems()
         guard !missing.isEmpty else {
             let alert = NSAlert()
             alert.messageText = "无需清理"
             alert.informativeText = "当前所有分类中的启动项路径均有效，未发现失效项目。"
-            alert.runModalAboveFloatingWindows()
+            alert.runModalAboveFloatingWindows(centeredIn: parentWin)
             return
         }
 
@@ -1203,20 +1227,22 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         alert.addButton(withTitle: "立即清理")
         alert.addButton(withTitle: "取消")
 
-        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+        if alert.runModalAboveFloatingWindows(centeredIn: parentWin) == .alertFirstButtonReturn {
             let removedCount = ConfigManager.shared.removeAllMissingItems()
             loadData()
             let done = NSAlert()
             done.messageText = "清理完成"
             done.informativeText = "已成功清理 \(removedCount) 个失效启动项，并已自动回收孤立托管图标。"
             done.alertStyle = .informational
-            done.runModalAboveFloatingWindows()
+            done.runModalAboveFloatingWindows(centeredIn: parentWin)
         }
     }
 
     private func promptMissingItemAction(for item: LauncherItem) {
         PanelCoordinator.shared.isModalDialogOpen = true
         defer { PanelCoordinator.shared.isModalDialogOpen = false }
+
+        let parentWin = self.view.window ?? (PanelCoordinator.shared.isShelfPanelCreated ? PanelCoordinator.shared.shelfPanel : nil)
 
         let alert = NSAlert()
         alert.messageText = "启动项「\(item.name)」的目标已失效"
@@ -1226,7 +1252,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         alert.addButton(withTitle: "从分类中移除")
         alert.addButton(withTitle: "取消")
 
-        let response = alert.runModalAboveFloatingWindows()
+        let response = alert.runModalAboveFloatingWindows(centeredIn: parentWin)
         if response == .alertFirstButtonReturn {
             promptRelocateItem(item)
         } else if response == .alertSecondButtonReturn {
@@ -1244,6 +1270,8 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
         PanelCoordinator.shared.isModalDialogOpen = true
         defer { PanelCoordinator.shared.isModalDialogOpen = false }
 
+        let parentWin = self.view.window ?? (PanelCoordinator.shared.isShelfPanelCreated ? PanelCoordinator.shared.shelfPanel : nil)
+
         let panel = NSOpenPanel()
         panel.title = "重新定位「\(item.name)」的目标应用或文件"
         panel.canChooseFiles = true
@@ -1259,7 +1287,7 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             panel.directoryURL = URL(fileURLWithPath: "/Applications")
         }
 
-        if panel.runModalAboveFloatingWindows() == .OK, let url = panel.url {
+        if panel.runModalAboveFloatingWindows(centeredIn: parentWin) == .OK, let url = panel.url {
             let hostCatId = isSmartFavoritesProjectionActive
                 ? ConfigManager.shared.categoryContainingItem(id: item.id)?.id
                 : selectedCategory?.id
@@ -1390,9 +1418,9 @@ public final class ShelfViewController: NSViewController, CategoryBarDelegate, S
             self.shelfGrid(self.shelfGrid, didRequestRelocateItem: item)
             return
         }
-        if ConfigManager.shared.config.autoCloseOnLaunch && !PanelCoordinator.shared.isShelfPinned {
+        if ConfigManager.shared.config.autoCloseOnLaunch {
             closeFolderOverlay(animated: false)
-            PanelCoordinator.shared.hideShelfPanel()
+            PanelCoordinator.shared.hideShelfPanel(restoreFocus: false, forceHidePinned: true)
         }
         LauncherExecutor.open(item: item)
     }
@@ -1528,6 +1556,13 @@ public final class ShelfPanel: NSPanel {
 
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleWindowDidMove(_:)),
+            name: NSWindow.didMoveNotification,
+            object: self
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleThemeChanged),
             name: .atoolsThemeDidChange,
             object: nil
@@ -1551,6 +1586,33 @@ public final class ShelfPanel: NSPanel {
     @objc private func windowDidEndLiveResize(_ notification: Notification) {
         let size = self.frame.size
         ConfigManager.shared.updateShelfSize(width: Double(size.width), height: Double(size.height))
+    }
+
+    @objc private func handleWindowDidMove(_ notification: Notification) {
+        // 当用户拖动窗口靠近屏幕边缘时进行磁吸对齐与微震动反馈
+        guard let screen = self.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        let threshold: CGFloat = 24.0
+        var newOrigin = self.frame.origin
+        var didSnap = false
+
+        if abs(self.frame.minX - visible.minX) <= threshold {
+            newOrigin.x = visible.minX
+            didSnap = true
+        } else if abs(self.frame.maxX - visible.maxX) <= threshold {
+            newOrigin.x = visible.maxX - self.frame.width
+            didSnap = true
+        }
+
+        if abs(self.frame.maxY - visible.maxY) <= threshold {
+            newOrigin.y = visible.maxY - self.frame.height
+            didSnap = true
+        }
+
+        if didSnap && newOrigin != self.frame.origin {
+            self.setFrameOrigin(newOrigin)
+            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+        }
     }
 
     override public var canBecomeKey: Bool { true }

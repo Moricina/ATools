@@ -6,6 +6,9 @@ public final class ShelfTabView: NSView {
     public private(set) var shelfRecorder: HotkeyRecorderControl?
     private var shelfSwitch: NSSwitch!
     private var trackpadGesturePopUp: SettingsLiquidPopUpButton!
+    private var presentationModeControl: SettingsLiquidSegmentedControl!
+    private var dockEdgePopUp: SettingsLiquidPopUpButton!
+    private var dockEdgeRow: SettingsRowView!
     private var pinSwitch: NSSwitch!
     private var autoCloseLaunchSwitch: NSSwitch!
     private var autoCloseMouseExitSwitch: NSSwitch!
@@ -164,16 +167,40 @@ public final class ShelfTabView: NSView {
         card2.translatesAutoresizingMaskIntoConstraints = false
         behaviorScrollContent.addSubview(card2)
 
+        presentationModeControl = SettingsLiquidSegmentedControl(
+            labels: ["自由浮动", "固定桌面", "边缘停靠"],
+            target: self,
+            action: #selector(presentationModeChanged(_:))
+        )
+        presentationModeControl.translatesAutoresizingMaskIntoConstraints = false
+        presentationModeControl.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        let rowMode = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "rectangle.inset.filled.and.cursorarrow"),
+            title: "抽屉驻留形态",
+            subtitle: "自由浮动（失焦关闭）、固定桌面（常驻屏幕）、边缘停靠（触边感应唤出）",
+            accessory: presentationModeControl
+        )
+        card2.addRow(rowMode)
+
+        dockEdgePopUp = SettingsLiquidPopUpButton(frame: .zero, pullsDown: false)
+        dockEdgePopUp.translatesAutoresizingMaskIntoConstraints = false
+        dockEdgePopUp.widthAnchor.constraint(equalToConstant: 210).isActive = true
+        for edge in ShelfDockEdge.allCases {
+            dockEdgePopUp.addItem(withTitle: edge.title)
+        }
+        dockEdgePopUp.target = self
+        dockEdgePopUp.action = #selector(dockEdgeChanged(_:))
+        dockEdgeRow = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "sidebar.left"),
+            title: "边缘吸附停靠方位",
+            subtitle: "靠近左侧或右侧屏幕边缘感应唤出，避开顶部菜单栏与窗口控制误触",
+            accessory: dockEdgePopUp
+        )
+        card2.addRow(dockEdgeRow)
+
         pinSwitch = NSSwitch()
         pinSwitch.target = self
         pinSwitch.action = #selector(togglePin(_:))
-        let rowPin = SettingsRowView(
-            icon: ThumbnailPipeline.shared.symbolIcon(name: "pin"),
-            title: "抽屉面板固定在桌面",
-            subtitle: "开启后抽屉始终停留在桌面壁纸上方，不受失焦关闭影响",
-            accessory: pinSwitch
-        )
-        card2.addRow(rowPin)
 
         autoCloseLaunchSwitch = NSSwitch()
         autoCloseLaunchSwitch.target = self
@@ -181,7 +208,7 @@ public final class ShelfTabView: NSView {
         let rowCloseLaunch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.down.right.and.arrow.up.left"),
             title: "点击启动应用后自动关闭",
-            subtitle: "在抽屉中点击启动应用后，立即自动收起抽屉窗口",
+            subtitle: "点击启动应用后自动收起（即使固定在桌面亦会收起；若未开启则持续留在桌面）",
             accessory: autoCloseLaunchSwitch
         )
         card2.addRow(rowCloseLaunch)
@@ -192,7 +219,7 @@ public final class ShelfTabView: NSView {
         let rowCloseMouse = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "cursorarrow.motionlines"),
             title: "鼠标移出面板后自动关闭",
-            subtitle: "含 0.35s 防抖延迟与右键菜单弹出保护",
+            subtitle: "含 0.35s 防抖延迟与右键保护；在边缘停靠形态下移出始终平滑缩回",
             accessory: autoCloseMouseExitSwitch
         )
         card2.addRow(rowCloseMouse, isLast: true)
@@ -462,6 +489,22 @@ public final class ShelfTabView: NSView {
 
         pinSwitch.isEnabled = enabled
         pinSwitch.state = cfg.isShelfPinned ? .on : .off
+
+        let mode = cfg.shelfPresentationMode
+        let modeIndex: Int
+        switch mode {
+        case .floating: modeIndex = 0
+        case .pinned:   modeIndex = 1
+        case .docked:   modeIndex = 2
+        }
+        presentationModeControl.selectedSegment = modeIndex
+        presentationModeControl.isEnabled = enabled
+        dockEdgeRow.isHidden = (mode != .docked)
+        dockEdgePopUp.isEnabled = enabled && (mode == .docked)
+        if let edgeIdx = ShelfDockEdge.allCases.firstIndex(of: cfg.shelfDockEdge) {
+            dockEdgePopUp.selectItem(at: edgeIdx)
+        }
+
         autoCloseLaunchSwitch.isEnabled = enabled
         autoCloseLaunchSwitch.state = cfg.autoCloseOnLaunch ? .on : .off
         autoCloseMouseExitSwitch.isEnabled = enabled
@@ -591,6 +634,21 @@ public final class ShelfTabView: NSView {
         ConfigManager.shared.updateShelfTrackpadGesture(selected)
     }
 
+    @objc private func presentationModeChanged(_ sender: SettingsLiquidSegmentedControl) {
+        let modes: [ShelfPresentationMode] = [.floating, .pinned, .docked]
+        guard modes.indices.contains(sender.selectedSegment) else { return }
+        let selected = modes[sender.selectedSegment]
+        ConfigManager.shared.updateShelfPresentationMode(selected)
+        dockEdgeRow.isHidden = (selected != .docked)
+    }
+
+    @objc private func dockEdgeChanged(_ sender: NSPopUpButton) {
+        let edges = ShelfDockEdge.allCases
+        guard edges.indices.contains(sender.indexOfSelectedItem) else { return }
+        let selected = edges[sender.indexOfSelectedItem]
+        ConfigManager.shared.updateShelfDockEdge(selected)
+    }
+
     @objc private func togglePin(_ sender: NSSwitch) {
         ConfigManager.shared.updateIsShelfPinned(sender.state == .on)
     }
@@ -674,6 +732,7 @@ public final class ShelfTabView: NSView {
     }
 
     @objc private func cleanShelfMissingItemsClicked() {
+        let parentWin = self.window
         let missing = ConfigManager.shared.scanMissingItems()
         guard !missing.isEmpty else { return }
         let previewLines = missing.prefix(8).map { "• [\($0.category.name)] \($0.item.name) (\($0.item.target))" }.joined(separator: "\n")
@@ -684,14 +743,14 @@ public final class ShelfTabView: NSView {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "立即清理")
         alert.addButton(withTitle: "取消")
-        if alert.runModalAboveFloatingWindows() == .alertFirstButtonReturn {
+        if alert.runModalAboveFloatingWindows(centeredIn: parentWin) == .alertFirstButtonReturn {
             let removedCount = ConfigManager.shared.removeAllMissingItems()
             refresh()
             let done = NSAlert()
             done.messageText = "清理完成"
             done.informativeText = "已成功清理 \(removedCount) 个失效启动项。"
             done.alertStyle = .informational
-            done.runModalAboveFloatingWindows()
+            done.runModalAboveFloatingWindows(centeredIn: parentWin)
         }
     }
 }

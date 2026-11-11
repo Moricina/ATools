@@ -83,6 +83,24 @@ public enum DiagnosticSuite {
     ConfigManager.shared.updateIsShelfPinned(false)
     TestAssertions.expect(ConfigManager.shared.config.isShelfPinned == false, "isShelfPinned should reset to false")
 
+    // Test shelfPresentationMode & shelfDockEdge codec round-trip
+    ConfigManager.shared.updateShelfPresentationMode(.docked)
+    TestAssertions.expect(ConfigManager.shared.config.shelfPresentationMode == .docked, "shelfPresentationMode should be .docked")
+    ConfigManager.shared.updateShelfDockEdge(.right)
+    TestAssertions.expect(ConfigManager.shared.config.shelfDockEdge == .right, "shelfDockEdge should be .right")
+    let dockedEncoded = try! JSONEncoder().encode(ConfigManager.shared.config)
+    let dockedDecoded = try! JSONDecoder().decode(AtoolsConfig.self, from: dockedEncoded)
+    TestAssertions.expect(dockedDecoded.shelfPresentationMode == .docked, "shelfPresentationMode should survive codec round-trip")
+    TestAssertions.expect(dockedDecoded.shelfDockEdge == .right, "shelfDockEdge should survive codec round-trip")
+
+    // 验证历史存量 "top" 配置向下兼容性（平滑自动降级回退至 .autoNearest）
+    let legacyTopJson = "{\"shelfDockEdge\": \"top\"}".data(using: .utf8)!
+    let legacyDecoded = try? JSONDecoder().decode(AtoolsConfig.self, from: legacyTopJson)
+    TestAssertions.expect(legacyDecoded?.shelfDockEdge == .autoNearest, "历史配置中的 top 应自动降级为 .autoNearest")
+
+    ConfigManager.shared.updateShelfPresentationMode(.floating)
+    ConfigManager.shared.updateShelfDockEdge(.autoNearest)
+
     // 严格测试「常用」分类开关：关闭不保留数据，开启重新检测生成，默认保持未启用
     ConfigManager.shared.updateEnableFavoritesCategory(true)
     TestAssertions.expect(ConfigManager.shared.config.enableFavoritesCategory == true, "enableFavoritesCategory should be true when enabled")
@@ -2090,17 +2108,21 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "财务报表.xlsx", width: 1512, height: 830, isOnScreen: false) == false, "WPS offscreen named document in another Space must not be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "文档1", width: 1000, height: 700, isOnScreen: false) == false, "WPS offscreen new doc must not be cleaned")
         TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "", width: 1512, height: 830, isOnScreen: false) == false, "WPS offscreen untitled window must not be standard candidate")
-        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "财务报表.xlsx", width: 1512, height: 830, isOnScreen: false) == true, "WPS offscreen real document must be standard candidate to protect multi-Space")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "财务报表.xlsx", width: 1512, height: 830, isOnScreen: false, spaces: [2], currentSpace: 1) == true, "WPS offscreen real document must be standard candidate to protect multi-Space")
         // 全屏物理视窗与 WPS 复合标题多 Space 保活断言
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "文档1 - WPS Office", width: 1512, height: 982, isOnScreen: false) == false, "WPS fullscreen named doc with suffix must not be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "财务报表 - WPS Office.xlsx", width: 1512, height: 830, isOnScreen: false) == false, "WPS offscreen doc with suffix in another space must not be cleaned")
         TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "", width: 1512, height: 982, isOnScreen: false) == true, "WPS fullscreen presentation/untitled window must remain standard candidate")
         // WPS 首页大窗口离屏（切换到其他桌面或全屏应用）保活断言
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", title: "首页", width: 1512, height: 870, isOnScreen: false) == false, "WPS offscreen large home window must not be cleaned")
-        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "首页", width: 1512, height: 870, isOnScreen: false) == true, "WPS offscreen large home window must be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "首页", width: 1512, height: 870, isOnScreen: false, spaces: [2], currentSpace: 1) == true, "WPS offscreen large home window must be standard candidate")
+        // 验证 WPS 与备忘录关窗退出故障修复负例（build 81 军师加固）
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "备忘录", width: 1393, height: 696, isOnScreen: false, layer: 0, spaces: [1], currentSpace: 1) == false, "Notes closed window on same active Space must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "企业-数据安全风险评估报告.docx", width: 1512, height: 830, isOnScreen: false, layer: 0, spaces: [], currentSpace: 1) == false, "WPS closed document without space must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office", rawName: "", width: 389, height: 87, isOnScreen: false, layer: 8, spaces: [1], currentSpace: 1) == false, "WPS Layer 8 auxiliary cache on same Space must not be standard candidate")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark.desktop", ownerName: "夸克", title: "夸克网盘", width: 1512, height: 982, isOnScreen: false) == false, "Quark native fullscreen window must be exempted from cleanAllOffscreenWindows")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.dingtalk.mac", ownerName: "钉钉", title: "钉钉", width: 1512, height: 982, isOnScreen: false) == false, "DingTalk native fullscreen window must be exempted from cleanAllOffscreenWindows")
-        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.google.Chrome", ownerName: "Google Chrome", rawName: "", width: 1512, height: 830, isOnScreen: false) == true, "Chrome offscreen untitled large window must remain candidate for multi-process protection")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.google.Chrome", ownerName: "Google Chrome", rawName: "", width: 1512, height: 830, isOnScreen: false, spaces: [2], currentSpace: 1) == true, "Chrome offscreen untitled large window must remain candidate for multi-process protection")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.quark", ownerName: "夸克", title: "分享链接", width: 640, height: 480, isOnScreen: false) == true, "Quark offscreen ghost window must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "cc.atools.aurapane", ownerName: "AuraPane", title: "设置", width: 400, height: 300, isOnScreen: false) == true, "AuraPane offscreen settings must be cleaned")
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.oplus.devicespace", ownerName: "O+Connect", title: "OPPO 互联", width: 1252, height: 710, isOnScreen: false) == true, "OPPO Connect offscreen hidden window must be cleaned")
@@ -2205,6 +2227,16 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "最近删除", width: 1185, height: 660, isOnScreen: true) == false, "Notes onscreen window must never be cleaned")
         TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "最近删除", width: 1185, height: 660, isOnScreen: false, layer: 0) == false, "Offscreen Notes window must not be standard candidate")
         TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "最近删除", width: 1185, height: 660, isOnScreen: true, layer: 0) == true, "Onscreen Notes window must remain standard candidate")
+
+        // 验证 跨 Space 离屏实体视窗（isWindowOnAnotherSpace）最高豁免权与脱壳残留清洗
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "备忘录", width: 1255, height: 627, isOnScreen: false, spaces: [1], currentSpace: 2) == false, "Notes offscreen window on Space 1 must NOT be cleaned as ghost when viewing Space 2")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "备忘录", width: 1255, height: 627, isOnScreen: false, layer: 0, spaces: [1], currentSpace: 2) == true, "Offscreen Notes window on Space 1 must remain standard candidate when viewing Space 2")
+        TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.apple.Notes", ownerName: "Notes", title: "最近删除", width: 1185, height: 660, isOnScreen: false, spaces: [], currentSpace: 1) == true, "Notes offscreen residual window without space must be cleaned as ghost")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.apple.Notes", ownerName: "Notes", rawName: "最近删除", width: 1185, height: 660, isOnScreen: false, layer: 0, spaces: [], currentSpace: 1) == false, "Offscreen Notes window without space must not be standard candidate")
+        TestAssertions.expect(AutoQuitManager.windowServerSpaceWindowCount(for: ProcessInfo.processInfo.processIdentifier) >= 0, "Space window count must return valid non-negative integer")
+        TestAssertions.expect(AutoQuitManager.windowServerAnotherSpaceWindowCount(for: ProcessInfo.processInfo.processIdentifier) >= 0, "Another space window count must return valid non-negative integer")
+        TestAssertions.expect(AutoQuitManager.windowSpaces(for: 0).isEmpty, "WindowSpaces for invalid ID must return empty array")
+
         TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.iCal", ownerName: "日历")?.cleanAllOffscreenWindows == true, "Calendar rule must have cleanAllOffscreenWindows enabled")
         TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.AppStore", ownerName: "App Store")?.cleanAllOffscreenWindows == true, "App Store rule must have cleanAllOffscreenWindows enabled")
         TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.Safari", ownerName: "Safari")?.cleanAllOffscreenWindows == true, "Safari rule must have cleanAllOffscreenWindows enabled")
@@ -2329,8 +2361,9 @@ public enum DiagnosticSuite {
         coordinator.togglePanel(.shelf, animated: false)
         TestAssertions.expect(coordinator.shelfPanel.isVisible == true, "Shelf toggle hotkey MUST reopen shelf")
 
-        // Cleanup
+        // Test autoCloseOnLaunch with pinned shelf: forceHidePinned MUST dismiss shelf
         coordinator.hideShelfPanel(restoreFocus: false, animated: false, forceHidePinned: true)
+        TestAssertions.expect(coordinator.shelfPanel.isVisible == false, "Pinned shelf MUST dismiss when forceHidePinned is true (simulating autoCloseOnLaunch)")
         coordinator.isShelfPinned = false
         print("      ✓ Pinned shelf resilience & hotkey isolation verified.")
     }
@@ -2410,6 +2443,73 @@ public enum DiagnosticSuite {
         TestAssertions.expect(ConfigManager.shared.scanMissingItems().count >= 1, "scanMissingItems must find deadItem")
         let cleanedCount = ConfigManager.shared.removeAllMissingItems()
         TestAssertions.expect(cleanedCount >= 1 && ConfigManager.shared.scanMissingItems().isEmpty, "removeAllMissingItems must remove all missing items and leave zero missing")
+
+        // 13.2.1 Shelf Clean Missing Items Alert Centering, Clamping & Drag-Capability Preservation
+        let mockShelfWindow = NSWindow(
+            contentRect: NSRect(x: 250, y: 320, width: 600, height: 400),
+            styleMask: [.borderless, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let cleanAlert = NSAlert()
+        cleanAlert.messageText = "确认一键清理 1 个失效启动项？"
+        cleanAlert.informativeText = "清理后将从对应分类中移除"
+        cleanAlert.addButton(withTitle: "立即清理")
+        cleanAlert.addButton(withTitle: "取消")
+        cleanAlert.layout()
+
+        let alertWin = cleanAlert.window
+        TestAssertions.expect(alertWin.isMovable == true, "Alert window must be movable")
+
+        let alertSize = alertWin.frame.size
+        let pFrame = mockShelfWindow.frame
+        let rawExpectedX = pFrame.origin.x + (pFrame.width - alertSize.width) / 2.0
+        let rawExpectedY = pFrame.origin.y + (pFrame.height - alertSize.height) / 2.0
+        let screen = mockShelfWindow.screen ?? NSScreen.main ?? NSScreen.screens.first
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        let margin: CGFloat = 12.0
+        let expX = min(max(rawExpectedX, visible.minX + margin), max(visible.minX + margin, visible.maxX - alertSize.width - margin))
+        let expY = min(max(rawExpectedY, visible.minY + margin), max(visible.minY + margin, visible.maxY - alertSize.height - margin))
+        let expectedTargetOrigin = NSPoint(x: round(expX), y: round(expY))
+
+        var modalObservedOrigin: NSPoint = .zero
+        var draggedObservedOrigin: NSPoint = .zero
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            modalObservedOrigin = alertWin.frame.origin
+            // 模拟用户在弹窗背景上按住并拖动了窗口（移动到新偏移量）
+            let userDraggedOrigin = NSPoint(x: expectedTargetOrigin.x + 50, y: expectedTargetOrigin.y + 30)
+            alertWin.setFrameOrigin(userDraggedOrigin)
+            draggedObservedOrigin = alertWin.frame.origin
+            NSApp.stopModal(withCode: .alertFirstButtonReturn)
+        }
+
+        let resp = cleanAlert.runModalAboveFloatingWindows(centeredIn: mockShelfWindow)
+        TestAssertions.expect(resp == .alertFirstButtonReturn, "Modal response must match button return")
+        TestAssertions.expect(modalObservedOrigin == expectedTargetOrigin, "Clean alert must initially center exactly inside mock shelf panel with safety clamp")
+        TestAssertions.expect(draggedObservedOrigin == NSPoint(x: expectedTargetOrigin.x + 50, y: expectedTargetOrigin.y + 30), "Clean alert must retain user-dragged position without resetting back")
+        TestAssertions.expect(alertWin.isMovableByWindowBackground == true, "Clean alert must maintain isMovableByWindowBackground == true")
+
+        // 验证清理完成弹窗 (done alert) 同样居中于应用抽屉面板
+        let doneAlert = NSAlert()
+        doneAlert.messageText = "清理完成"
+        doneAlert.informativeText = "已成功清理 1 个失效启动项。"
+        doneAlert.layout()
+        let doneWin = doneAlert.window
+        var doneObservedOrigin: NSPoint = .zero
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+            doneObservedOrigin = doneWin.frame.origin
+            NSApp.stopModal(withCode: .alertFirstButtonReturn)
+        }
+        doneAlert.runModalAboveFloatingWindows(centeredIn: mockShelfWindow)
+
+        let doneSize = doneWin.frame.size
+        let doneExpX = min(max(pFrame.origin.x + (pFrame.width - doneSize.width) / 2.0, visible.minX + margin), max(visible.minX + margin, visible.maxX - doneSize.width - margin))
+        let doneExpY = min(max(pFrame.origin.y + (pFrame.height - doneSize.height) / 2.0, visible.minY + margin), max(visible.minY + margin, visible.maxY - doneSize.height - margin))
+        let expectedDoneOrigin = NSPoint(x: round(doneExpX), y: round(doneExpY))
+        TestAssertions.expect(doneObservedOrigin == expectedDoneOrigin, "Done alert must center exactly inside mock shelf panel")
+        TestAssertions.expect(doneWin.isMovableByWindowBackground == true, "Done alert must maintain isMovableByWindowBackground == true")
 
         // 13.3 Backup Export, Dry-Run Pre-Validation, Snapshot Rollback & Cross-Machine Self-Healing
         let backupArchiveURL = p0TempDir.appendingPathComponent("TestExport.atoolsbackup", isDirectory: true)

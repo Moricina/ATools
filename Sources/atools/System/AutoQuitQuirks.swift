@@ -83,9 +83,14 @@ public struct AppQuirkRule: Sendable {
         return false
     }
 
-    public func shouldCleanOffscreen(title: String, width: Double, height: Double) -> Bool {
+    public func shouldCleanOffscreen(title: String, width: Double, height: Double, spaces: [UInt64] = [], currentSpace: UInt64 = 0) -> Bool {
+        // 核心安全屏障 A：若窗口明确属于其他未激活桌面 Space（isWindowOnAnotherSpace），且具备业务视窗基础尺寸，
+        // 则其必然是用户置于其他桌面 Space 的合法活跃视窗，享有最高级豁免权，严禁被 cleanAllOffscreenWindows 清洗！
+        if AutoQuitQuirks.isWindowOnAnotherSpace(spaces: spaces, currentSpace: currentSpace) && width > 120 && height > 70 {
+            return false
+        }
         if cleanAllOffscreenWindows {
-            // 核心安全屏障：全屏尺寸（如 1512x982、2560x1440 等）属于有效全屏业务视窗，绝不被 cleanAllOffscreenWindows 清洗
+            // 核心安全屏障 B：全屏尺寸（如 1512x982、2560x1440 等）属于有效全屏业务视窗，绝不被 cleanAllOffscreenWindows 清洗
             if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
                 return false
             }
@@ -629,6 +634,17 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         return false
     }
 
+    /// 空间几何判定：判断窗口是否真正物理位于其他未激活的桌面 Space
+    public static func isWindowOnAnotherSpace(spaces: [UInt64], currentSpace: UInt64) -> Bool {
+        guard !spaces.isEmpty else { return false }
+        // 军师 Fail-Safe 铁律：当系统未能获取到当前活跃 Space ID (currentSpace == 0) 时，
+        // 保守判定为可能处于其他 Space，绝不贸然清洗，宁保活不误杀！
+        if currentSpace == 0 {
+            return true
+        }
+        return !spaces.contains(currentSpace)
+    }
+
     /// 启发式幽灵图层过滤（Y-01：收窄在屏窗口尺寸启发式，仅针对特定 BundleID 离屏图层或无标题微元过滤，保护正常小面板与工具条）
     public func isGhostWindow(
         bundleID: String?,
@@ -636,7 +652,9 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         title: String,
         width: Double,
         height: Double,
-        isOnScreen: Bool
+        isOnScreen: Bool,
+        spaces: [UInt64] = [],
+        currentSpace: UInt64 = 0
     ) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let lower = trimmed.lowercased()
@@ -665,10 +683,17 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             return false
         }
 
-        // 5. 以下为针对离屏 (isOnScreen == false) 窗口的深度清洗逻辑：
+        // 4.1 核心 Space 豁免铁律：当且仅当窗口明确归属于其他未激活桌面 Space（isWindowOnAnotherSpace），
+        // 且具备基本业务视窗尺寸（width > 120 && height > 70），无论当前处于哪个 Space，
+        // 绝非脱壳/关窗 orderOut: 残留底板，享有最高级豁免权！
+        if AutoQuitQuirks.isWindowOnAnotherSpace(spaces: spaces, currentSpace: currentSpace) && width > 120 && height > 70 {
+            return false
+        }
+
+        // 5. 以下为针对离屏 (isOnScreen == false) 且非跨 Space 活跃窗口的深度清洗逻辑：
         // 5.1 匹配已知应用的专用 Quirks 规则
         if let rule = matchRule(bundleID: bundleID, ownerName: ownerName) {
-            if rule.shouldCleanOffscreen(title: trimmed, width: width, height: height) {
+            if rule.shouldCleanOffscreen(title: trimmed, width: width, height: height, spaces: spaces, currentSpace: currentSpace) {
                 return true
             }
             if trimmed.isEmpty && !rule.ghostSizes.isEmpty {

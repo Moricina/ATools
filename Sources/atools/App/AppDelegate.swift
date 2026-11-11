@@ -94,6 +94,9 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 PanelCoordinator.shared.showShelfPanel()
             }
         }
+
+        // 若配置为边缘停靠形态，启动后即刻同步并激活边缘感应窗
+        PanelCoordinator.shared.syncEdgeSensorState()
     }
 
     /// AppKit routes ⌘C/⌘V/⌘X/⌘A/⌘Z to text fields through main-menu key equivalents. An

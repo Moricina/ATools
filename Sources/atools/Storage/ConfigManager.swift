@@ -621,6 +621,7 @@ public final class ConfigManager {
 
     public func updateIsShelfPinned(_ pinned: Bool) {
         self.config.isShelfPinned = pinned
+        self.config.shelfPresentationMode = pinned ? .pinned : .floating
         save()
         if PanelCoordinator.shared.isShelfPanelCreated {
             PanelCoordinator.shared.shelfPanel.shelfViewController.updatePinButtonState(isPinned: pinned)
@@ -630,7 +631,36 @@ public final class ConfigManager {
                 PanelCoordinator.shared.shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
             }
         }
+        PanelCoordinator.shared.handlePresentationModeChanged(self.config.shelfPresentationMode)
+        NotificationCenter.default.post(name: .atoolsShelfPresentationModeDidChange, object: self.config.shelfPresentationMode)
         NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
+    public func updateShelfPresentationMode(_ mode: ShelfPresentationMode) {
+        guard self.config.shelfPresentationMode != mode else { return }
+        self.config.shelfPresentationMode = mode
+        let pinned = (mode == .pinned)
+        self.config.isShelfPinned = pinned
+        save()
+        if PanelCoordinator.shared.isShelfPanelCreated {
+            PanelCoordinator.shared.shelfPanel.shelfViewController.updatePinButtonState(isPinned: pinned)
+            if pinned {
+                PanelCoordinator.shared.shelfPanel.shelfViewController.cancelPendingMouseExitAutoClose()
+            } else if PanelCoordinator.shared.isShelfPanelVisible {
+                PanelCoordinator.shared.shelfPanel.shelfViewController.beginMouseExitMonitoringOnShow()
+            }
+        }
+        PanelCoordinator.shared.handlePresentationModeChanged(mode)
+        NotificationCenter.default.post(name: .atoolsShelfPresentationModeDidChange, object: mode)
+        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+    }
+
+    public func updateShelfDockEdge(_ edge: ShelfDockEdge) {
+        guard self.config.shelfDockEdge != edge else { return }
+        self.config.shelfDockEdge = edge
+        save()
+        PanelCoordinator.shared.handleDockEdgeChanged(edge)
+        NotificationCenter.default.post(name: .atoolsShelfDockEdgeDidChange, object: edge)
     }
 
     public func updateAutoCloseOnLaunch(_ enabled: Bool) {
@@ -1061,7 +1091,13 @@ public final class ConfigManager {
         if didUpdate {
             save()
             if config.enableFavoritesCategory && config.smartFavoritesMode {
-                NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+                if Thread.isMainThread {
+                    NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+                } else {
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: .atoolsShelfDataDidChange, object: nil)
+                    }
+                }
             }
         }
     }

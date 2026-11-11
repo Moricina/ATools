@@ -123,6 +123,34 @@ public enum AppTheme: String, Codable, CaseIterable {
     }
 }
 
+public enum ShelfPresentationMode: String, Codable, CaseIterable {
+    case floating = "floating"   // 自由浮动窗口（默认）：快捷键呼出，居中或跟随光标，失焦/启动后自动收起
+    case pinned   = "pinned"     // 固定在桌面常驻：始终停留在屏幕桌面，不受失焦关闭影响
+    case docked   = "docked"     // 边缘停靠与感应：贴靠屏幕边缘隐匿，鼠标触边唤出，移出或启动后平滑缩回
+
+    public var title: String {
+        switch self {
+        case .floating: return "自由浮动"
+        case .pinned:   return "固定桌面"
+        case .docked:   return "边缘停靠"
+        }
+    }
+}
+
+public enum ShelfDockEdge: String, Codable, CaseIterable {
+    case autoNearest = "autoNearest" // 自适应两侧
+    case left        = "left"        // 屏幕左侧
+    case right       = "right"       // 屏幕右侧
+
+    public var title: String {
+        switch self {
+        case .autoNearest: return "自适应两侧"
+        case .left:        return "屏幕左侧"
+        case .right:       return "屏幕右侧"
+        }
+    }
+}
+
 public enum ShelfTrackpadGesture: String, Codable, CaseIterable {
     case none = "none"
     case fourFingerTap = "fourFingerTap"
@@ -302,7 +330,10 @@ public struct AtoolsConfig: Codable {
     public var enableShelfPanel: Bool
     public var enableSearchPanel: Bool
     public var enableFavoritesCategory: Bool
+    public var shelfPresentationMode: ShelfPresentationMode
     public var isShelfPinned: Bool
+    public var shelfDockEdge: ShelfDockEdge
+    public var shelfDockDelayMs: Int
     public var autoCloseOnLaunch: Bool
     public var autoCloseOnMouseExit: Bool
     public var autoCloseOnDeactivate: Bool
@@ -396,7 +427,10 @@ public struct AtoolsConfig: Codable {
         enableShelfPanel: Bool = true,
         enableSearchPanel: Bool = true,
         enableFavoritesCategory: Bool = false,
+        shelfPresentationMode: ShelfPresentationMode? = nil,
         isShelfPinned: Bool = false,
+        shelfDockEdge: ShelfDockEdge = .autoNearest,
+        shelfDockDelayMs: Int = 220,
         autoCloseOnLaunch: Bool = true,
         autoCloseOnMouseExit: Bool = false,
         autoCloseOnDeactivate: Bool = true,
@@ -457,7 +491,11 @@ public struct AtoolsConfig: Codable {
         self.enableShelfPanel = enableShelfPanel
         self.enableSearchPanel = enableSearchPanel
         self.enableFavoritesCategory = enableFavoritesCategory
-        self.isShelfPinned = isShelfPinned
+        let resolvedMode = shelfPresentationMode ?? (isShelfPinned ? .pinned : .floating)
+        self.shelfPresentationMode = resolvedMode
+        self.isShelfPinned = (resolvedMode == .pinned)
+        self.shelfDockEdge = shelfDockEdge
+        self.shelfDockDelayMs = max(100, min(1000, shelfDockDelayMs))
         self.autoCloseOnLaunch = autoCloseOnLaunch
         self.autoCloseOnMouseExit = autoCloseOnMouseExit
         self.autoCloseOnDeactivate = autoCloseOnDeactivate
@@ -513,7 +551,7 @@ public struct AtoolsConfig: Codable {
         case shelfWidth, shelfHeight, categoryOrientation, shelfIconSize, sidebarWidth
         case theme, shelfIconScale, shelfItemSpacing, themeOpacity
         case enableShelfPanel, enableSearchPanel, enableFavoritesCategory
-        case isShelfPinned
+        case shelfPresentationMode, isShelfPinned, shelfDockEdge, shelfDockDelayMs
         case autoCloseOnLaunch, autoCloseOnMouseExit, autoCloseOnDeactivate, shelfTrackpadGesture
         case webSearchEngine, enableWebSearch, customWebSearchURL, memoryAnnealDelay, searchDebounceMs, thumbnailCacheLimitMB
         case extraHotFolders, searchFilterOrder
@@ -566,7 +604,16 @@ public struct AtoolsConfig: Codable {
         self.enableShelfPanel = (try? container.decode(Bool.self, forKey: .enableShelfPanel)) ?? true
         self.enableSearchPanel = (try? container.decode(Bool.self, forKey: .enableSearchPanel)) ?? true
         self.enableFavoritesCategory = (try? container.decode(Bool.self, forKey: .enableFavoritesCategory)) ?? false
-        self.isShelfPinned = (try? container.decode(Bool.self, forKey: .isShelfPinned)) ?? false
+        let legacyPinned = (try? container.decode(Bool.self, forKey: .isShelfPinned)) ?? false
+        if let mode = try? container.decode(ShelfPresentationMode.self, forKey: .shelfPresentationMode) {
+            self.shelfPresentationMode = mode
+            self.isShelfPinned = (mode == .pinned)
+        } else {
+            self.shelfPresentationMode = legacyPinned ? .pinned : .floating
+            self.isShelfPinned = legacyPinned
+        }
+        self.shelfDockEdge = (try? container.decode(ShelfDockEdge.self, forKey: .shelfDockEdge)) ?? .autoNearest
+        self.shelfDockDelayMs = (try? container.decode(Int.self, forKey: .shelfDockDelayMs)) ?? 220
         self.autoCloseOnLaunch = (try? container.decode(Bool.self, forKey: .autoCloseOnLaunch)) ?? true
         self.autoCloseOnMouseExit = (try? container.decode(Bool.self, forKey: .autoCloseOnMouseExit)) ?? false
         self.autoCloseOnDeactivate = (try? container.decode(Bool.self, forKey: .autoCloseOnDeactivate)) ?? true
@@ -668,7 +715,10 @@ public struct AtoolsConfig: Codable {
         try container.encode(enableShelfPanel, forKey: .enableShelfPanel)
         try container.encode(enableSearchPanel, forKey: .enableSearchPanel)
         try container.encode(enableFavoritesCategory, forKey: .enableFavoritesCategory)
+        try container.encode(shelfPresentationMode, forKey: .shelfPresentationMode)
         try container.encode(isShelfPinned, forKey: .isShelfPinned)
+        try container.encode(shelfDockEdge, forKey: .shelfDockEdge)
+        try container.encode(shelfDockDelayMs, forKey: .shelfDockDelayMs)
         try container.encode(autoCloseOnLaunch, forKey: .autoCloseOnLaunch)
         try container.encode(autoCloseOnMouseExit, forKey: .autoCloseOnMouseExit)
         try container.encode(autoCloseOnDeactivate, forKey: .autoCloseOnDeactivate)

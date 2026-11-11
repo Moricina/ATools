@@ -14,6 +14,8 @@ public extension Notification.Name {
     static let atoolsDidSelectSyntaxCommand = Notification.Name("atoolsDidSelectSyntaxCommand")
     static let atoolsAutoPasteOnSummonDidChange = Notification.Name("atoolsAutoPasteOnSummonDidChange")
     static let atoolsShelfDataDidChange = Notification.Name("atoolsShelfDataDidChange")
+    static let atoolsShelfPresentationModeDidChange = Notification.Name("atoolsShelfPresentationModeDidChange")
+    static let atoolsShelfDockEdgeDidChange = Notification.Name("atoolsShelfDockEdgeDidChange")
     static let atoolsAppIndexDidUpdate = Notification.Name("atoolsAppIndexDidUpdate")
 }
 
@@ -29,12 +31,48 @@ public extension NSAlert {
     /// NOTE: AppKit forcefully resets `window.level` to `.modalPanel` (8) internally upon entering `runModal()`.
     /// We dynamically enforce `targetLevel` both synchronously via `NSWindow.didUpdateNotification`
     /// and asynchronously via `NSModalPanelRunLoopMode` so the alert always floats above floating panels.
+    ///
+    /// When `centeredIn` is provided, the alert is automatically calculated to appear at the exact center
+    /// of the parent window (with screen visibleFrame safety clamping). AppKit's internal `center()` call
+    /// inside `runModal()` is captured and rectified upon the initial window update, while maintaining full
+    /// subsequent user-drag capability (`isMovableByWindowBackground = true`) without snapping back.
     @discardableResult
-    func runModalAboveFloatingWindows(targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)) -> NSApplication.ModalResponse {
+    func runModalAboveFloatingWindows(
+        targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2),
+        centeredIn parentWindow: NSWindow? = nil
+    ) -> NSApplication.ModalResponse {
         PanelCoordinator.shared.isModalDialogOpen = true
         let target = targetLevel
         let alertWin = self.window
         alertWin.level = target
+        alertWin.isMovable = true
+        alertWin.isMovableByWindowBackground = true
+
+        var targetOrigin: NSPoint?
+
+        if let parent = parentWindow {
+            self.layout()
+            let alertSize = alertWin.frame.size
+            let pFrame = parent.frame
+            let rawX = pFrame.origin.x + (pFrame.width - alertSize.width) / 2.0
+            let rawY = pFrame.origin.y + (pFrame.height - alertSize.height) / 2.0
+
+            let screen = parent.screen ?? NSScreen.main ?? NSScreen.screens.first
+            let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+            let margin: CGFloat = 12.0
+            let minX = visibleFrame.minX + margin
+            let maxX = max(minX, visibleFrame.maxX - alertSize.width - margin)
+            let targetX = min(max(rawX, minX), maxX)
+
+            let minY = visibleFrame.minY + margin
+            let maxY = max(minY, visibleFrame.maxY - alertSize.height - margin)
+            let targetY = min(max(rawY, minY), maxY)
+
+            let finalOrigin = NSPoint(x: round(targetX), y: round(targetY))
+            targetOrigin = finalOrigin
+            alertWin.setFrameOrigin(finalOrigin)
+            alertWin.alphaValue = 0.0
+        }
 
         let sessionState = ModalSessionState()
         var observerToken: NSObjectProtocol?
@@ -48,8 +86,20 @@ public extension NSAlert {
             }
             runLoopTimer?.invalidate()
             runLoopTimer = nil
+            alertWin.alphaValue = 1.0
             alertWin.orderOut(nil)
             PanelCoordinator.shared.isModalDialogOpen = false
+        }
+
+        // 核心机制：在进入模态循环的第一时间纠偏 AppKit 的默认屏幕居中，保证精准呈现于宿主抽屉正中央，并瞬间上屏
+        if let origin = targetOrigin {
+            RunLoop.main.perform(inModes: [.common, RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode")]) { [weak alertWin] in
+                guard sessionState.isActive, let alertWin = alertWin else { return }
+                alertWin.setFrameOrigin(origin)
+                alertWin.level = target
+                alertWin.alphaValue = 1.0
+                alertWin.orderFrontRegardless()
+            }
         }
 
         observerToken = NotificationCenter.default.addObserver(
@@ -85,11 +135,42 @@ public extension NSWindow {
     /// Runs a modal session while ensuring the window's level is maintained at or above `targetLevel`
     /// (preventing AppKit from demoting it to `.modalPanel` (8) during `runModal()`).
     /// Automatically handles both standard NSWindows and NSSavePanel / NSOpenPanel instances.
+    /// When `centeredIn` is provided, the window is centered over the parent window with screen clamping.
     @discardableResult
-    func runModalAboveFloatingWindows(targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2)) -> NSApplication.ModalResponse {
+    func runModalAboveFloatingWindows(
+        targetLevel: NSWindow.Level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 2),
+        centeredIn parentWindow: NSWindow? = nil
+    ) -> NSApplication.ModalResponse {
         PanelCoordinator.shared.isModalDialogOpen = true
         let target = targetLevel
         self.level = target
+        self.isMovable = true
+        self.isMovableByWindowBackground = true
+
+        var targetOrigin: NSPoint?
+
+        if let parent = parentWindow {
+            let winSize = self.frame.size
+            let pFrame = parent.frame
+            let rawX = pFrame.origin.x + (pFrame.width - winSize.width) / 2.0
+            let rawY = pFrame.origin.y + (pFrame.height - winSize.height) / 2.0
+
+            let screen = parent.screen ?? NSScreen.main ?? NSScreen.screens.first
+            let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1920, height: 1080)
+            let margin: CGFloat = 12.0
+            let minX = visibleFrame.minX + margin
+            let maxX = max(minX, visibleFrame.maxX - winSize.width - margin)
+            let targetX = min(max(rawX, minX), maxX)
+
+            let minY = visibleFrame.minY + margin
+            let maxY = max(minY, visibleFrame.maxY - winSize.height - margin)
+            let targetY = min(max(rawY, minY), maxY)
+
+            let finalOrigin = NSPoint(x: round(targetX), y: round(targetY))
+            targetOrigin = finalOrigin
+            self.setFrameOrigin(finalOrigin)
+            self.alphaValue = 0.0
+        }
 
         let sessionState = ModalSessionState()
         var observerToken: NSObjectProtocol?
@@ -103,8 +184,19 @@ public extension NSWindow {
             }
             runLoopTimer?.invalidate()
             runLoopTimer = nil
+            self.alphaValue = 1.0
             self.orderOut(nil)
             PanelCoordinator.shared.isModalDialogOpen = false
+        }
+
+        if let origin = targetOrigin {
+            RunLoop.main.perform(inModes: [.common, RunLoop.Mode(rawValue: "NSModalPanelRunLoopMode")]) { [weak self] in
+                guard sessionState.isActive, let self = self else { return }
+                self.setFrameOrigin(origin)
+                self.level = target
+                self.alphaValue = 1.0
+                self.orderFrontRegardless()
+            }
         }
 
         observerToken = NotificationCenter.default.addObserver(
