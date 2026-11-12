@@ -198,7 +198,8 @@ public final class AutoQuitManager {
         isFinishedLaunching: Bool,
         isSelf: Bool,
         mode: AutoQuitMode,
-        rules: [String]
+        rules: [String],
+        isAlreadyWatched: Bool = false
     ) -> Bool {
         guard !isSelf else { return false }
         guard isFinishedLaunching else { return false }
@@ -207,7 +208,9 @@ public final class AutoQuitManager {
         guard !isProtectedVirtualizationApp(bundleID: bid) else { return false }
         switch mode {
         case .allApps:
-            guard activationPolicy == .regular else { return false }
+            if !isAlreadyWatched {
+                guard activationPolicy == .regular else { return false }
+            }
             return !rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
         case .onlyListed:
             return rules.contains(where: { $0.caseInsensitiveCompare(bid) == .orderedSame })
@@ -729,14 +732,19 @@ public final class AutoQuitManager {
         os_unfair_lock_unlock(&lock)
     }
 
-    private func detach(pid: pid_t) {
-        os_unfair_lock_lock(&lock)
+    @discardableResult
+    private func detachLocked(pid: pid_t) -> WatchedApp? {
         cancelPendingQuitLocked(pid)
         terminatingPids.remove(pid)
         recheckCounts.removeValue(forKey: pid)
         // Y-04: 进程终止时清理抑制记录，防止系统复用 PID 后继承旧进程的抑制态
         suppressedPids.remove(pid)
-        let removedEntry = watched.removeValue(forKey: pid)
+        return watched.removeValue(forKey: pid)
+    }
+
+    private func detach(pid: pid_t) {
+        os_unfair_lock_lock(&lock)
+        let removedEntry = detachLocked(pid: pid)
         os_unfair_lock_unlock(&lock)
 
         if let entry = removedEntry {
@@ -1048,6 +1056,27 @@ public final class AutoQuitManager {
         guard pendingQuits[pid] == nil else { return }
         guard !terminatingPids.contains(pid) else { return }
 
+        let cfg = ConfigManager.shared.config
+        guard cfg.enableAutoQuit else { return }
+        let resolvedPid = AutoQuitManager.resolveProcessIdentifier(for: app) ?? pid
+        guard AutoQuitManager.shouldWatch(
+            bundleID: app.bundleIdentifier,
+            activationPolicy: app.activationPolicy,
+            isFinishedLaunching: app.isFinishedLaunching,
+            isSelf: resolvedPid == ProcessInfo.processInfo.processIdentifier,
+            mode: cfg.autoQuitMode,
+            rules: cfg.autoQuitAppRules,
+            isAlreadyWatched: true
+        ) else {
+            runtimeLog("[AutoQuit] scheduleQuit aborted for \(app.localizedName ?? "pid \(pid)"): not eligible; detaching.")
+            if let entry = detachLocked(pid: pid) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.teardownObserver(entry.observer, axApp: entry.axApp, windowRefs: entry.registeredWindowRefs)
+                }
+            }
+            return
+        }
+
         if suppressedPids.contains(pid) {
             AutoQuitDecisionTrace.shared.record(
                 pid: pid,
@@ -1060,11 +1089,6 @@ public final class AutoQuitManager {
                 detail: "用户曾点击取消，本轮会话静默豁免"
             )
             return
-        }
-
-        if var entry = watched[pid] {
-            entry.lastCloseEventDate = Date()
-            watched[pid] = entry
         }
 
         let configuredDelay = max(0, min(10, ConfigManager.shared.config.autoQuitDelaySeconds))
@@ -1152,8 +1176,22 @@ public final class AutoQuitManager {
             isFinishedLaunching: app.isFinishedLaunching,
             isSelf: resolvedPid == ProcessInfo.processInfo.processIdentifier,
             mode: cfg.autoQuitMode,
-            rules: cfg.autoQuitAppRules
-        ) else { return }
+            rules: cfg.autoQuitAppRules,
+            isAlreadyWatched: true
+        ) else {
+            runtimeLog("[AutoQuit] executePendingQuit aborted for \(app.localizedName ?? "pid \(pid)"): app is no longer eligible; detaching.")
+            detach(pid: pid)
+            AutoQuitDecisionTrace.shared.record(
+                pid: pid,
+                bundleID: app.bundleIdentifier ?? "",
+                appName: app.localizedName ?? "pid \(pid)",
+                axWindowCount: 0,
+                wsWindowCount: 0,
+                decision: .aborted,
+                reasonCode: "AppNoLongerEligible"
+            )
+            return
+        }
 
         // Y-02: 锁外执行终审 AX 与 WindowServer 计数
         let axCount = axWindows(of: entrySnapshot.axApp)?.count
@@ -1225,10 +1263,11 @@ public final class AutoQuitManager {
         let targetPid = pid
         let targetApp = app
         let appName = app.localizedName ?? "pid \(pid)"
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
             guard !targetApp.isTerminated else { return }
             runtimeLog("[AutoQuit] App \(appName) did not exit after 1.5s; escalating with SIGTERM.")
             _ = kill(targetPid, SIGTERM)
+            self?.terminateCompanionHelpers(for: targetApp)
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                 guard !targetApp.isTerminated else { return }
                 runtimeLog("[AutoQuit] App \(appName) still alive after 2.5s; forcing termination.")
@@ -1237,48 +1276,68 @@ public final class AutoQuitManager {
         }
     }
 
-    /// 伴生 Helper 联动退出（含军师加固点 3：APFS Unicode NFC 规范化前缀校验与内核进程表深潜扫描）
+    /// 伴生 Helper 联动退出（含军师加固点 3：APFS Unicode NFC 规范化前缀校验、内核进程表深潜扫描及直接衍生子进程清理）
     private func terminateCompanionHelpers(for mainApp: NSRunningApplication) {
-        guard let rawMainBundlePath = mainApp.bundleURL?.path else { return }
-        let mainBundlePath = rawMainBundlePath.precomposedStringWithCanonicalMapping
         let mainBid = mainApp.bundleIdentifier ?? ""
         let mainOwner = mainApp.localizedName ?? ""
         let companions = Set(AutoQuitQuirks.shared.companionBundleIDs(for: mainBid, ownerName: mainOwner))
         let terminateInBundle = AutoQuitQuirks.shared.shouldTerminateHelpersInBundle(for: mainBid, ownerName: mainOwner)
 
-        guard !companions.isEmpty || terminateInBundle else { return }
+        if let rawMainBundlePath = mainApp.bundleURL?.path, (!companions.isEmpty || terminateInBundle) {
+            let mainBundlePath = rawMainBundlePath.precomposedStringWithCanonicalMapping
 
-        // 1. 终止 NSWorkspace 注册的常规 GUI 伴生进程
-        for running in NSWorkspace.shared.runningApplications {
-            guard running.processIdentifier != mainApp.processIdentifier, !running.isTerminated else { continue }
-            guard let rawHelperPath = running.bundleURL?.path else { continue }
-            let helperPath = rawHelperPath.precomposedStringWithCanonicalMapping
-            let helperBid = running.bundleIdentifier ?? ""
+            // 1. 终止 NSWorkspace 注册的常规 GUI 伴生进程
+            for running in NSWorkspace.shared.runningApplications {
+                guard running.processIdentifier != mainApp.processIdentifier, !running.isTerminated else { continue }
+                guard let rawHelperPath = running.bundleURL?.path else { continue }
+                let helperPath = rawHelperPath.precomposedStringWithCanonicalMapping
+                let helperBid = running.bundleIdentifier ?? ""
 
-            let isExplicitCompanion = !helperBid.isEmpty && companions.contains(helperBid)
-            let isPhysicallyInsideBundle = helperPath.hasPrefix(mainBundlePath + "/Contents/")
+                let isExplicitCompanion = !helperBid.isEmpty && companions.contains(helperBid)
+                let isPhysicallyInsideBundle = helperPath.hasPrefix(mainBundlePath + "/Contents/")
 
-            if (isExplicitCompanion || terminateInBundle) && isPhysicallyInsideBundle {
-                runtimeLog("[AutoQuit] Terminating companion helper \(running.localizedName ?? helperBid) (pid: \(running.processIdentifier)) inside \(mainApp.localizedName ?? mainBid)")
-                running.terminate()
+                if (isExplicitCompanion || terminateInBundle) && isPhysicallyInsideBundle {
+                    runtimeLog("[AutoQuit] Terminating companion helper \(running.localizedName ?? helperBid) (pid: \(running.processIdentifier)) inside \(mainApp.localizedName ?? mainBid)")
+                    running.terminate()
+                }
+            }
+
+            // 2. 终止 Bundle 内部所有非 GUI / daemon / 辅助二进制守护进程（如 aitrust-server, netdisk_service）
+            if terminateInBundle {
+                let bundlePrefix = mainBundlePath.hasSuffix("/") ? mainBundlePath : (mainBundlePath + "/")
+                var pids = [pid_t](repeating: 0, count: 2048)
+                let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * pids.count))
+                let count = Int(bytes) / MemoryLayout<pid_t>.size
+                var pathBuffer = [CChar](repeating: 0, count: 4096)
+                for i in 0..<count {
+                    let p = pids[i]
+                    guard p > 0, p != mainApp.processIdentifier, p != ProcessInfo.processInfo.processIdentifier else { continue }
+                    let len = proc_pidpath(p, &pathBuffer, UInt32(pathBuffer.count))
+                    if len > 0 {
+                        let path = String(cString: pathBuffer).precomposedStringWithCanonicalMapping
+                        if path.hasPrefix(bundlePrefix + "Contents/") {
+                            runtimeLog("[AutoQuit] Terminating non-GUI daemon helper in bundle (pid: \(p), path: \(path))")
+                            _ = kill(p, SIGTERM)
+                        }
+                    }
+                }
             }
         }
 
-        // 2. 终止 Bundle 内部所有非 GUI / daemon / 辅助二进制守护进程（如 aitrust-server, netdisk_service）
-        if terminateInBundle {
-            let bundlePrefix = mainBundlePath.hasSuffix("/") ? mainBundlePath : (mainBundlePath + "/")
+        // 3. 深度终止由主应用直接衍生的孤儿直接子进程（通过内核 proc_pidinfo 匹配 pbi_ppid，如 magpie-bun / 插件主机等）
+        let mainPid = mainApp.processIdentifier
+        if mainPid > 0 {
             var pids = [pid_t](repeating: 0, count: 2048)
             let bytes = proc_listpids(UInt32(PROC_ALL_PIDS), 0, &pids, Int32(MemoryLayout<pid_t>.size * pids.count))
             let count = Int(bytes) / MemoryLayout<pid_t>.size
-            var pathBuffer = [CChar](repeating: 0, count: 4096)
+            var bsdInfo = proc_bsdinfo()
+            let bsdInfoSize = Int32(MemoryLayout<proc_bsdinfo>.size)
             for i in 0..<count {
                 let p = pids[i]
-                guard p > 0, p != mainApp.processIdentifier, p != ProcessInfo.processInfo.processIdentifier else { continue }
-                let len = proc_pidpath(p, &pathBuffer, UInt32(pathBuffer.count))
-                if len > 0 {
-                    let path = String(cString: pathBuffer).precomposedStringWithCanonicalMapping
-                    if path.hasPrefix(bundlePrefix + "Contents/") {
-                        runtimeLog("[AutoQuit] Terminating non-GUI daemon helper in bundle (pid: \(p), path: \(path))")
+                guard p > 0, p != mainPid, p != ProcessInfo.processInfo.processIdentifier else { continue }
+                if proc_pidinfo(p, PROC_PIDTBSDINFO, 0, &bsdInfo, bsdInfoSize) == bsdInfoSize {
+                    if bsdInfo.pbi_ppid == pid_t(mainPid) {
+                        runtimeLog("[AutoQuit] Terminating orphaned direct child process (pid: \(p)) of \(mainApp.localizedName ?? "pid \(mainPid)")")
                         _ = kill(p, SIGTERM)
                     }
                 }

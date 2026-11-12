@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.57}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-84}"
+VERSION="${ATOOLS_VERSION:-1.3.58}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-85}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,41 +114,99 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 抽屉边缘停靠双侧智能感应唤出、固定桌面启动解耦与交互全面重构
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 修复 Magpie 关窗退出死循环与偏好设置文案极简化规范重构
 
-### 🚀 核心新特性与交互升级
-1. **全新抽屉驻留形态三选一分段胶囊**：
-   - **自由浮动**：经典轻量浮动面板，点击外部失焦自动收起；
-   - **固定桌面**：常驻桌面底层，不因失去焦点或切换工作区而关闭；
-   - **边缘停靠**：停靠在屏幕边缘，鼠标推向屏幕边缘感应区自动展开，鼠标移出或启动软件后平滑收起。
-2. **屏幕边缘自动吸附与双侧智能感应唤出**：
-   - 支持「自适应两侧」、「屏幕左侧」、「屏幕右侧」三种停靠方位；
-   - 自适应模式下智能感知光标位置，鼠标贴向左边即从左侧展开，贴向右边即从右侧展开；
-   - 内置 220ms 悬停防抖与四角 Hot Corners 避让，杜绝无意划过误唤出。
-3. **彻底切除顶部感应，杜绝系统交互冲突**：
-   - 移除易引起冲突的屏幕顶部停靠，彻底消灭用户在屏幕顶部缩放窗口、右键自定义工具栏、切换标签页或点击系统菜单栏时的误触，全屏手势完美避让。
-4. **固定桌面启动自动关闭行为彻底解耦**：
-   - 处于「固定桌面」形态时，若开启「点击启动应用后自动关闭」，启动应用后面板将利落收起；若未开启则持续固定在桌面，满足不同用户的差异化工作流。
+### 🚀 核心优化与缺陷修复
+1. **彻底攻克 Magpie 等 LSUIElement/Wails 架构应用关窗退出死循环**：
+   - 解决 Wails/Tauri 应用在关闭主视窗后动态将 ActivationPolicy 降级为 \`.accessory\` 导致终审拦截无法退出的缺陷；
+   - 移除定时器中伪造关窗时间戳逻辑，彻底切断自动退出调度自激死循环链路；
+   - 重构伴生进程清理机制：通过内核级 \`proc_pidinfo\` 深度递归扫描并终止脱离主 Bundle 目录的孤儿直接子进程（如 \`magpie-bun\`），实现主辅进程彻底干净退出。
+2. **偏好设置全功能点提示词与副标题极简化重构**：
+   - 逐一梳理重写常规、应用抽屉、全盘搜索、关窗退出、外观与主题、运行与性能、关于全部 7 个标签页的标题、副标题与提示文案；
+   - 彻底清除技术宣讲、过度辩护与人机长句，全面禁用“绝不”、“彻底”、“杜绝误杀”、“毫秒级”、“物理隔离”等绝对化词汇；
+   - 统一遵循地道 macOS 原生设计规范，文案简明、克制、准确、操作导向。
 
 ---
 
 ### 🛡️ 架构质量与系统性加固
-1. **AppKit 主线程 UI 防御加固**：
-   - 在 \`LauncherExecutor\`、\`ConfigManager\` 与 \`ShelfPanel\` 部署三重主线程校验与异步调度屏障，彻底消除后台异步回调触发视图刷新导致的 \`SIGABRT\` 闪退隐患；
-2. **100% 存量配置优雅平滑兼容**：
-   - 编解码器自动向下兼容旧版 \`isShelfPinned\` 与历史 \`top\` 停靠配置，老用户无感平滑升级；
-3. **全量自动化诊断与测试回归**：
-   - 全套 19 大项 112+ 个综合诊断测试套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过。"
+1. **全套自动化测试回归**：
+   - 全套 19 大项 112+ 个综合诊断测试套件（\`DiagnosticSuite\`）100% 全部 PASSED 通过；
+2. **Ed25519 签名与安全更新保障**：
+   - 发布资产经由专属 Ed25519 私钥签名，支持客户端安全自检与防篡改热更新。"
 
 echo "==> Publishing GitHub Release v${VERSION} to Moricina/ATools..."
-if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
-    "$GH_BIN" release upload "v${VERSION}" --repo Moricina/ATools \
-        "$DIR/ATools.dmg" "$DIR/ATools.zip" "$DIR/ATools.dmg.sig" "$DIR/ATools.zip.sig" --clobber
+
+if [ -x "$GH_BIN" ]; then
+    if "$GH_BIN" release view "v${VERSION}" --repo Moricina/ATools >/dev/null 2>&1; then
+        "$GH_BIN" release upload "v${VERSION}" --repo Moricina/ATools \
+            "$DIR/ATools.dmg" "$DIR/ATools.zip" "$DIR/ATools.dmg.sig" "$DIR/ATools.zip.sig" --clobber
+    else
+        "$GH_BIN" release create "v${VERSION}" --repo Moricina/ATools \
+            --title "ATools v${VERSION}" \
+            --notes "$NOTES" \
+            "$DIR/ATools.dmg" "$DIR/ATools.zip" "$DIR/ATools.dmg.sig" "$DIR/ATools.zip.sig"
+    fi
 else
-    "$GH_BIN" release create "v${VERSION}" --repo Moricina/ATools \
-        --title "ATools v${VERSION}" \
-        --notes "$NOTES" \
-        "$DIR/ATools.dmg" "$DIR/ATools.zip" "$DIR/ATools.dmg.sig" "$DIR/ATools.zip.sig"
+    echo "==> gh CLI not found, using GitHub REST API via curl..."
+    if [ -z "${GH_TOKEN:-}" ]; then
+        echo "Error: GH_TOKEN is required when gh CLI is unavailable." >&2
+        exit 1
+    fi
+
+    # 1. 查找或创建 Release
+    RELEASE_DATA=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/Moricina/ATools/releases/tags/v${VERSION}")
+    RELEASE_ID=$(echo "$RELEASE_DATA" | jq -r '.id // empty')
+
+    if [ -z "$RELEASE_ID" ]; then
+        echo "==> Creating release v${VERSION}..."
+        PAYLOAD=$(jq -n \
+            --arg tag "v${VERSION}" \
+            --arg name "ATools v${VERSION}" \
+            --arg body "$NOTES" \
+            '{tag_name: $tag, name: $name, body: $body, draft: false, prerelease: false}')
+        CREATE_RESP=$(curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "https://api.github.com/repos/Moricina/ATools/releases")
+        RELEASE_ID=$(echo "$CREATE_RESP" | jq -r '.id // empty')
+        if [ -z "$RELEASE_ID" ]; then
+            echo "Failed to create release: $CREATE_RESP" >&2
+            exit 1
+        fi
+    else
+        echo "==> Found existing release v${VERSION} (ID: $RELEASE_ID), updating assets..."
+    fi
+
+    # 2. 上传 Release Assets
+    UPLOAD_URL="https://uploads.github.com/repos/Moricina/ATools/releases/${RELEASE_ID}/assets"
+    EXISTING_ASSETS=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/Moricina/ATools/releases/${RELEASE_ID}/assets")
+
+    upload_asset() {
+        local file_path="$1"
+        local asset_name="$(basename "$file_path")"
+        local content_type="$2"
+
+        # 若已存在同名资产，先删除
+        local existing_id=$(echo "$EXISTING_ASSETS" | jq -r ".[] | select(.name == \"$asset_name\") | .id // empty")
+        if [ -n "$existing_id" ]; then
+            echo "==> Deleting existing asset $asset_name (ID: $existing_id)..."
+            curl -s -X DELETE -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/Moricina/ATools/releases/assets/${existing_id}" >/dev/null
+        fi
+
+        echo "==> Uploading $asset_name..."
+        curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: $content_type" \
+            --data-binary "@$file_path" \
+            "${UPLOAD_URL}?name=${asset_name}" >/dev/null
+        echo "    $asset_name uploaded ✓"
+    }
+
+    upload_asset "$DIR/ATools.dmg" "application/octet-stream"
+    upload_asset "$DIR/ATools.zip" "application/zip"
+    upload_asset "$DIR/ATools.dmg.sig" "text/plain"
+    upload_asset "$DIR/ATools.zip.sig" "text/plain"
 fi
 
 echo "==> GitHub Release v${VERSION} 发布成功！"

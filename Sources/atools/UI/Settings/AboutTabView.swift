@@ -66,7 +66,7 @@ public final class AboutTabView: NSView {
         let rowVer = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "sparkles"),
             title: "ATools for macOS (v\(currentVer))",
-            subtitle: "极简启动抽屉与全盘秒搜中枢",
+            subtitle: "极简启动抽屉与全盘搜索",
             accessory: verLabel
         )
         card1.addRow(rowVer)
@@ -97,7 +97,7 @@ public final class AboutTabView: NSView {
         let rowUpdate = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.triangle.2.circlepath"),
             title: "检查与安装更新",
-            subtitle: "直连官方 GitHub Releases，支持一键无感下载与平滑原地热更新",
+            subtitle: "检查并更新至最新发布版本",
             accessory: actionContainer
         )
         card1.addRow(rowUpdate, isLast: false)
@@ -183,7 +183,7 @@ public final class AboutTabView: NSView {
         ])
 
         // Section 2: 系统兼容性与架构
-        let sec2Title = makeSectionHeader(title: "系统兼容与技术规格")
+        let sec2Title = makeSectionHeader(title: "系统规格")
         scrollContent.addSubview(sec2Title)
 
         let card2 = SettingsCardView()
@@ -196,7 +196,7 @@ public final class AboutTabView: NSView {
         let rowArch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "cpu"),
             title: "原生架构支持",
-            subtitle: "基于当前安装包的原生架构构建，适配 macOS 12 及以上系统",
+            subtitle: "适配 macOS 12 及以上系统",
             accessory: archLabel
         )
         card2.addRow(rowArch)
@@ -294,7 +294,7 @@ public final class AboutTabView: NSView {
         case .available(let release):
             statusLabel.stringValue = "发现新版本 \(release.version)（\(release.name)）。"
             statusLabel.textColor = .labelColor
-            actionButton.title = "一键更新"
+            actionButton.title = "立即更新"
             actionButton.isEnabled = true
             progressIndicator.isHidden = true
             showReleaseNotes(release.body)
@@ -309,7 +309,7 @@ public final class AboutTabView: NSView {
             progressIndicator.doubleValue = progress
 
         case .preparing:
-            statusLabel.stringValue = "正在解包校验并准备原地平滑替换与重启..."
+            statusLabel.stringValue = "正在准备更新并重启..."
             statusLabel.textColor = .secondaryLabelColor
             actionButton.title = "更新中..."
             actionButton.isEnabled = false

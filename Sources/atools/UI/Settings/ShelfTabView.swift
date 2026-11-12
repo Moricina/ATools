@@ -98,8 +98,8 @@ public final class ShelfTabView: NSView {
         shelfSwitch.action = #selector(toggleShelfPanel(_:))
         let rowShelf = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "square.grid.2x2"),
-            title: "启用应用分类工作台",
-            subtitle: "开启后支持自定义分类、拖拽整理与快速启停",
+            title: "启用应用抽屉",
+            subtitle: "通过快捷键或手势呼出应用抽屉",
             accessory: shelfSwitch
         )
         card1.addRow(rowShelf)
@@ -116,8 +116,8 @@ public final class ShelfTabView: NSView {
         self.shelfRecorder = recorder
         let rowRecorder = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "keyboard"),
-            title: "专属全局快捷键",
-            subtitle: "默认 ⌥A，支持按下键盘任意组合键或双击修饰键 (如 2× ⌥)",
+            title: "快捷键",
+            subtitle: "支持按下组合键或双击修饰键（如双击 ⌥）",
             accessory: recorder
         )
         card1.addRow(rowRecorder)
@@ -132,8 +132,8 @@ public final class ShelfTabView: NSView {
         trackpadGesturePopUp.action = #selector(trackpadGestureChanged(_:))
         let rowGesture = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.point.up.left"),
-            title: "触控板手势唤出",
-            subtitle: "在触控板上轻点手势随时呼出工作台（推荐四指轻点）",
+            title: "触控板手势",
+            subtitle: "通过触控板多指轻点唤出抽屉",
             accessory: trackpadGesturePopUp
         )
         card1.addRow(rowGesture, isLast: true)
@@ -176,8 +176,8 @@ public final class ShelfTabView: NSView {
         presentationModeControl.widthAnchor.constraint(equalToConstant: 240).isActive = true
         let rowMode = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "rectangle.inset.filled.and.cursorarrow"),
-            title: "抽屉驻留形态",
-            subtitle: "自由浮动（失焦关闭）、固定桌面（常驻屏幕）、边缘停靠（触边感应唤出）",
+            title: "驻留形态",
+            subtitle: "设置抽屉为自由浮动、固定在桌面或贴靠屏幕边缘",
             accessory: presentationModeControl
         )
         card2.addRow(rowMode)
@@ -192,8 +192,8 @@ public final class ShelfTabView: NSView {
         dockEdgePopUp.action = #selector(dockEdgeChanged(_:))
         dockEdgeRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "sidebar.left"),
-            title: "边缘吸附停靠方位",
-            subtitle: "靠近左侧或右侧屏幕边缘感应唤出，避开顶部菜单栏与窗口控制误触",
+            title: "停靠方位",
+            subtitle: "光标移动至设定的屏幕边缘时自动滑出抽屉",
             accessory: dockEdgePopUp
         )
         card2.addRow(dockEdgeRow)
@@ -207,8 +207,8 @@ public final class ShelfTabView: NSView {
         autoCloseLaunchSwitch.action = #selector(toggleAutoCloseLaunch(_:))
         let rowCloseLaunch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.down.right.and.arrow.up.left"),
-            title: "点击启动应用后自动关闭",
-            subtitle: "点击启动应用后自动收起（即使固定在桌面亦会收起；若未开启则持续留在桌面）",
+            title: "点击启动后自动关闭",
+            subtitle: "点击启动应用后自动关闭抽屉",
             accessory: autoCloseLaunchSwitch
         )
         card2.addRow(rowCloseLaunch)
@@ -218,8 +218,8 @@ public final class ShelfTabView: NSView {
         autoCloseMouseExitSwitch.action = #selector(toggleAutoCloseMouseExit(_:))
         let rowCloseMouse = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "cursorarrow.motionlines"),
-            title: "鼠标移出面板后自动关闭",
-            subtitle: "含 0.35s 防抖延迟与右键保护；在边缘停靠形态下移出始终平滑缩回",
+            title: "鼠标移出后自动关闭",
+            subtitle: "鼠标移出抽屉面板后自动收起",
             accessory: autoCloseMouseExitSwitch
         )
         card2.addRow(rowCloseMouse, isLast: true)
@@ -258,8 +258,8 @@ public final class ShelfTabView: NSView {
         orientationControl.widthAnchor.constraint(equalToConstant: 240).isActive = true
         let rowOrient = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "rectangle.split.2x1"),
-            title: "分类栏布局方向",
-            subtitle: "切换分类胶囊栏在应用抽屉的展示方位（顶部或左侧）",
+            title: "分类栏位置",
+            subtitle: "设置分类栏位于抽屉顶部或左侧",
             accessory: orientationControl
         )
         card3.addRow(rowOrient)
@@ -304,8 +304,8 @@ public final class ShelfTabView: NSView {
 
         let rowScale = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.below.rectangle"),
-            title: "应用图标大小比例",
-            subtitle: "自由缩放应用抽屉网格内图标和文字尺寸 (70% ~ 110%，默认 100%)",
+            title: "图标大小",
+            subtitle: "调整抽屉内图标与文字的大小",
             accessory: sliderContainer
         )
         card3.addRow(rowScale)
@@ -350,8 +350,8 @@ public final class ShelfTabView: NSView {
 
         let rowSpacing = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.left.and.right.square"),
-            title: "应用图标间距",
-            subtitle: "自由调节应用抽屉网格内图标选中底衬之间的间隙 (2 ~ 24 pt，默认 6 pt)",
+            title: "图标间距",
+            subtitle: "调整抽屉内图标之间的间隔距离",
             accessory: spacingContainer
         )
         card3.addRow(rowSpacing)
@@ -361,8 +361,8 @@ public final class ShelfTabView: NSView {
         favoritesSwitch.action = #selector(toggleFavorites(_:))
         let rowFav = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "star.fill"),
-            title: "启用「常用」分类",
-            subtitle: "在分类栏首位展示常用应用，并随使用频率自动排序",
+            title: "显示「常用」分类",
+            subtitle: "在分类栏首位显示最近高频使用的应用",
             accessory: favoritesSwitch
         )
         card3.addRow(rowFav)
@@ -372,8 +372,8 @@ public final class ShelfTabView: NSView {
         autoAddInstalledAppsSwitch.action = #selector(toggleAutoAddInstalledApps(_:))
         let rowAutoAdd = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.down.app"),
-            title: "新安装应用自动进抽屉",
-            subtitle: "系统安装新应用后无需手动拖入，后台自动识别并上架到抽屉分类",
+            title: "自动添加新安装应用",
+            subtitle: "检测到系统新安装应用时自动添加至抽屉",
             accessory: autoAddInstalledAppsSwitch
         )
         card3.addRow(rowAutoAdd)
@@ -385,8 +385,8 @@ public final class ShelfTabView: NSView {
         autoAddPolicyPopUp.action = #selector(autoAddPolicyChanged(_:))
         let rowAutoAddPolicy = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "tray.and.arrow.down"),
-            title: "新应用入库目标",
-            subtitle: "指定新装应用的落脚点，推荐专属「新应用」分类实现物理隔离",
+            title: "新应用添加位置",
+            subtitle: "选择新安装应用默认归入的分类",
             accessory: autoAddPolicyPopUp
         )
         card3.addRow(rowAutoAddPolicy)
@@ -396,8 +396,8 @@ public final class ShelfTabView: NSView {
         quickSlotsSwitch.action = #selector(toggleQuickSlots(_:))
         let rowQuickSlots = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
-            title: "抽屉内 ⌘1~⌘9 快速秒启",
-            subtitle: "打开抽屉时按 ⌘1~⌘9 毫秒级直启前 9 个应用，图标右上角显示快捷徽标",
+            title: "快捷键启动前 9 项",
+            subtitle: "打开抽屉后按 ⌘1~⌘9 快速打开对应项目",
             accessory: quickSlotsSwitch
         )
         card3.addRow(rowQuickSlots)
@@ -413,8 +413,8 @@ public final class ShelfTabView: NSView {
         shelfSortPolicyPopUp.action = #selector(shelfSortPolicyChanged(_:))
         let rowSortPolicy = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.up.arrow.down"),
-            title: "默认排序方式",
-            subtitle: "选择抽屉分类内应用排列方式，推荐手动自定义保持自由布局习惯",
+            title: "项目排序",
+            subtitle: "选择分类内应用的排列顺序",
             accessory: shelfSortPolicyPopUp
         )
         card3.addRow(rowSortPolicy)
@@ -424,17 +424,17 @@ public final class ShelfTabView: NSView {
         trackLaunchFrequencySwitch.action = #selector(toggleTrackLaunchFrequency(_:))
         let rowTrackFreq = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "chart.bar.xaxis"),
-            title: "记录应用启动频次",
-            subtitle: "本地统计软件启动次数与最近启动时间，用于智能推荐与频次排序 (隐私可控)",
+            title: "统计应用使用频率",
+            subtitle: "记录启动次数与时间，用于常用分类和排序",
             accessory: trackLaunchFrequencySwitch
         )
         card3.addRow(rowTrackFreq)
 
-        shelfCleanMissingBtn = SettingsPillButton(title: "一键清理失效项", target: self, action: #selector(cleanShelfMissingItemsClicked))
+        shelfCleanMissingBtn = SettingsPillButton(title: "清理失效项", target: self, action: #selector(cleanShelfMissingItemsClicked))
         shelfMissingItemsRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "exclamationmark.triangle"),
-            title: "清理失效启动项",
-            subtitle: "对已卸载或移动的项目渲染灰阶与感叹号角标，支持右键重定位或一键清理",
+            title: "清理失效项目",
+            subtitle: "移除已被删除或移动的启动项",
             accessory: shelfCleanMissingBtn
         )
         card3.addRow(shelfMissingItemsRow, isLast: true)
@@ -534,7 +534,7 @@ public final class ShelfTabView: NSView {
 
         autoAddPolicyPopUp.isEnabled = enabled && cfg.enableAutoAddInstalledApps
         autoAddPolicyPopUp.removeAllItems()
-        let inboxTitle = "🌟 专属分类「\(cfg.autoAddInboxCategoryName.isEmpty ? "新应用" : cfg.autoAddInboxCategoryName)」(推荐)"
+        let inboxTitle = "专属分类「\(cfg.autoAddInboxCategoryName.isEmpty ? "新应用" : cfg.autoAddInboxCategoryName)」"
         autoAddPolicyPopUp.addItem(withTitle: inboxTitle)
         autoAddPolicyPopUp.lastItem?.representedObject = "INBOX"
 
@@ -568,10 +568,10 @@ public final class ShelfTabView: NSView {
 
         let missingCount = ConfigManager.shared.scanMissingItems().count
         if missingCount == 0 {
-            shelfMissingItemsRow.subtitleLabel.stringValue = "当前所有抽屉项目目标路径均正常有效（0 个失效项）"
+            shelfMissingItemsRow.subtitleLabel.stringValue = "所有启动项路径均有效"
             shelfCleanMissingBtn.isEnabled = false
         } else {
-            shelfMissingItemsRow.subtitleLabel.stringValue = "当前检测到 \(missingCount) 个失效启动项（可在抽屉右键重新定位，或在此一键清理）"
+            shelfMissingItemsRow.subtitleLabel.stringValue = "检测到 \(missingCount) 个已被移动或删除的启动项"
             shelfCleanMissingBtn.isEnabled = enabled
         }
     }
@@ -738,8 +738,8 @@ public final class ShelfTabView: NSView {
         let previewLines = missing.prefix(8).map { "• [\($0.category.name)] \($0.item.name) (\($0.item.target))" }.joined(separator: "\n")
         let moreHint = missing.count > 8 ? "\n…等共 \(missing.count) 个失效项目" : ""
         let alert = NSAlert()
-        alert.messageText = "确认一键清理 \(missing.count) 个失效启动项？"
-        alert.informativeText = "以下项目因软件卸载或文件移动已失效，清理后将从对应分类中移除：\n\n\(previewLines)\(moreHint)"
+        alert.messageText = "确认清理 \(missing.count) 个失效启动项？"
+        alert.informativeText = "以下项目因已被移动或删除已失效，清理后将从对应分类中移除：\n\n\(previewLines)\(moreHint)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "立即清理")
         alert.addButton(withTitle: "取消")

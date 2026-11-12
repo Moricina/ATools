@@ -54,7 +54,7 @@ public final class PerformanceTabView: NSView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        let sec1Title = makeSectionHeader(title: "物理内存监测与一键回收")
+        let sec1Title = makeSectionHeader(title: "内存监测与释放")
         scrollContent.addSubview(sec1Title)
 
         let card1 = SettingsCardView()
@@ -65,20 +65,20 @@ public final class PerformanceTabView: NSView {
         memLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         memLabel.textColor = .labelColor
 
-        let purgeBtn = SettingsPillButton(title: "一键深度释放", target: self, action: #selector(handlePurge))
+        let purgeBtn = SettingsPillButton(title: "释放内存", target: self, action: #selector(handlePurge))
 
         let memRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "memorychip"),
-            title: "当前物理内存占用 (Footprint)",
-            subtitle: "与「活动监视器」内存列一致的真实物理足迹；RSS 口径会把共享的系统框架页计入，虚高 2–3 倍",
+            title: "内存占用",
+            subtitle: "当前进程的实际物理内存占用",
             accessory: memLabel
         )
         card1.addRow(memRow)
 
         let actionRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "sparkles"),
-            title: "立即回收缓存与堆脏页",
-            subtitle: "清空当前图标缓存并主动向系统内核归还堆内存",
+            title: "释放内存缓存",
+            subtitle: "清空临时图标缓存并释放闲置内存",
             accessory: purgeBtn
         )
         card1.addRow(actionRow)
@@ -91,41 +91,41 @@ public final class PerformanceTabView: NSView {
         let statusRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.triangle.2.circlepath"),
             title: "释放结果",
-            subtitle: "显示本次释放前后物理内存占用的差值",
+            subtitle: "显示最近一次释放的内存差值",
             accessory: purgeStatusLabel
         )
         card1.addRow(statusRow, isLast: true)
 
-        let sec2Title = makeSectionHeader(title: "退火策略与响应延迟")
+        let sec2Title = makeSectionHeader(title: "响应与缓存设置")
         scrollContent.addSubview(sec2Title)
 
         let card2 = SettingsCardView()
         card2.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card2)
 
-        annealControl = SettingsLiquidSegmentedControl(labels: ["1.5s (激进省电)", "3.0s (推荐平衡)", "10.0s (宽松缓存)"], target: self, action: #selector(annealChanged(_:)))
+        annealControl = SettingsLiquidSegmentedControl(labels: ["1.5 秒", "3.0 秒", "10.0 秒"], target: self, action: #selector(annealChanged(_:)))
         let rowAnneal = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "timer"),
-            title: "面板隐藏退火延迟",
-            subtitle: "面板关闭后经过此延迟自动触发内存脏页回收",
+            title: "面板收起后内存释放延迟",
+            subtitle: "面板关闭后等待设定的时间自动释放闲置内存",
             accessory: annealControl
         )
         card2.addRow(rowAnneal)
 
-        debounceControl = SettingsLiquidSegmentedControl(labels: ["50ms (极速)", "150ms (均衡)", "300ms (节能)"], target: self, action: #selector(debounceChanged(_:)))
+        debounceControl = SettingsLiquidSegmentedControl(labels: ["50ms", "150ms", "300ms"], target: self, action: #selector(debounceChanged(_:)))
         let rowDebounce = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "waveform.path"),
-            title: "全盘搜索防抖延迟",
-            subtitle: "控制打字时的 Spotlight 检索流式触发间隔",
+            title: "搜索防抖延迟",
+            subtitle: "控制连续输入时触发搜索的等待间隔",
             accessory: debounceControl
         )
         card2.addRow(rowDebounce)
 
-        cacheControl = SettingsLiquidSegmentedControl(labels: ["4 MB", "6 MB (默认)", "12 MB"], target: self, action: #selector(cacheLimitChanged(_:)))
+        cacheControl = SettingsLiquidSegmentedControl(labels: ["4 MB", "6 MB", "12 MB"], target: self, action: #selector(cacheLimitChanged(_:)))
         let rowCache = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "photo.stack"),
-            title: "缩略图缓存池上限",
-            subtitle: "限制 QuickLook 文件与 App 图标的最大驻留容量",
+            title: "缩略图缓存上限",
+            subtitle: "设置文件预览与应用图标的最大缓存容量",
             accessory: cacheControl
         )
         card2.addRow(rowCache, isLast: true)
@@ -172,7 +172,7 @@ public final class PerformanceTabView: NSView {
     }
 
     private func updateMemoryMetrics() {
-        memLabel.stringValue = String(format: "%.1f MB (真实物理占用)", currentFootprintMB())
+        memLabel.stringValue = String(format: "%.1f MB", currentFootprintMB())
     }
 
     /// Apple 官方的物理内存口径（task_vm_info.phys_footprint），与「活动监视器」
@@ -206,7 +206,7 @@ public final class PerformanceTabView: NSView {
                 self.purgeStatusLabel.stringValue = String(format: "已释放 %.1f MB", delta)
             } else {
                 self.purgeStatusLabel.textColor = .secondaryLabelColor
-                self.purgeStatusLabel.stringValue = "缓存已清空，物理内存无显著变化"
+                self.purgeStatusLabel.stringValue = "缓存已清空，内存占用无明显变化"
             }
         }
     }

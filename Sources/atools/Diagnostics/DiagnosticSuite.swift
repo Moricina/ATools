@@ -2080,6 +2080,21 @@ public enum DiagnosticSuite {
         TestAssertions.expect(watch("com.wiheads.paste", .accessory, true, false, .onlyListed, ["com.wiheads.paste"]) == true, "onlyListed mode strictly watches user-specified apps even with accessory policy")
         TestAssertions.expect(watch("com.wiheads.paste", .accessory, true, false, .allApps, []) == false, "allApps mode never automatically watches unlisted accessory apps")
 
+        // 验证已纳管应用（isAlreadyWatched: true）在关窗后动态降级为 .accessory 时的放行与退出资格：
+        // 典型案例：magpie (com.yetone.magpie) / Wails / LSUIElement 应用关窗切入 accessory，必须放行终审退出
+        TestAssertions.expect(
+            AutoQuitManager.shouldWatch(bundleID: "com.yetone.magpie", activationPolicy: .accessory, isFinishedLaunching: true, isSelf: false, mode: .allApps, rules: [], isAlreadyWatched: true) == true,
+            "Already-watched app transitioning to accessory policy must remain eligible for quit in allApps mode"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.shouldWatch(bundleID: "com.yetone.magpie", activationPolicy: .accessory, isFinishedLaunching: true, isSelf: false, mode: .allApps, rules: [], isAlreadyWatched: false) == false,
+            "Not-yet-watched accessory policy app must not be attached in allApps mode"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.shouldWatch(bundleID: "com.yetone.magpie", activationPolicy: .accessory, isFinishedLaunching: true, isSelf: false, mode: .allApps, rules: ["com.yetone.magpie"], isAlreadyWatched: true) == false,
+            "Already-watched app added to exclusion rules must be excluded"
+        )
+
         // 零窗判定：AX 查询失败（nil）绝不能视为零窗，否则误杀
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(0) == true, "0 windows confirmed must schedule quit")
         TestAssertions.expect(AutoQuitManager.isConfirmedZeroWindowCount(nil) == false, "AX query failure must never count as zero windows")
@@ -2217,6 +2232,8 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.matchRule(bundleID: "com.wails.tscanplus", ownerName: "TscanPlus")?.cleanAllOffscreenWindows == true, "TscanPlus rule must have cleanAllOffscreenWindows enabled")
         TestAssertions.expect(quirks.matchRule(bundleID: "io.appmakes.otty", ownerName: "Otty")?.cleanAllOffscreenWindows == true, "Otty rule must have cleanAllOffscreenWindows enabled")
         TestAssertions.expect(quirks.matchRule(bundleID: "org.b3log.siyuan", ownerName: "思源笔记")?.cleanAllOffscreenWindows == true, "SiYuan rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.yetone.magpie", ownerName: "magpie")?.cleanAllOffscreenWindows == true, "Magpie rule must have cleanAllOffscreenWindows enabled")
+        TestAssertions.expect(quirks.matchRule(bundleID: "com.yetone.magpie", ownerName: "magpie")?.terminateHelpersInBundle == true, "Magpie rule must have terminateHelpersInBundle enabled")
         TestAssertions.expect(quirks.matchRule(bundleID: "com.oplus.devicespace", ownerName: "OPPO 互联")?.cleanAllOffscreenWindows == true, "OPPO Connect rule must have cleanAllOffscreenWindows enabled")
 
         // 验证 苹果原生系统应用（备忘录、日历、App Store、Safari、文本编辑、提醒事项、音乐等）Quirks 纳管与离屏缓存清洗

@@ -563,6 +563,15 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             offscreenTitles: ["siyuan", "思源笔记", "思源"],
             terminateHelpersInBundle: true,
             cleanAllOffscreenWindows: true
+        ),
+        AppQuirkRule(
+            id: "magpie",
+            name: "magpie",
+            bundleIDPrefixes: ["com.yetone.magpie"],
+            ownerNameKeywords: ["magpie"],
+            offscreenTitles: ["magpie"],
+            terminateHelpersInBundle: true,
+            cleanAllOffscreenWindows: true
         )
     ]
 

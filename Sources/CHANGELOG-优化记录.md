@@ -5245,3 +5245,86 @@
 
 ### 3. 诊断验证结果
 - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项 112+ 个专项测试全部 100% PASSED 通过（0 失败，0 警告）**。
+
+---
+
+## 2026-11-12（增量更新：修复 Magpie 等 LSUIElement/Wails 应用关窗退出反复弹窗与无法彻底退出的致命缺陷）
+
+### 1. 缺陷根因定位与排查
+- **现象复现**：用户反馈在使用 Magpie（桌面 AI 辅助工具，`com.yetone.magpie`）时，关窗后屏幕反复弹出「magpie 将在 2 秒后退出」悬浮倒计时胶囊，且 2 秒倒计时结束后应用并未退出，每隔 2~3 秒再次弹窗，循环往复且无法彻底退出。
+- **深层架构根因拆解**：
+  1. **ActivationPolicy 动态降级导致终审拦截**：Magpie 采用 Wails v3 架构，其 `Info.plist` 声明了 `LSUIElement: true`。当其主视窗打开时，底层调用 `setActivationPolicy:NSApplicationActivationPolicyRegular`（此时 ATools `attachIfEligible` 识别为 `.regular` 成功纳入监控）；当用户关闭窗口后，Wails 立即将策略切回 `NSApplicationActivationPolicyAccessory`。ATools 延时到期在 `executePendingQuit` 中复查 `shouldWatch` 时，因硬编码要求 `activationPolicy == .regular`，直接触发 `guard ... else { return }` 退出，导致 `app.terminate()` 永远无法执行；
+  2. **未注销残留引发自激振荡死循环**：`executePendingQuit` 拦截退出后，未将该应用从 `watched` 表中解绑（`detach`），且清空了 `pendingQuits[pid]`；同时 `scheduleQuitLocked` 每次调度时都会错误伪造 `entry.lastCloseEventDate = Date()`，导致每秒执行的 `fallbackPoll()` 判定该应用“既在监控中、又无挂起任务、且 3 秒内发生过关窗”，进而再次触发 `scheduleQuitLocked` 重新弹窗，形成永久性的 2~3 秒自激弹窗死循环；
+  3. **外置衍生子进程残留**：Magpie 启动后在 `~/.cache/magpie/bun/...` 路径下派生了独立的 `magpie-bun` 插件宿主进程（其二进制不在 `.app/Contents/` 内部）。原有 `terminateCompanionHelpers` 仅按 Bundle 路径过滤，导致主进程退出后其孤儿工作子进程仍常驻后台，未达到用户预期的“彻底退出”。
+
+### 2. 代码级修改与加固方案
+1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+   - **新增 Magpie 声明式 Quirks 规则**：注册 `id: "magpie"`, `bundleIDPrefixes: ["com.yetone.magpie"]`, `ownerNameKeywords: ["magpie"]`, 启用 `terminateHelpersInBundle: true` 与 `cleanAllOffscreenWindows: true`。
+2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+   - **`shouldWatch` 支持 `isAlreadyWatched: Bool = false` 状态解耦**：
+     - 在初始挂载时（`isAlreadyWatched == false`），`.allApps` 模式严格拦截后台 `.accessory` 应用，防止误纳管输入法、状态栏微挂件等后台服务；
+     - 在关窗调度与终审退出时（`isAlreadyWatched == true`），放行已纳管视窗应用在关窗后动态切入 `.accessory` 状态的退出资格，保证 Wails/Tauri/LSUIElement 应用顺利执行退出；
+   - **调度前置准入校验与安全解挂**：在 `scheduleQuitLocked` 调度开始前加入 `shouldWatch(..., isAlreadyWatched: true)` 预检，若已不具备退出资格（如用户在倒计时前将其加入排除名单），立即通过锁内 `detachLocked` 安全移除并异步解注 RunLoop 监听，严禁向用户弹窗；
+   - **剔除虚假关窗时间戳刷新**：彻底删除 `scheduleQuitLocked` 中的 `entry.lastCloseEventDate = Date()` 伪造代码，确保 `lastCloseEventDate` 唯有在收到 AX 销毁/关闭事件时更新一次，彻底切断定时器自激刷新死循环链条；
+   - **终审异常摘除闭环**：`executePendingQuit` 若因配置失效拦截，记录 `AutoQuitDecisionTrace` 并同步执行 `detach(pid: pid)`，防止进入下一轮轮询；
+   - **内核级直接子进程深度清理**：重构 `terminateCompanionHelpers`，不仅清理常规 Bundle 伴生进程，更通过内核 `proc_listpids` + `proc_pidinfo(PROC_PIDTBSDINFO)` 扫描全系统进程表，匹配 `bsdInfo.pbi_ppid == mainPid`，凡由主进程直接衍生的孤儿直接子进程（如脱离 Bundle 目录的 `magpie-bun`）全数发送 `SIGTERM` 清理，并在 1.5s 升级兜底时联动再次清理，确保进程树彻底闭合退出。
+3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+   - 增加已纳管应用（`isAlreadyWatched: true`）策略变为 `.accessory` 时的准出测试断言；
+   - 增加未纳管应用初始拒绝纳管、以及加入黑名单后即刻被排除的对照测试；
+   - 增加 `AutoQuitQuirks` 对 `com.yetone.magpie` 的规则命中与伴生清理断言。
+
+### 3. 诊断验证结果
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项 112+ 个专项测试全部 100% PASSED 通过（0 失败，0 警告）**。
+
+
+
+---
+
+## 2026-11-12（偏好设置全面人机腔清理与文案极简化规范重构）
+
+### 1. 需求与重构背景
+- **用户反馈**：偏好设置各功能点的提示词存在过度技术宣讲、自我辩护与人机感明显的长句（如“绝不申请或需要屏幕录制权限，零内容窥探”、“纯「辅助功能」驱动，彻底移除依赖；结合 Space 宽限期与失焦防抖，既轻量纯粹又杜绝误杀”、“直连系统 CoreServices 索引，毫秒级流式返回”、“物理隔离”等），要求精简为简短、客观、地道 macOS 风格的操作指引，去除无关技术原理宣讲，彻底消除绝对化用词。
+- **重构原则**：
+  1. **操作导向**：仅说明该功能“做什么”、“怎么生效”，不解释底层实现机制；
+  2. **禁用绝对化与宣讲词**：严禁出现“绝不”、“彻底”、“绝大多数”、“杜绝误杀”、“毫秒级”、“物理隔离”、“零内容窥探”、“零网络上传，完全尊重您的隐私”等过度防御型或夸张修饰语；
+  3. **去人机化**：贴合 macOS 原生偏好设置交互规范，语句自然、克制、准确。
+
+### 2. 涉及文件与修改明细
+1. [`Sources/atools/UI/Settings/AutoQuitTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitTabView.swift)：
+   - 分组标题由「关窗退出总开关与模式」精简为「关窗退出设置」，「规则与应用过滤」精简为「规则与权限」；
+   - 开关标题移除尾缀 `(AutoQuit)`，副标题精简为“关闭应用的最后一个窗口时，自动退出该应用”；
+   - 模式副标题由「『排除名单』适用于绝大多数应用；『仅退出名单』适合只针对特定应用生效」改为“选择对所有应用生效或仅对指定应用生效”；
+   - 延迟选项去除 `(推荐)` 标注，副标题精简为“关闭窗口后等待设定的时间再退出应用”；
+   - 退出倒计时浮层标题去除 `(可撤销)`，副标题去除“轻量毛玻璃胶囊 HUD，误关窗口可一键挽救”，改为“显示退出倒计时，期间可点击取消退出”；
+   - 规则与权限副标题分别简化为“管理生效或排除的应用名单”与“用于检测应用窗口的关闭状态”；诊断项标题精简为“运行记录与诊断”；
+   - 底部提示彻底移除原宣讲式长文，替换为实用操作提示：“提示：访达等系统常驻服务与虚拟机应用默认受保护，不会自动退出。”；授权弹窗文案同步去人机化。
+2. [`Sources/atools/UI/Settings/AutoQuitInspectorSheet.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitInspectorSheet.swift)：
+   - 标题与分段精简：“关窗退出决策诊断与审计” -> “关窗退出运行记录与诊断”；“最近决策流水线/活跃监视列表” -> “退出历史记录/当前监视应用”；操作按钮精简为“复制诊断报告”。
+3. [`Sources/atools/UI/Settings/GeneralTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/GeneralTabView.swift)：
+   - 开机自启副标题精简为“登录系统后自动启动 ATools”；失焦关闭副标题精简为“点击面板外部或切换应用时自动关闭面板”；
+   - 备份板块标题由「备份与恢复数据」改为「配置备份与恢复」；导出与恢复副标题精简为“将应用分类、启动项及自定义图标打包导出”与“从备份文件恢复配置，或回滚至最近的自动备份快照”；
+   - 清理失效项去除“一键”，统一精简为“清理失效项目 / 移除已被删除或移动的启动项”；
+   - 系统权限副标题分别精简为“用于全局快捷键与窗口状态识别”及“用于搜索“下载”、“文稿”等受保护的系统目录”；
+   - 权限提示精简为：“提示：所有数据均在本地存储与处理，无需联网即可使用。”。
+4. [`Sources/atools/UI/Settings/ShelfTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ShelfTabView.swift)：
+   - 标题与副标题精简：启用抽屉（“通过快捷键或手势呼出应用抽屉”）、快捷键（“支持按下组合键或双击修饰键（如双击 ⌥）”）、触控板手势（“通过触控板多指轻点唤出抽屉”）；
+   - 驻留形态由冗长说明简化为“设置抽屉为自由浮动、固定在桌面或贴靠屏幕边缘”；停靠方位简化为“光标移动至设定的屏幕边缘时自动滑出抽屉”；
+   - 自动关闭、图标大小、图标间距、常用分类、自动添加新应用等全数精简，剔除“物理隔离”、“毫秒级直启”、“专属分类(推荐)”等词汇；清理失效项统一规范。
+5. [`Sources/atools/UI/Settings/SearchTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SearchTabView.swift)：
+   - 标题与副标题精简：启用全盘搜索（“通过快捷键呼出全盘文件与应用搜索”）、全盘文件搜索（“使用系统索引快速检索全盘文件”）；
+   - 排除目录提示精简为“提示：排除目录可避免检索不相关的系统文件，提升搜索速度。”；
+   - 数学计算与本地词典精简为“输入数学算式即时求解，回车复制结果”与“输入单词即时显示释义，回车打开词典应用”；
+   - 快捷键冲突分组由「Spotlight 权威平替指引」改为「快捷键冲突与系统设置」，剔除“无缝替代”、“独占接管”等绝对化词汇；网页搜索设置同步精简。
+6. [`Sources/atools/UI/Settings/ThemeTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/ThemeTabView.swift)：
+   - 分组标题精简为「外观风格」与「背景透明度」；透明度副标题精简为“调整面板背景的透明度，数值越高背景遮光越强”。
+7. [`Sources/atools/UI/Settings/PerformanceTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/PerformanceTabView.swift)：
+   - 分组标题由「物理内存监测与一键回收」改为「内存监测与释放」；按钮改为「释放内存」；
+   - 内存占用副标题去除 RSS 辩护与技术宣讲，精简为“当前进程的实际物理内存占用”；
+   - 退火延迟与缓存限制标签去除括号内的主观定性修饰词，副标题精简为客观描述。
+8. [`Sources/atools/UI/Settings/AboutTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AboutTabView.swift)：
+   - 软件描述由“极简启动抽屉与全盘秒搜中枢”改为“极简启动抽屉与全盘搜索”；
+   - 更新说明去除“直连官方”、“一键无感下载与平滑原地热更新”，精简为“检查并更新至最新发布版本”；按钮更新文案统一去人机化。
+
+### 3. 诊断与构建验证
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项测试 100% PASSED 全部通过（0 错误，0 失败，0 警告）**。
+- 打包并通过 `./Applications/ATools.app` 实际运行部署验证。

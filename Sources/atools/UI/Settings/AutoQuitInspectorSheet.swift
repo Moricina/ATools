@@ -26,17 +26,17 @@ public final class AutoQuitInspectorSheet: NSView, NSTableViewDataSource, NSTabl
     private func setupUI() {
         wantsLayer = true
 
-        let headerLabel = NSTextField(labelWithString: "关窗退出决策诊断与审计")
+        let headerLabel = NSTextField(labelWithString: "关窗退出运行记录与诊断")
         headerLabel.font = NSFont.systemFont(ofSize: 15, weight: .bold)
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(headerLabel)
 
-        segmentedControl = NSSegmentedControl(labels: ["最近决策流水线", "活跃监视列表"], trackingMode: .selectOne, target: self, action: #selector(segmentChanged(_:)))
+        segmentedControl = NSSegmentedControl(labels: ["退出历史记录", "当前监视应用"], trackingMode: .selectOne, target: self, action: #selector(segmentChanged(_:)))
         segmentedControl.selectedSegment = 0
         segmentedControl.translatesAutoresizingMaskIntoConstraints = false
         addSubview(segmentedControl)
 
-        copyReportButton = SettingsPillButton(title: "复制完整排障报告", target: self, action: #selector(copyReport))
+        copyReportButton = SettingsPillButton(title: "复制诊断报告", target: self, action: #selector(copyReport))
         copyReportButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(copyReportButton)
 
@@ -54,7 +54,7 @@ public final class AutoQuitInspectorSheet: NSView, NSTableViewDataSource, NSTabl
         scrollView.borderType = .bezelBorder
         addSubview(scrollView)
 
-        emptyLabel = NSTextField(labelWithString: "暂无历史决策记录")
+        emptyLabel = NSTextField(labelWithString: "暂无记录")
         emptyLabel.font = NSFont.systemFont(ofSize: 12)
         emptyLabel.textColor = .secondaryLabelColor
         emptyLabel.alignment = .center

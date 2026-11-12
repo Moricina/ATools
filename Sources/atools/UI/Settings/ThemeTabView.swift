@@ -39,7 +39,7 @@ public final class ThemeTabView: NSView {
             scrollView.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
 
-        let sec1Title = makeSectionHeader(title: "精选视觉风格")
+        let sec1Title = makeSectionHeader(title: "外观风格")
         scrollContent.addSubview(sec1Title)
 
         let card1 = SettingsCardView()
@@ -75,7 +75,7 @@ public final class ThemeTabView: NSView {
         ])
         card1.addRow(themeRow, isLast: true)
 
-        let sec2Title = makeSectionHeader(title: "背景阻尼与透明度")
+        let sec2Title = makeSectionHeader(title: "背景透明度")
         scrollContent.addSubview(sec2Title)
 
         let card2 = SettingsCardView()
@@ -122,8 +122,8 @@ public final class ThemeTabView: NSView {
 
         let rowOpacity = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "slider.horizontal.below.rectangle"),
-            title: "面板背景透明度",
-            subtitle: "40% 纯净水滴透镜，数值越高遮光越强 (原生液态默认 40%，磨砂玻璃默认 90%)",
+            title: "透明度",
+            subtitle: "调整面板背景的透明度，数值越高背景遮光越强",
             accessory: opacityContainer
         )
         card2.addRow(rowOpacity, isLast: true)

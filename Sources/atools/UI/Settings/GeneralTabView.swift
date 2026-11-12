@@ -69,7 +69,7 @@ public final class GeneralTabView: NSView {
         let rowLaunch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "power"),
             title: "开机自启",
-            subtitle: "登录 macOS 后自动启动 ATools 并驻留在右上角菜单栏",
+            subtitle: "登录系统后自动启动 ATools",
             accessory: launchOnLoginSwitch
         )
         card1.addRow(rowLaunch)
@@ -80,14 +80,14 @@ public final class GeneralTabView: NSView {
         let rowCloseDeactivate = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "macwindow.badge.plus"),
             title: "失焦时自动关闭",
-            subtitle: "点击面板外部任意工作区或切换应用时自动收起窗口",
+            subtitle: "点击面板外部或切换应用时自动关闭面板",
             accessory: autoCloseDeactivateSwitch,
             minHeight: 46
         )
         card1.addRow(rowCloseDeactivate, isLast: true)
 
         // 2. 备份与恢复数据 (P0-3 & P0-2)
-        let secBackupTitle = makeSectionHeader(title: "备份与恢复数据")
+        let secBackupTitle = makeSectionHeader(title: "配置备份与恢复")
         scrollContent.addSubview(secBackupTitle)
 
         let backupCard = SettingsCardView()
@@ -97,8 +97,8 @@ public final class GeneralTabView: NSView {
         let exportBtn = SettingsPillButton(title: "导出备份...", target: self, action: #selector(exportBackupClicked))
         backupExportRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "externaldrive.badge.plus"),
-            title: "导出配置与图标全量备份",
-            subtitle: "将 config.json、自定义图标目录 icons/ 与校验清单打包导出为 .atoolsbackup",
+            title: "导出备份",
+            subtitle: "将应用分类、启动项及自定义图标打包导出",
             accessory: exportBtn
         )
         backupCard.addRow(backupExportRow)
@@ -116,23 +116,23 @@ public final class GeneralTabView: NSView {
 
         let rowRestore = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.counterclockwise.icloud"),
-            title: "从备份恢复与快照回滚",
-            subtitle: "恢复前先在内存干跑校验 JSON 与 SHA-256，自动创建 pre-restore 快照并自愈跨机图标路径",
+            title: "恢复备份与快照",
+            subtitle: "从备份文件恢复配置，或回滚至最近的自动备份快照",
             accessory: restoreButtonsStack
         )
         backupCard.addRow(rowRestore)
 
-        cleanMissingBtn = SettingsPillButton(title: "一键清理失效项", target: self, action: #selector(cleanMissingItemsClicked))
+        cleanMissingBtn = SettingsPillButton(title: "清理失效项", target: self, action: #selector(cleanMissingItemsClicked))
         missingItemsRow = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "wand.and.stars"),
-            title: "一键清理全部失效项目",
-            subtitle: "扫描并移除所有分类中已被卸载或移动的失效启动项",
+            title: "清理失效项目",
+            subtitle: "移除已被删除或移动的启动项",
             accessory: cleanMissingBtn
         )
         backupCard.addRow(missingItemsRow, isLast: true)
 
-        // 3. 系统安全与隐私权限（直接平铺展示在下方）
-        let sec2Title = makeSectionHeader(title: "系统安全与隐私权限")
+        // 3. 系统权限
+        let sec2Title = makeSectionHeader(title: "系统权限")
         scrollContent.addSubview(sec2Title)
 
         let card2 = SettingsCardView()
@@ -142,8 +142,8 @@ public final class GeneralTabView: NSView {
         let axBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openAccessibilitySettings))
         let rowAx = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.raised"),
-            title: "辅助功能权限 (Accessibility)",
-            subtitle: "用于快捷键全局监听、关窗退出窗口感知等系统特性",
+            title: "辅助功能权限",
+            subtitle: "用于全局快捷键与窗口状态识别",
             accessory: axBtn
         )
         card2.addRow(rowAx)
@@ -151,13 +151,13 @@ public final class GeneralTabView: NSView {
         let fdaBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openFullDiskAccessSettings))
         let rowFDA = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "lock.shield"),
-            title: "完全磁盘访问权限 (Full Disk Access)",
-            subtitle: "若搜不到“下载”或“文稿”等受 TCC 保护的目录文件，请前往系统设置授权",
+            title: "完全磁盘访问权限",
+            subtitle: "用于搜索“下载”、“文稿”等受保护的系统目录",
             accessory: fdaBtn
         )
         card2.addRow(rowFDA, isLast: true)
 
-        let permTip = NSTextField(labelWithString: "权限提示：本软件所有功能均在本地运行，零网络上传，完全尊重您的隐私与系统安全。")
+        let permTip = NSTextField(labelWithString: "提示：所有数据均在本地存储与处理，无需联网即可使用。")
         permTip.translatesAutoresizingMaskIntoConstraints = false
         permTip.font = NSFont.systemFont(ofSize: 11)
         permTip.textColor = .secondaryLabelColor
@@ -201,8 +201,7 @@ public final class GeneralTabView: NSView {
 
         let totalCats = cfg.categories.count
         let totalItems = cfg.categories.reduce(0) { $0 + $1.items.count }
-        let customIconCount = cfg.categories.flatMap { $0.items }.filter { ($0.customIconPath ?? "").isEmpty == false }.count
-        backupExportRow.subtitleLabel.stringValue = "打包导出 config.json、icons/ 与 manifest.json（当前 \(totalCats) 个分类、\(totalItems) 个项目、\(customIconCount) 个自定义图标）"
+        backupExportRow.subtitleLabel.stringValue = "导出当前 \(totalCats) 个分类、\(totalItems) 个项目及图标备份"
 
         let snapshots = BackupService.shared.listPreRestoreSnapshots()
         rollbackSnapshotBtn.isEnabled = !snapshots.isEmpty
@@ -210,10 +209,10 @@ public final class GeneralTabView: NSView {
 
         let missingList = ConfigManager.shared.scanMissingItems()
         if missingList.isEmpty {
-            missingItemsRow.subtitleLabel.stringValue = "所有分类中的启动项目标路径均有效（0 个失效项目）"
+            missingItemsRow.subtitleLabel.stringValue = "所有启动项路径均有效"
             cleanMissingBtn.isEnabled = false
         } else {
-            missingItemsRow.subtitleLabel.stringValue = "检测到 \(missingList.count) 个失效启动项（目标已被移动或卸载），支持一键清理"
+            missingItemsRow.subtitleLabel.stringValue = "检测到 \(missingList.count) 个已被移动或删除的启动项"
             cleanMissingBtn.isEnabled = true
         }
     }
@@ -231,7 +230,7 @@ public final class GeneralTabView: NSView {
         do {
             let manifest = try BackupService.shared.exportBackup(to: destURL)
             let alert = NSAlert()
-            alert.messageText = "全量备份导出成功"
+            alert.messageText = "备份导出成功"
             alert.informativeText = """
             已成功打包导出至：
             \(destURL.path)
@@ -367,8 +366,8 @@ public final class GeneralTabView: NSView {
         let moreHint = missing.count > 8 ? "\n…等共 \(missing.count) 个失效项目" : ""
 
         let alert = NSAlert()
-        alert.messageText = "确认一键清理 \(missing.count) 个失效启动项？"
-        alert.informativeText = "以下项目因软件卸载或文件移动已失效，清理后将从对应分类中移除：\n\n\(previewLines)\(moreHint)"
+        alert.messageText = "确认清理 \(missing.count) 个失效启动项？"
+        alert.informativeText = "以下项目因已被移动或删除已失效，清理后将从对应分类中移除：\n\n\(previewLines)\(moreHint)"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "立即清理")
         alert.addButton(withTitle: "取消")

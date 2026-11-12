@@ -81,8 +81,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         searchSwitch.action = #selector(toggleSearchPanel(_:))
         let rowSearch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "magnifyingglass"),
-            title: "启用全盘搜索中枢",
-            subtitle: "开启后支持快捷键呼出、全盘文件极速检索与内置扩展工具",
+            title: "启用全盘搜索",
+            subtitle: "通过快捷键呼出全盘文件与应用搜索",
             accessory: searchSwitch
         )
         card0.addRow(rowSearch)
@@ -99,8 +99,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         self.searchRecorder = recorder
         let rowRecorder = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "keyboard"),
-            title: "专属呼出快捷键",
-            subtitle: "默认 ⌥Space，支持键盘任意组合键或双击修饰键 (如 2× ⌥)",
+            title: "快捷键",
+            subtitle: "支持按下组合键或双击修饰键（如双击 ⌥）",
             accessory: recorder
         )
         card0.addRow(rowRecorder, isLast: true)
@@ -117,17 +117,17 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         diskSearchSwitch.action = #selector(toggleDiskSearch(_:))
         let rowDisk = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "opticaldiscdrive"),
-            title: "全盘深度文件搜索 (基于 Spotlight 索引)",
-            subtitle: "直连系统 CoreServices 索引，复用已有索引数据，毫秒级流式返回文件结果",
+            title: "全盘文件搜索",
+            subtitle: "使用系统索引快速检索全盘文件",
             accessory: diskSearchSwitch
         )
         card1.addRow(rowDisk)
 
-        limitControl = SettingsLiquidSegmentedControl(labels: ["30 条", "50 条", "80 条 (推荐)", "120 条"], target: self, action: #selector(limitChanged(_:)))
+        limitControl = SettingsLiquidSegmentedControl(labels: ["30 条", "50 条", "80 条", "120 条"], target: self, action: #selector(limitChanged(_:)))
         let rowLimit = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "list.number"),
-            title: "搜索结果条数上限",
-            subtitle: "控制全盘搜索中枢最大展示条目，避免过多项目占用视觉与内存",
+            title: "搜索结果条数",
+            subtitle: "设置搜索结果列表的最大展示条数",
             accessory: limitControl
         )
         card1.addRow(rowLimit)
@@ -137,8 +137,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         autoPasteSwitch.action = #selector(toggleAutoPaste(_:))
         let rowAutoPaste = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "doc.on.clipboard"),
-            title: "复制后立即呼出时自动粘贴",
-            subtitle: "在外部复制文本后短时间（3 秒）内唤出全盘搜索，自动填入复制内容并开始检索",
+            title: "复制后呼出自动粘贴",
+            subtitle: "复制文本后短时间内呼出搜索，自动填入并开始检索",
             accessory: autoPasteSwitch
         )
         card1.addRow(rowAutoPaste, isLast: true)
@@ -245,7 +245,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let tileUserLib = SettingsToggleTileView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "folder.badge.gearshape"),
             title: "排除资源库 (~/Library)",
-            toolTip: "参照 Alfred 核心规则过滤系统配置杂项；智能保留 iCloud 云盘与各类第三方网盘文档",
+            toolTip: "过滤 ~/Library 目录中的系统配置文件",
             toggleSwitch: excludeUserLibSwitch
         )
         cardPreset.addRow(makeDualTileRow(left: tileCaches, right: tileUserLib))
@@ -341,7 +341,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             customExclusionStack.widthAnchor.constraint(equalTo: customContainer.widthAnchor)
         ])
 
-        let exclusionTipLabel = NSTextField(labelWithString: "💡 提示：排除范围在全盘检索与内存快照中同时生效；设置排除目录可有效净化搜索结果并大幅提升检索性能。")
+        let exclusionTipLabel = NSTextField(labelWithString: "提示：排除目录可避免检索不相关的系统文件，提升搜索速度。")
         exclusionTipLabel.translatesAutoresizingMaskIntoConstraints = false
         exclusionTipLabel.font = NSFont.systemFont(ofSize: 11)
         exclusionTipLabel.textColor = .secondaryLabelColor
@@ -389,8 +389,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         calcSwitch.action = #selector(toggleCalc(_:))
         let rowCalc = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "number.square"),
-            title: "数学公式实时计算",
-            subtitle: "输入 (1024 * 768) / 2 或十六进制 0x10+16 即时求解，回车自动复制结果",
+            title: "数学计算",
+            subtitle: "输入数学算式即时求解，回车复制结果",
             accessory: calcSwitch
         )
         card2.addRow(rowCalc)
@@ -400,13 +400,13 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         dictSwitch.action = #selector(toggleDict(_:))
         let rowDict = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "character.book.closed"),
-            title: "离线本地词典释义查询",
-            subtitle: "调用 macOS 系统底层词典库，输入单词即时显示权威释义，按下回车打开词典 App",
+            title: "本地词典查询",
+            subtitle: "输入单词即时显示释义，回车打开词典应用",
             accessory: dictSwitch
         )
         card2.addRow(rowDict, isLast: true)
 
-        let secSpotTitle = makeSectionHeader(title: "Spotlight 权威平替指引")
+        let secSpotTitle = makeSectionHeader(title: "快捷键冲突与系统设置")
         extScrollContent.addSubview(secSpotTitle)
 
         let cardSpot = SettingsCardView()
@@ -416,8 +416,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let setCmdSpaceBtn = SettingsPillButton(title: "设为 ⌘Space", target: self, action: #selector(setCommandSpaceHotkey))
         let rowSetCmdSpace = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "command"),
-            title: "一键将全盘搜索快捷键设为 ⌘Space",
-            subtitle: "无缝替代系统聚焦呼出体验，若系统快捷键冲突，请前往下方系统设置关闭",
+            title: "将快捷键设为 ⌘Space",
+            subtitle: "如与系统聚焦快捷键冲突，请前往系统设置调整",
             accessory: setCmdSpaceBtn
         )
         cardSpot.addRow(rowSetCmdSpace)
@@ -425,8 +425,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let openKbBtn = SettingsPillButton(title: "系统键盘设置...", target: self, action: #selector(openKeyboardSettings))
         let rowKb = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "keyboard"),
-            title: "打开系统键盘快捷键设置",
-            subtitle: "前往「键盘」->「键盘快捷键」->「聚焦」，取消勾选“显示聚焦搜索”",
+            title: "系统键盘设置...",
+            subtitle: "前往系统设置调整或关闭系统聚焦快捷键",
             accessory: openKbBtn
         )
         cardSpot.addRow(rowKb)
@@ -434,13 +434,13 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         let openCcBtn = SettingsPillButton(title: "控制中心设置...", target: self, action: #selector(openControlCenterSettings))
         let rowCc = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "switch.2"),
-            title: "打开系统控制中心设置",
-            subtitle: "前往「控制中心」->「聚焦」，可从 macOS 顶部菜单栏移除系统聚焦图标",
+            title: "系统控制中心设置...",
+            subtitle: "前往系统设置管理顶部菜单栏中的聚焦图标",
             accessory: openCcBtn
         )
         cardSpot.addRow(rowCc, isLast: true)
 
-        let spotlightTip = NSTextField(labelWithString: "提示：将系统聚焦快捷键取消后，⌘Space 将由 ATools 独占接管，提供毫秒级全盘搜索。")
+        let spotlightTip = NSTextField(labelWithString: "提示：若将系统聚焦快捷键关闭，可将 ⌘Space 分配给 ATools 使用。")
         spotlightTip.translatesAutoresizingMaskIntoConstraints = false
         spotlightTip.font = NSFont.systemFont(ofSize: 11)
         spotlightTip.textColor = .secondaryLabelColor
@@ -481,7 +481,7 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
             webScroll.bottomAnchor.constraint(equalTo: webPage.bottomAnchor)
         ])
 
-        let sec3Title = makeSectionHeader(title: "网络搜索回退设置")
+        let sec3Title = makeSectionHeader(title: "网页搜索")
         webScrollContent.addSubview(sec3Title)
 
         let card3 = SettingsCardView()
@@ -493,8 +493,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         webSearchSwitch.action = #selector(toggleWebSearch(_:))
         let rowWebSearch = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "network"),
-            title: "启用网页搜索回退",
-            subtitle: "开启后，若全盘未找到匹配结果或需要在线查询，可在搜索结果底部快速跳转至浏览器",
+            title: "网页搜索",
+            subtitle: "未搜到本地结果时，支持快捷跳转至浏览器搜索",
             accessory: webSearchSwitch
         )
         card3.addRow(rowWebSearch)
@@ -509,8 +509,8 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
         }
         let rowEngine = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "globe"),
-            title: "未命中时的网页搜索引擎",
-            subtitle: "选择触发网页搜索时使用的默认搜索引擎或自定义搜索地址",
+            title: "默认搜索引擎",
+            subtitle: "选择网页搜索所使用的搜索引擎",
             accessory: enginePopUp
         )
         card3.addRow(rowEngine)
@@ -529,13 +529,13 @@ public final class SearchTabView: NSView, NSTextFieldDelegate {
 
         let rowCustomURL = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "link"),
-            title: "自定义搜索 URL 模板",
-            subtitle: "仅当引擎选择「自定义」时生效。支持使用 {query} 或 %s 占位符",
+            title: "自定义搜索地址",
+            subtitle: "仅在引擎选择「自定义」时生效，支持 {query} 或 %s 占位符",
             accessory: customURLField
         )
         card3.addRow(rowCustomURL, isLast: true)
 
-        let tipLabel = NSTextField(labelWithString: "💡 提示：自定义搜索示例：https://www.google.com/search?q={query} 或 https://duckduckgo.com/?q=%s，回车或失焦即可自动保存。")
+        let tipLabel = NSTextField(labelWithString: "提示：支持使用 {query} 或 %s 作为关键词占位符。")
         tipLabel.translatesAutoresizingMaskIntoConstraints = false
         tipLabel.font = NSFont.systemFont(ofSize: 11)
         tipLabel.textColor = .secondaryLabelColor
