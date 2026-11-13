@@ -32,9 +32,14 @@ public final class AutoQuitManager {
         "cc.atools.app.dev"
     ]
 
-    /// 虚拟机、模拟器与容器平台（基于 AutoQuitQuirks 统一声明式规则库，物理级排除在自动退出之外，防范虚拟机崩溃及未保存数据丢失）
+    /// 虚拟机、模拟器、容器平台与投屏协同工具（基于 AutoQuitQuirks 统一声明式规则库，物理级排除在自动退出之外，防范虚拟机崩溃及投屏中断）
     public static func isProtectedVirtualizationApp(bundleID: String) -> Bool {
         return AutoQuitQuirks.shared.isProtectedVirtualizationApp(bundleID: bundleID)
+    }
+
+    /// 统一受保护应用判定（包含虚拟化平台、容器引擎、无线投屏与屏幕共享应用）
+    public static func isProtectedApp(bundleID: String) -> Bool {
+        return AutoQuitQuirks.shared.isProtectedApp(bundleID: bundleID)
     }
 
     private struct WatchedApp {
@@ -299,7 +304,11 @@ public final class AutoQuitManager {
         if isOnScreen {
             // Layer > 0 属于浮动层/小面板/常驻桌面小挂件（如百度网盘 200x80 悬浮窗）
             // 真实业务主窗口必须在 Layer 0 (kCGNormalWindowLevel)，或如果位于 Layer > 0 必须具备主视窗尺寸门槛 (width >= 360 && height >= 240)
+            // 投屏与会议控制条特殊保护：针对投屏协同类应用处于在屏浮动状态（例如 MAXHUB 415x45 顶部控制条）予以识别保护
             if layer > 0 {
+                if let bid = bundleID, AutoQuitQuirks.shared.isProtectedApp(bundleID: bid) {
+                    return width >= 120 && height >= 30
+                }
                 return width >= 360 && height >= 240
             }
             return (width > 120 && height > 70) || !rawName.isEmpty

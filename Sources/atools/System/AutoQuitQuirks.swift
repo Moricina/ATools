@@ -32,11 +32,17 @@ public struct AppQuirkRule: Sendable {
     public let offscreenTitles: Set<String>
     public let ghostSizes: [GhostWindowSize]
     public let isVirtualizationOrContainer: Bool
+    public let isScreenSharingOrCasting: Bool
     public let companionBundleIDs: [String]
     public let terminateHelpersInBundle: Bool
     public let cleanAllOffscreenWindows: Bool
     public let cleanEmptyTitleOffscreenWindows: Bool
     public let exactTitleMatchOnly: Bool
+
+    /// 是否属于享有物理级免杀保护的应用（虚拟化、容器、常驻投屏协同应用）
+    public var isProtectedApp: Bool {
+        return isVirtualizationOrContainer || isScreenSharingOrCasting
+    }
 
     public init(
         id: String,
@@ -46,6 +52,7 @@ public struct AppQuirkRule: Sendable {
         offscreenTitles: Set<String> = [],
         ghostSizes: [GhostWindowSize] = [],
         isVirtualizationOrContainer: Bool = false,
+        isScreenSharingOrCasting: Bool = false,
         companionBundleIDs: [String] = [],
         terminateHelpersInBundle: Bool = false,
         cleanAllOffscreenWindows: Bool = false,
@@ -59,6 +66,7 @@ public struct AppQuirkRule: Sendable {
         self.offscreenTitles = Set(offscreenTitles.map { $0.lowercased() })
         self.ghostSizes = ghostSizes
         self.isVirtualizationOrContainer = isVirtualizationOrContainer
+        self.isScreenSharingOrCasting = isScreenSharingOrCasting
         self.companionBundleIDs = companionBundleIDs
         self.terminateHelpersInBundle = terminateHelpersInBundle
         self.cleanAllOffscreenWindows = cleanAllOffscreenWindows
@@ -208,6 +216,16 @@ public final class AutoQuitQuirks: @unchecked Sendable {
             bundleIDPrefixes: ["com.google.android.simulator", "com.android.emulator"],
             ownerNameKeywords: ["qemu-system", "emulator"],
             isVirtualizationOrContainer: true
+        ),
+
+        // 投屏与硬件协同应用保护（常驻后台/无线投屏/投屏期间收起主窗绝不误杀）
+        AppQuirkRule(
+            id: "maxhub_share",
+            name: "MAXHUB 传屏助手",
+            bundleIDPrefixes: ["com.cvte.MAXHUBShare", "com.cvte.seewoshare"],
+            ownerNameKeywords: ["maxhub", "传屏助手", "seewoshare", "希沃传屏"],
+            isVirtualizationOrContainer: true,
+            isScreenSharingOrCasting: true
         ),
 
         // 国产/特定 CEF/AppKit 应用离屏底板与残留图层清洗规则
@@ -589,15 +607,20 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         return rule.terminateHelpersInBundle
     }
 
-    /// 判断应用是否属于受保护的虚拟化/模拟器/容器类应用
+    /// 判断应用是否属于受保护的虚拟化/模拟器/容器/投屏协同类应用（物理级防护，坚决杜绝误杀）
     public func isProtectedVirtualizationApp(bundleID: String?, ownerName: String? = nil) -> Bool {
         guard let bid = bundleID, !bid.isEmpty else { return false }
-        for rule in builtinRules where rule.isVirtualizationOrContainer {
+        for rule in builtinRules where (rule.isVirtualizationOrContainer || rule.isScreenSharingOrCasting) {
             if rule.matches(bundleID: bid, ownerName: ownerName) {
                 return true
             }
         }
         return false
+    }
+
+    /// 统一受保护应用判定（包含虚拟化平台、容器引擎、无线投屏与屏幕共享应用）
+    public func isProtectedApp(bundleID: String?, ownerName: String? = nil) -> Bool {
+        return isProtectedVirtualizationApp(bundleID: bundleID, ownerName: ownerName)
     }
 
     /// 匹配针对该 App 的特定规则

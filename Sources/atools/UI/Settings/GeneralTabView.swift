@@ -103,22 +103,36 @@ public final class GeneralTabView: NSView {
         )
         backupCard.addRow(backupExportRow)
 
-        let restoreButtonsStack = NSStackView()
-        restoreButtonsStack.translatesAutoresizingMaskIntoConstraints = false
-        restoreButtonsStack.orientation = .horizontal
-        restoreButtonsStack.spacing = 8
-        restoreButtonsStack.alignment = .centerY
+        let restoreContainer = NSView()
+        restoreContainer.translatesAutoresizingMaskIntoConstraints = false
 
         rollbackSnapshotBtn = SettingsPillButton(title: "回滚快照", target: self, action: #selector(rollbackSnapshotClicked))
+        rollbackSnapshotBtn.translatesAutoresizingMaskIntoConstraints = false
+
         let importBtn = SettingsPillButton(title: "导入恢复...", target: self, action: #selector(importBackupClicked))
-        restoreButtonsStack.addArrangedSubview(rollbackSnapshotBtn)
-        restoreButtonsStack.addArrangedSubview(importBtn)
+        importBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        restoreContainer.addSubview(rollbackSnapshotBtn)
+        restoreContainer.addSubview(importBtn)
+
+        NSLayoutConstraint.activate([
+            importBtn.trailingAnchor.constraint(equalTo: restoreContainer.trailingAnchor),
+            importBtn.centerYAnchor.constraint(equalTo: restoreContainer.centerYAnchor),
+            importBtn.topAnchor.constraint(greaterThanOrEqualTo: restoreContainer.topAnchor),
+            importBtn.bottomAnchor.constraint(lessThanOrEqualTo: restoreContainer.bottomAnchor),
+
+            rollbackSnapshotBtn.trailingAnchor.constraint(equalTo: importBtn.leadingAnchor, constant: -8),
+            rollbackSnapshotBtn.leadingAnchor.constraint(equalTo: restoreContainer.leadingAnchor),
+            rollbackSnapshotBtn.centerYAnchor.constraint(equalTo: restoreContainer.centerYAnchor),
+            rollbackSnapshotBtn.topAnchor.constraint(greaterThanOrEqualTo: restoreContainer.topAnchor),
+            rollbackSnapshotBtn.bottomAnchor.constraint(lessThanOrEqualTo: restoreContainer.bottomAnchor)
+        ])
 
         let rowRestore = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "arrow.counterclockwise.icloud"),
             title: "恢复备份与快照",
             subtitle: "从备份文件恢复配置，或回滚至最近的自动备份快照",
-            accessory: restoreButtonsStack
+            accessory: restoreContainer
         )
         backupCard.addRow(rowRestore)
 

@@ -230,6 +230,8 @@ public final class SettingsRowView: NSView {
         leftAnchorConstraint.isActive = true
 
         accessoryContainer.translatesAutoresizingMaskIntoConstraints = false
+        accessoryContainer.setContentHuggingPriority(.required, for: .horizontal)
+        accessoryContainer.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(accessoryContainer)
 
         if let accessory = accessory {
@@ -243,11 +245,18 @@ public final class SettingsRowView: NSView {
             ])
         }
 
+        let textTrailingMax = textStack.trailingAnchor.constraint(lessThanOrEqualTo: accessoryContainer.leadingAnchor, constant: -12)
+        textTrailingMax.priority = .required
+
+        let textTrailingSpacing = textStack.trailingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: -12)
+        textTrailingSpacing.priority = .defaultLow
+
         NSLayoutConstraint.activate([
             textStack.centerYAnchor.constraint(equalTo: centerYAnchor),
             textStack.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 6),
             textStack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6),
-            textStack.trailingAnchor.constraint(equalTo: accessoryContainer.leadingAnchor, constant: -12),
+            textTrailingMax,
+            textTrailingSpacing,
 
             accessoryContainer.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             accessoryContainer.centerYAnchor.constraint(equalTo: centerYAnchor)

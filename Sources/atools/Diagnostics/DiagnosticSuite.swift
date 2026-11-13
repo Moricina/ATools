@@ -2114,6 +2114,14 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.docker.docker") == true, "Docker must be protected by quirks")
         TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.apple.TextEdit") == false, "TextEdit is not virtualization")
 
+        // 验证 MAXHUB 传屏助手硬件协同与无线投屏物理级保护（杜绝投屏时收起窗口被误杀）
+        TestAssertions.expect(quirks.isProtectedApp(bundleID: "com.cvte.MAXHUBShare", ownerName: "传屏助手") == true, "MAXHUBShare must be protected app")
+        TestAssertions.expect(quirks.isProtectedApp(bundleID: "com.cvte.seewoshare", ownerName: "希沃传屏") == true, "SeewoShare must be protected app")
+        TestAssertions.expect(quirks.isProtectedVirtualizationApp(bundleID: "com.cvte.MAXHUBShare") == true, "MAXHUBShare must be protected under virtualization & casting entry")
+        TestAssertions.expect(AutoQuitManager.shouldWatch(bundleID: "com.cvte.MAXHUBShare", activationPolicy: .regular, isFinishedLaunching: true, isSelf: false, mode: .allApps, rules: []) == false, "MAXHUBShare must not be watched under allApps mode even without user exclude rule")
+        TestAssertions.expect(AutoQuitManager.shouldWatch(bundleID: "com.cvte.MAXHUBShare", activationPolicy: .regular, isFinishedLaunching: true, isSelf: false, mode: .onlyListed, rules: ["com.cvte.MAXHUBShare"]) == false, "MAXHUBShare must not be watched even if listed under onlyListed mode due to physical protection")
+        TestAssertions.expect(AutoQuitManager.isStandardWindowCandidate(bundleID: "com.cvte.MAXHUBShare", ownerName: "传屏助手", rawName: "", width: 415, height: 45, isOnScreen: true, layer: 1000) == true, "MAXHUBShare floating casting toolbar must remain candidate")
+
         // 验证幽灵图层清洗逻辑
         TestAssertions.expect(quirks.isGhostWindow(bundleID: "com.kingsoft.wpsoffice", ownerName: "WPS Office", title: "首页", width: 420, height: 154, isOnScreen: false) == true, "WPS offscreen home ghost window must be cleaned")
         TestAssertions.expect(quirks.matchRule(bundleID: "com.kingsoft.wpsoffice.mac", ownerName: "WPS Office")?.cleanEmptyTitleOffscreenWindows == true, "WPS rule must have cleanEmptyTitleOffscreenWindows enabled")

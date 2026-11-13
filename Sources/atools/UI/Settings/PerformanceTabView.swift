@@ -64,6 +64,7 @@ public final class PerformanceTabView: NSView {
         memLabel.translatesAutoresizingMaskIntoConstraints = false
         memLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold)
         memLabel.textColor = .labelColor
+        memLabel.alignment = .right
 
         let purgeBtn = SettingsPillButton(title: "释放内存", target: self, action: #selector(handlePurge))
 
@@ -86,6 +87,7 @@ public final class PerformanceTabView: NSView {
         purgeStatusLabel.translatesAutoresizingMaskIntoConstraints = false
         purgeStatusLabel.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         purgeStatusLabel.textColor = .secondaryLabelColor
+        purgeStatusLabel.alignment = .right
         purgeStatusLabel.stringValue = "上次释放：尚未执行"
 
         let statusRow = SettingsRowView(

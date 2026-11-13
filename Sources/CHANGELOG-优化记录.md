@@ -5328,3 +5328,74 @@
 ### 3. 诊断与构建验证
 - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项测试 100% PASSED 全部通过（0 错误，0 失败，0 警告）**。
 - 打包并通过 `./Applications/ATools.app` 实际运行部署验证。
+
+
+---
+
+## 2026-11-13（v1.3.59 Build 86：偏好设置按钮右对齐与 MAXHUB 投屏免杀保护）
+
+### 1. 需求与重构背景
+- **用户反馈**：偏好设置中有些按钮没对齐，右边有很多空白部分，要求将按钮靠右对齐。
+- **问题定位**：
+  1. `AutoQuitTabView`（关窗退出）的「规则与权限」卡片中第二行「辅助功能权限状态」原采用 `NSStackView` 容纳状态标签与「前往授权...」按钮，未设置靠右对齐约束，在被整行拉伸后 arrangedSubviews 均停留在左侧，导致「前往授权...」按钮右侧残留约 150pt 的空白区域，与首行「编辑排除名单...」及末行「查看记录...」按钮产生严重的错位；
+  2. `GeneralTabView`（常规）的「配置备份与恢复」卡片中第二行「恢复备份与快照」同理，采用 `NSStackView` 导致「导入恢复...」右侧大片空白，未与「导出备份...」、「清理失效项」对齐；
+  3. `SettingsRowView` 布局机制中，`textStack.trailing` 与 `accessoryContainer.leading` 采用了强制等于（`equalTo`）约束，将未指定固有宽度的复合 accessory 容器强制撑宽，使留白出现在右侧控件内部而非控件左侧；
+  4. 投屏与会议协同工具（如 MAXHUB 传屏助手等）在关闭主视窗后顶部仍有微型悬浮控制条（如 415x45），原普通窗口尺寸门槛可能导致非预期误杀，需予以物理级保护。
+
+### 2. 涉及文件与修改明细
+1. [`Sources/atools/UI/Settings/AutoQuitTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitTabView.swift)：
+   - 重构 `permContainer` 为绝对约束容器 `NSView`；
+   - 显式设置 `openPermBtn.trailingAnchor.constraint(equalTo: permContainer.trailingAnchor)`，固定宽度 `148pt`；
+   - 设置 `autoQuitPermissionLabel.trailingAnchor.constraint(equalTo: openPermBtn.leadingAnchor, constant: -8)` 与 `leadingAnchor.constraint(equalTo: permContainer.leadingAnchor)`；
+   - 彻底消除按钮右侧空白，实现「编辑排除名单...」、「前往授权...」、「查看记录...」三个按钮统一 148pt 宽度且右侧完全垂直对齐。
+2. [`Sources/atools/UI/Settings/GeneralTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/GeneralTabView.swift)：
+   - 重构 `restoreContainer` 为绝对约束容器 `NSView`，显式设置 `importBtn.trailingAnchor.constraint(equalTo: restoreContainer.trailingAnchor)`；
+   - 设置 `rollbackSnapshotBtn` 位于 `importBtn` 左侧 8pt，彻底消除「导入恢复...」右侧的空白留白，与卡片上下行按钮精准右对齐。
+3. [`Sources/atools/UI/Settings/SettingsComponents.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/SettingsComponents.swift)：
+   - 改进 `SettingsRowView` 排版架构：
+     - 为 `accessoryContainer` 设置 `setContentHuggingPriority(.required, for: .horizontal)` 与 `setContentCompressionResistancePriority(.required, for: .horizontal)`，杜绝右侧控件被非法拉伸；
+     - 将 `textStack.trailing` 改为 `<= accessoryContainer.leading - 12`（`.required`）配合 `equalTo`（`.defaultLow`），确保文字自适应包裹且绝不与控件重叠，多余空白自然保留在文字与按钮之间的弹性中央区域。
+4. [`Sources/atools/UI/Settings/PerformanceTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/PerformanceTabView.swift)：
+   - 内存占用与释放结果标签显式增加 `.alignment = .right`，确保与同卡片按钮的右边缘视觉对齐。
+5. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift) & [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+   - 新增 `isScreenSharingOrCasting` 标志与 MAXHUB / 希沃传屏内置规则，享有物理级免杀保护；
+   - 放宽在屏悬浮控制条（如 415x45）的尺寸识别门槛，保障投屏与硬件协同业务稳健不中断。
+6. [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) & [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh)：
+   - 版本升级至 `v1.3.59 (build 86)`，更新发布说明并支持自动化打包与 GitHub Release 发布。
+
+### 3. 诊断与构建验证
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项测试全部通过（100% PASSED，0 错误，0 失败，0 警告）**；
+- 检查 `/tmp/settings_tab_0.png`、`/tmp/settings_tab_3.png` 等渲染快照，所有偏好设置卡片按钮已严格靠右垂直对齐，右侧异常空白已完全消除；
+- 通过 `./Scripts/package_app.sh` 编译 Release、`ATools Sign` 签名，并将生产包覆盖安装至 `/Applications/ATools.app`，重启应用（PID: `66501`）运行生效。
+
+
+---
+
+## 2026-11-13（传屏助手投屏触发自动退出缺陷修复与投屏类软件物理保护）
+
+### 1. 需求与排查定位
+- **用户反馈**：检查传屏助手这个 app 开启时，为什么开始投屏之后就触发退出操作，请修复。
+- **根因深度溯源**：
+  1. **投屏软件运行机理**：MAXHUB 传屏助手（Bundle ID: `com.cvte.MAXHUBShare`）是专门用于电脑屏幕镜像推流至会议平板的协同工具。用户启动应用时展示 960×680 的主连接窗口，被 ATools 的 AutoQuitManager 监视；
+  2. **投屏隐藏主窗口机制**：当用户输入投屏码或点击“开始投屏”时，为了保证投屏画面完整展示、不被传屏助手自身窗口遮挡，传屏助手会主动调用 `OnClickMin()` 将主窗口最小化收起（进入 `min_mode`），仅保留顶部微型悬浮条（415×45，Layer 1000）或纯后台推流；
+  3. **AutoQuit 窗口计数误判为 0**：
+     - 在 `AutoQuitManager.isStandardWindowCandidate` 判定链路中，隐藏的 960×680 主窗口因 `isOnScreen == false` 且不属于原生全屏尺寸和跨 Space 视窗而被判定为无效离屏底板；
+     - 在屏的 415×45 顶部悬浮控制条因 `layer > 0` 且 `height: 45 < 240`，未能达到通用浮动视窗门槛，被硬编码过滤；
+     - 此时 WindowServer 窗口计数与 AXUIElement 窗口计数双双确诊为 0（`axCount == 0 && wsCount == 0`）；
+  4. **误触发自动退出**：AutoQuit 误判为用户关闭了该应用的最后一个窗口，立即调度 2 秒倒计时并弹出 HUD，倒计时结束调用 `app.terminate()`，强行中断了投屏并退出了传屏助手。
+
+### 2. 涉及文件与修改明细
+1. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+   - `AppQuirkRule` 新增 `isScreenSharingOrCasting: Bool` 属性及 `isProtectedApp: Bool` 计算属性；
+   - 在 `builtinRules` 注册针对 MAXHUB 传屏助手（`com.cvte.MAXHUBShare`）与希沃传屏（`com.cvte.seewoshare`）的专属物理保护规则，标记为 `isVirtualizationOrContainer: true` 及 `isScreenSharingOrCasting: true`；
+   - `AutoQuitQuirks` 新增统一受保护应用判定入口 `isProtectedApp(bundleID:ownerName:)`，并在底层为 `isProtectedVirtualizationApp` 扩展保护范围。
+2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+   - 新增 `AutoQuitManager.isProtectedApp(bundleID:)` 统一查询入口；
+   - `AutoQuitManager.shouldWatch` 对受保护应用实施物理级拦截，无论是 `.allApps` 还是 `.onlyListed` 模式，坚决不监视传屏助手，彻底断开误杀触发链路；
+   - 优化 `isStandardWindowCandidate`：对受保护/投屏协同类应用的在屏浮动控制条（Layer > 0, width >= 120, height >= 30）予以保留，构筑第二道几何防线。
+3. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+   - 新增 MAXHUB 传屏助手与希沃传屏的受保护应用断言、`allApps` 与 `onlyListed` 模式下免监视断言、浮动投屏控制条在屏候选断言。
+
+### 3. 诊断与构建验证
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项测试全部通过（100% PASSED，0 错误，0 失败，0 警告）**；
+- 传屏助手投屏期间无论主窗口隐藏还是展示浮动工具条，均处于物理受保护状态，彻底根治“开始投屏即触发退出”的严重缺陷。

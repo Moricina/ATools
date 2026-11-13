@@ -137,19 +137,30 @@ public final class AutoQuitTabView: NSView {
         )
         card2.addRow(rowRules)
 
-        let permContainer = NSStackView()
-        permContainer.orientation = .horizontal
-        permContainer.spacing = 8
-        permContainer.alignment = .centerY
+        let permContainer = NSView()
+        permContainer.translatesAutoresizingMaskIntoConstraints = false
 
         autoQuitPermissionLabel = NSTextField(labelWithString: "检查中...")
+        autoQuitPermissionLabel.translatesAutoresizingMaskIntoConstraints = false
         autoQuitPermissionLabel.font = NSFont.systemFont(ofSize: 11)
         autoQuitPermissionLabel.alignment = .right
-        permContainer.addArrangedSubview(autoQuitPermissionLabel)
+        permContainer.addSubview(autoQuitPermissionLabel)
 
         let openPermBtn = SettingsPillButton(title: "前往授权...", target: self, action: #selector(openAutoQuitAccessibility))
+        openPermBtn.translatesAutoresizingMaskIntoConstraints = false
         openPermBtn.widthAnchor.constraint(equalToConstant: 148).isActive = true
-        permContainer.addArrangedSubview(openPermBtn)
+        permContainer.addSubview(openPermBtn)
+
+        NSLayoutConstraint.activate([
+            openPermBtn.trailingAnchor.constraint(equalTo: permContainer.trailingAnchor),
+            openPermBtn.centerYAnchor.constraint(equalTo: permContainer.centerYAnchor),
+            openPermBtn.topAnchor.constraint(greaterThanOrEqualTo: permContainer.topAnchor),
+            openPermBtn.bottomAnchor.constraint(lessThanOrEqualTo: permContainer.bottomAnchor),
+
+            autoQuitPermissionLabel.trailingAnchor.constraint(equalTo: openPermBtn.leadingAnchor, constant: -8),
+            autoQuitPermissionLabel.leadingAnchor.constraint(equalTo: permContainer.leadingAnchor),
+            autoQuitPermissionLabel.centerYAnchor.constraint(equalTo: permContainer.centerYAnchor)
+        ])
 
         let rowPerm = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "hand.raised"),
