@@ -330,7 +330,60 @@ public final class AutoQuitManager {
         }
     }
 
-    /// WindowServer 层面标准应用窗口计数（Layer 0...15，纯几何公开信息，结合 AutoQuitQuirks 规则清洗离屏幽灵）
+    /// 判断指定 XPC 辅助进程（如 com.apple.appkit.xpc.openAndSavePanelService / QuickLookUIService）是否归属于目标宿主应用
+    public static func isCompanionOpenAndSavePanelService(
+        serviceBundleID: String?,
+        serviceLocalizedName: String?,
+        hostLocalizedName: String?,
+        hostBundleName: String?
+    ) -> Bool {
+        guard let sBid = serviceBundleID,
+              sBid == "com.apple.appkit.xpc.openAndSavePanelService" || sBid == "com.apple.quicklook.QuickLookUIService",
+              let sName = serviceLocalizedName?.precomposedStringWithCanonicalMapping.lowercased(),
+              !sName.isEmpty else {
+            return false
+        }
+        var candidates: [String] = []
+        if let hLoc = hostLocalizedName?.precomposedStringWithCanonicalMapping.lowercased(), !hLoc.isEmpty {
+            candidates.append(hLoc)
+        }
+        if let hBun = hostBundleName?.precomposedStringWithCanonicalMapping.lowercased(), !hBun.isEmpty, !candidates.contains(hBun) {
+            candidates.append(hBun)
+        }
+        for name in candidates {
+            if sName.contains("(\(name))") {
+                return true
+            }
+        }
+        return false
+    }
+
+    /// 查找归属于目标宿主进程（如文本编辑 TextEdit）的跨进程沙盒打开/保存面板服务 PID 集合
+    public static func companionOpenPanelServicePIDs(for pid: pid_t) -> Set<pid_t> {
+        guard pid > 0, let hostApp = NSRunningApplication(processIdentifier: pid) else { return [] }
+        let hostLocName = hostApp.localizedName
+        let hostBundleName = hostApp.bundleURL?.deletingPathExtension().lastPathComponent ?? hostApp.executableURL?.lastPathComponent
+        guard (hostLocName != nil && !(hostLocName?.isEmpty ?? true)) || (hostBundleName != nil && !(hostBundleName?.isEmpty ?? true)) else {
+            return []
+        }
+        var pids = Set<pid_t>()
+        for running in NSWorkspace.shared.runningApplications {
+            let rPid = running.processIdentifier
+            guard rPid > 0, rPid != pid, !running.isTerminated else { continue }
+            guard running.bundleIdentifier == "com.apple.appkit.xpc.openAndSavePanelService" else { continue }
+            if isCompanionOpenAndSavePanelService(
+                serviceBundleID: running.bundleIdentifier,
+                serviceLocalizedName: running.localizedName,
+                hostLocalizedName: hostLocName,
+                hostBundleName: hostBundleName
+            ) {
+                pids.insert(rPid)
+            }
+        }
+        return pids
+    }
+
+    /// WindowServer 层面标准应用窗口计数（Layer 0...15，纯几何公开信息，结合 AutoQuitQuirks 规则清洗离屏幽灵，并纳管在屏沙盒 NSOpenPanel）
     public static func windowServerStandardWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int? {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
@@ -338,22 +391,39 @@ public final class AutoQuitManager {
         }
         let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
         let activeSpace = currentActiveSpace()
+        let companionPanelPIDs = companionOpenPanelServicePIDs(for: pid)
 
         var count = 0
         for w in list {
-            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
-            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let ownerPID = (w[kCGWindowOwnerPID as String] as? pid_t) ?? (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else { continue }
+            let isHostOwner = (ownerPID == pid)
+            let isCompanionPanelOwner = (!isHostOwner && companionPanelPIDs.contains(ownerPID))
+            guard isHostOwner || isCompanionPanelOwner else { continue }
+
+            guard let layer = (w[kCGWindowLayer as String] as? Int) ?? (w[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  (0...15).contains(layer) else { continue }
+            guard let alpha = (w[kCGWindowAlpha as String] as? Double) ?? (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
-                  let width = bounds["Width"] as? Double,
-                  let height = bounds["Height"] as? Double,
+                  let width = (bounds["Width"] as? Double) ?? (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? Double) ?? (bounds["Height"] as? NSNumber)?.doubleValue,
                   width > 40, height > 40 else { continue }
 
-            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? 0
+            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? ((w[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false)
+
+            if isCompanionPanelOwner {
+                // 跨进程沙盒 Open and Save Panel Service 在关闭面板后仍常驻并缓存离屏窗口；
+                // 唯有当其面板真实在屏展示 (isOnScreen == true) 且具备标准对话框尺寸时，才计为宿主应用的有效在屏窗口。
+                if isOnScreen && layer == 0 && width >= 240 && height >= 150 {
+                    count += 1
+                }
+                continue
+            }
+
+            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? ((w[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0)
             let spaces = windowSpaces(for: winID)
             let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
-            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
 
             if isStandardWindowCandidate(
                 bundleID: resolvedBundleID,
@@ -372,32 +442,48 @@ public final class AutoQuitManager {
         return count
     }
 
-    /// WindowServer 层面在屏标准窗口数（Layer 0...15，仅统计 isOnScreen == true 的有效在屏业务窗口）
+    /// WindowServer 层面在屏标准窗口数（Layer 0...15，仅统计 isOnScreen == true 的有效在屏业务窗口及在屏沙盒 NSOpenPanel）
     public static func windowServerOnScreenWindowCount(for pid: pid_t, bundleID: String? = nil) -> Int? {
         let options: CGWindowListOption = [.optionAll, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return nil
         }
         let resolvedBundleID = bundleID ?? NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+        let activeSpace = currentActiveSpace()
+        let companionPanelPIDs = companionOpenPanelServicePIDs(for: pid)
 
         var count = 0
         for w in list {
-            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
-            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let ownerPID = (w[kCGWindowOwnerPID as String] as? pid_t) ?? (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value else { continue }
+            let isHostOwner = (ownerPID == pid)
+            let isCompanionPanelOwner = (!isHostOwner && companionPanelPIDs.contains(ownerPID))
+            guard isHostOwner || isCompanionPanelOwner else { continue }
+
+            guard let layer = (w[kCGWindowLayer as String] as? Int) ?? (w[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  (0...15).contains(layer) else { continue }
+            guard let alpha = (w[kCGWindowAlpha as String] as? Double) ?? (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
-                  let width = bounds["Width"] as? Double,
-                  let height = bounds["Height"] as? Double,
+                  let width = (bounds["Width"] as? Double) ?? (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? Double) ?? (bounds["Height"] as? NSNumber)?.doubleValue,
                   width > 40, height > 40 else { continue }
 
-            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? 0
+            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? ((w[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false)
+            guard isOnScreen else { continue }
+
+            if isCompanionPanelOwner {
+                if layer == 0 && width >= 240 && height >= 150 {
+                    count += 1
+                }
+                continue
+            }
+
+            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? ((w[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0)
             let spaces = windowSpaces(for: winID)
             let ownerName = (w[kCGWindowOwnerName as String] as? String) ?? ""
             let rawName = (w[kCGWindowName as String] as? String) ?? ""
-            let isOnScreen = (w[kCGWindowIsOnscreen as String] as? Bool) ?? false
 
-            let activeSpace = currentActiveSpace()
-            if isOnScreen && isStandardWindowCandidate(
+            if isStandardWindowCandidate(
                 bundleID: resolvedBundleID,
                 ownerName: ownerName,
                 rawName: rawName,
@@ -425,15 +511,18 @@ public final class AutoQuitManager {
 
         var count = 0
         for w in list {
-            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            guard let layer = w[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
-            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let ownerPID = (w[kCGWindowOwnerPID as String] as? pid_t) ?? (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  ownerPID == pid else { continue }
+            guard let layer = (w[kCGWindowLayer as String] as? Int) ?? (w[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  layer == 0 else { continue }
+            guard let alpha = (w[kCGWindowAlpha as String] as? Double) ?? (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
-                  let width = bounds["Width"] as? Double,
-                  let height = bounds["Height"] as? Double,
+                  let width = (bounds["Width"] as? Double) ?? (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? Double) ?? (bounds["Height"] as? NSNumber)?.doubleValue,
                   width > 120, height > 70 else { continue }
 
-            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? 0
+            let winID = (w[kCGWindowNumber as String] as? CGWindowID) ?? ((w[kCGWindowNumber as String] as? NSNumber)?.uint32Value ?? 0)
             let spaces = windowSpaces(for: winID)
             guard AutoQuitQuirks.isWindowOnAnotherSpace(spaces: spaces, currentSpace: activeSpace) else { continue }
 
@@ -470,12 +559,15 @@ public final class AutoQuitManager {
         }
         var count = 0
         for w in list {
-            guard let ownerPID = w[kCGWindowOwnerPID as String] as? pid_t, ownerPID == pid else { continue }
-            guard let layer = w[kCGWindowLayer as String] as? Int, (0...15).contains(layer) else { continue }
-            guard let alpha = w[kCGWindowAlpha as String] as? Double, alpha > 0.01 else { continue }
+            guard let ownerPID = (w[kCGWindowOwnerPID as String] as? pid_t) ?? (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  ownerPID == pid else { continue }
+            guard let layer = (w[kCGWindowLayer as String] as? Int) ?? (w[kCGWindowLayer as String] as? NSNumber)?.intValue,
+                  (0...15).contains(layer) else { continue }
+            guard let alpha = (w[kCGWindowAlpha as String] as? Double) ?? (w[kCGWindowAlpha as String] as? NSNumber)?.doubleValue,
+                  alpha > 0.01 else { continue }
             guard let bounds = w[kCGWindowBounds as String] as? [String: Any],
-                  let width = bounds["Width"] as? Double,
-                  let height = bounds["Height"] as? Double else { continue }
+                  let width = (bounds["Width"] as? Double) ?? (bounds["Width"] as? NSNumber)?.doubleValue,
+                  let height = (bounds["Height"] as? Double) ?? (bounds["Height"] as? NSNumber)?.doubleValue else { continue }
             if AutoQuitQuirks.isNativeFullscreenSize(width: width, height: height) {
                 count += 1
             }
@@ -530,6 +622,19 @@ public final class AutoQuitManager {
     }
 
     // MARK: - 内部状态机（Y-02：锁内仅做内存状态读写，AX / WindowServer IPC 移至锁外执行）
+
+    /// 同步并清理已注册窗口引用表：剔除已 orderOut: 或销毁的陈旧引用，补充注册当前存活业务窗口
+    private func syncRegisteredWindowsLocked(for entry: inout WatchedApp, currentWindows: [AXUIElement]) {
+        entry.registeredWindowRefs.removeAll { existing in
+            !currentWindows.contains(where: { CFEqual($0, existing) })
+        }
+        for window in currentWindows {
+            if !entry.registeredWindowRefs.contains(where: { CFEqual($0, window) }) {
+                _ = AXObserverAddNotification(entry.observer, window, kAXUIElementDestroyedNotification as CFString, nil)
+                entry.registeredWindowRefs.append(window)
+            }
+        }
+    }
 
     private func start() {
         assert(Thread.isMainThread)
@@ -614,11 +719,13 @@ public final class AutoQuitManager {
         let axApp = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(axApp, 0.15)
 
-        // Y-03: 检查并记录 AXObserverAddNotification 错误码
+        // Y-03: 检查并记录 AXObserverAddNotification 错误码，同时注册 MainWindow / FocusedWindow 变更通知以捕获 orderOut: 隐藏型关窗与沙盒 NSOpenPanel 关闭
         let errCreated = AXObserverAddNotification(obs, axApp, kAXWindowCreatedNotification as CFString, nil)
         let errClosed = AXObserverAddNotification(obs, axApp, kAXWindowClosedNotification, nil)
         let errDestroyed = AXObserverAddNotification(obs, axApp, kAXUIElementDestroyedNotification as CFString, nil)
-        let isAXObserverDegraded = (errCreated != .success && errClosed != .success && errDestroyed != .success)
+        let errMainChanged = AXObserverAddNotification(obs, axApp, kAXMainWindowChangedNotification as CFString, nil)
+        let errFocusedChanged = AXObserverAddNotification(obs, axApp, kAXFocusedWindowChangedNotification as CFString, nil)
+        let isAXObserverDegraded = (errCreated != .success && errClosed != .success && errDestroyed != .success && errMainChanged != .success && errFocusedChanged != .success)
         if isAXObserverDegraded {
             runtimeLog("[AutoQuit] AXObserverAddNotification warnings for pid \(pid): created=\(errCreated.rawValue), closed=\(errClosed.rawValue), destroyed=\(errDestroyed.rawValue)")
         }
@@ -632,11 +739,11 @@ public final class AutoQuitManager {
         if let list = existing, !list.isEmpty {
             hadWindows = true
             for window in list {
-                if AXObserverAddNotification(obs, window, kAXUIElementDestroyedNotification as CFString, nil) == .success {
-                    registeredRefs.append(window)
-                }
+                _ = AXObserverAddNotification(obs, window, kAXUIElementDestroyedNotification as CFString, nil)
+                registeredRefs.append(window)
             }
-        } else if let ws = wsCount, ws > 0 {
+        }
+        if let ws = wsCount, ws > 0 {
             hadWindows = true
         }
 
@@ -694,13 +801,7 @@ public final class AutoQuitManager {
             suppressedPids.remove(pid)
             cancelPendingQuitLocked(pid)
             if let list = list {
-                for window in list {
-                    if !entry.registeredWindowRefs.contains(where: { CFEqual($0, window) }) {
-                        if AXObserverAddNotification(entry.observer, window, kAXUIElementDestroyedNotification as CFString, nil) == .success {
-                            entry.registeredWindowRefs.append(window)
-                        }
-                    }
-                }
+                syncRegisteredWindowsLocked(for: &entry, currentWindows: list)
             }
         }
         watched[pid] = entry
@@ -716,12 +817,10 @@ public final class AutoQuitManager {
         }
         entry.lastActiveDate = Date()
         let hadClose = Date().timeIntervalSince(entry.lastCloseEventDate) < 3.0
+        let hasPendingQuit = (pendingQuits[pid] != nil)
+        let hadWindows = entry.hadWindows
         watched[pid] = entry
         os_unfair_lock_unlock(&lock)
-
-        if hadClose {
-            return
-        }
 
         // 军师加固安全防线：排除切 Space 瞬态干扰
         let spaceChangedRecently = Date().timeIntervalSince(lastSpaceChangeDate) < 2.0
@@ -733,8 +832,21 @@ public final class AutoQuitManager {
             return
         }
 
-        // 普通切应用失焦：严格取消未决退出，杜绝切应用/切全屏瞬态误杀
-        // 军师加固铁律：失焦转入后台绝对不是关窗事件，严禁在此伪造 lastCloseEventDate！
+        // 若刚刚发生过关窗事件，或该应用已进入确认零窗后的退出倒计时（用户在 HUD 倒计时期间点击了其他窗口/桌面），保持退出调度不中断
+        if hadClose || hasPendingQuit {
+            return
+        }
+
+        // 若应用曾拥有窗口（例如文本编辑展示跨进程 NSOpenPanel 后用户点击「完成」关闭面板并触发应用自动失焦），
+        // 延迟 0.18s 执行一次非阻塞窗口复核：若复核确认为全 Space 零窗口则正常触发自动退出，若有窗口则自然保活。
+        if hadWindows && !app.isHidden {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                guard let self = self else { return }
+                self.evaluateAppWindows(pid: pid)
+            }
+            return
+        }
+
         os_unfair_lock_lock(&lock)
         cancelPendingQuitLocked(pid)
         cancelPendingRecheckLocked(pid)
@@ -775,76 +887,138 @@ public final class AutoQuitManager {
             // Y-04: 应用新建窗口时清除取消抑制状态，使其后续关窗可正常触发自动退出
             suppressedPids.remove(pid)
             cancelPendingRecheckLocked(pid)
-            if !entry.registeredWindowRefs.contains(where: { CFEqual($0, element) }) {
-                if AXObserverAddNotification(entry.observer, element, kAXUIElementDestroyedNotification as CFString, nil) == .success {
-                    entry.registeredWindowRefs.append(windowElement(from: element))
-                }
-            }
-            watched[pid] = entry
             let axApp = entry.axApp
             let bundleId = entry.app.bundleIdentifier
             os_unfair_lock_unlock(&lock)
 
             // Y-02: 锁外执行 AX 与 WindowServer 查询
-            let axCount = axWindows(of: axApp)?.count
+            let list = axWindows(of: axApp)
+            let axCount = list?.count
             let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: bundleId)
             let isBusiness = Self.isStandardBusinessWindow(element)
 
-            if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 || isBusiness {
-                os_unfair_lock_lock(&lock)
-                if var latestEntry = watched[pid] {
+            os_unfair_lock_lock(&lock)
+            if var latestEntry = watched[pid] {
+                if let list = list {
+                    syncRegisteredWindowsLocked(for: &latestEntry, currentWindows: list)
+                }
+                if isBusiness && !latestEntry.registeredWindowRefs.contains(where: { CFEqual($0, element) }) {
+                    _ = AXObserverAddNotification(latestEntry.observer, element, kAXUIElementDestroyedNotification as CFString, nil)
+                    latestEntry.registeredWindowRefs.append(windowElement(from: element))
+                }
+                if (axCount ?? 0) > 0 || (wsCount ?? 0) > 0 || isBusiness {
                     latestEntry.hadWindows = true
-                    watched[pid] = latestEntry
                     cancelPendingQuitLocked(pid)
                 }
-                os_unfair_lock_unlock(&lock)
+                watched[pid] = latestEntry
             }
+            os_unfair_lock_unlock(&lock)
         } else if notificationName == (kAXWindowClosedNotification as String)
                     || notificationName == (kAXUIElementDestroyedNotification as String) {
             let isKnownWindow = entry.registeredWindowRefs.contains(where: { CFEqual($0, element) })
-            let isActive = entry.app.isActive
-            let hasRegisteredWindows = !entry.registeredWindowRefs.isEmpty
 
-            // 军师审定防线：
-            // 1. 若为非已知窗口且应用已处于后台，直接丢弃，严禁失焦销毁浮层（Tooltip/下拉菜单）伪造关窗
-            if !isKnownWindow && !isActive {
+            if isKnownWindow {
+                entry.registeredWindowRefs.removeAll(where: { CFEqual($0, element) })
+                entry.lastCloseEventDate = Date()
+                entry.hadWindows = true
+                watched[pid] = entry
                 os_unfair_lock_unlock(&lock)
+                evaluateAppWindows(pid: pid)
                 return
             }
 
-            // 2. 若为非已知窗口且已有已注册的业务窗口，当前通知必定为临时浮层，直接丢弃
-            if !isKnownWindow && hasRegisteredWindows {
+            // 若销毁的元素未精确命中 registeredWindowRefs（例如：启动时的打开面板 orderOut: 残留了旧引用、
+            // 或新建窗口/跨进程面板在轮询前被关闭、或已销毁的 element 无法再查询 AX 属性）：
+            // 严禁对已销毁的 element 调用 isStandardBusinessWindow（必然报 -25202 失败），
+            // 改为在锁外查询该应用当前存活的真实窗口列表与在屏窗口数进行权威核验！
+            guard entry.app.isActive || entry.hadWindows else {
                 os_unfair_lock_unlock(&lock)
                 return
             }
+            let axApp = entry.axApp
+            let bundleId = entry.app.bundleIdentifier
+            let prevKnownCount = entry.registeredWindowRefs.count
+            os_unfair_lock_unlock(&lock)
 
-            // 3. 若为非已知窗口且 registeredWindowRefs 为空（可能启动期未抓到引用）：
-            //    必须在锁外做 isStandardBusinessWindow 业务窗口核验，排除纯提示浮层
-            if !isKnownWindow {
+            let liveWindows = axWindows(of: axApp)
+            let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: bundleId)
+
+            os_unfair_lock_lock(&lock)
+            guard isRunning, var currentEntry = watched[pid] else {
                 os_unfair_lock_unlock(&lock)
-                let isBusiness = Self.isStandardBusinessWindow(element)
-                guard isBusiness else { return }
-                os_unfair_lock_lock(&lock)
-                guard isRunning, let currentEntry = watched[pid] else {
+                return
+            }
+            if let live = liveWindows {
+                syncRegisteredWindowsLocked(for: &currentEntry, currentWindows: live)
+                if !live.isEmpty || (wsOnscreen ?? 0) > 0 {
+                    currentEntry.hadWindows = true
+                    if live.count < prevKnownCount {
+                        currentEntry.lastCloseEventDate = Date()
+                    }
+                    watched[pid] = currentEntry
                     os_unfair_lock_unlock(&lock)
                     return
                 }
-                entry = currentEntry
             }
-
-            entry.registeredWindowRefs.removeAll(where: { CFEqual($0, element) })
-            entry.lastCloseEventDate = Date()
-            if !entry.hadWindows {
-                if notificationName == (kAXWindowClosedNotification as String) || isKnownWindow {
-                    entry.hadWindows = true
-                }
+            // 当前存活 AX 业务窗口与在屏窗口均已归零，且应用此前确有窗口
+            if (liveWindows?.isEmpty == true) && ((wsOnscreen ?? 0) == 0) && (currentEntry.hadWindows || prevKnownCount > 0) {
+                currentEntry.hadWindows = true
+                currentEntry.lastCloseEventDate = Date()
+                watched[pid] = currentEntry
+                os_unfair_lock_unlock(&lock)
+                evaluateAppWindows(pid: pid)
+            } else {
+                watched[pid] = currentEntry
+                os_unfair_lock_unlock(&lock)
             }
-            let hadWin = entry.hadWindows
-            watched[pid] = entry
+        } else if notificationName == (kAXMainWindowChangedNotification as String)
+                    || notificationName == (kAXFocusedWindowChangedNotification as String) {
+            let axApp = entry.axApp
+            let bundleId = entry.app.bundleIdentifier
             os_unfair_lock_unlock(&lock)
 
-            guard hadWin else { return }
-            evaluateAppWindows(pid: pid)
+            let liveWindows = axWindows(of: axApp)
+            let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: bundleId)
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid, bundleID: bundleId)
+
+            os_unfair_lock_lock(&lock)
+            guard isRunning, var currentEntry = watched[pid] else {
+                os_unfair_lock_unlock(&lock)
+                return
+            }
+            let wasHadWindows = currentEntry.hadWindows
+            if (liveWindows?.count ?? 0) > 0 || (wsOnscreen ?? 0) > 0 || (wsCount ?? 0) > 0 {
+                currentEntry.hadWindows = true
+                suppressedPids.remove(pid)
+                cancelPendingQuitLocked(pid)
+                if let live = liveWindows {
+                    syncRegisteredWindowsLocked(for: &currentEntry, currentWindows: live)
+                }
+                watched[pid] = currentEntry
+                // 若此前已有窗口，主窗口/焦点窗口切换可能是窗口正在执行约 150ms 的关闭动画，安排一次轻量延迟复核
+                if wasHadWindows && pendingRechecks[pid] == nil && pendingQuits[pid] == nil && !terminatingPids.contains(pid) {
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self = self else { return }
+                        os_unfair_lock_lock(&self.lock)
+                        self.pendingRechecks.removeValue(forKey: pid)
+                        os_unfair_lock_unlock(&self.lock)
+                        self.evaluateAppWindows(pid: pid)
+                    }
+                    pendingRechecks[pid] = work
+                    os_unfair_lock_unlock(&lock)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: work)
+                    return
+                }
+                os_unfair_lock_unlock(&lock)
+            } else if wasHadWindows && (liveWindows?.isEmpty == true) && ((wsOnscreen ?? 0) == 0) && !currentEntry.app.isHidden {
+                syncRegisteredWindowsLocked(for: &currentEntry, currentWindows: [])
+                currentEntry.lastCloseEventDate = Date()
+                watched[pid] = currentEntry
+                os_unfair_lock_unlock(&lock)
+                evaluateAppWindows(pid: pid)
+            } else {
+                os_unfair_lock_unlock(&lock)
+            }
         } else {
             os_unfair_lock_unlock(&lock)
         }
@@ -875,27 +1049,24 @@ public final class AutoQuitManager {
             return
         }
         let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 3.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
-            cancelPendingQuitLocked(pid)
-            cancelPendingRecheckLocked(pid)
-            os_unfair_lock_unlock(&lock)
-            return
-        }
         os_unfair_lock_unlock(&lock)
 
         // Y-02: 锁外执行 AX 与 WindowServer 查询
-        let axCount = axWindows(of: entrySnapshot.axApp)?.count
+        let axList = axWindows(of: entrySnapshot.axApp)
+        let axCount = axList?.count
         if app.isHidden {
-            let hadCloseEvent = entrySnapshot.lastCloseEventDate != .distantPast
-            if !hadCloseEvent || (axCount ?? 1) > 0 {
+            if !recentlyHadCloseEvent || (axCount ?? 1) > 0 {
                 return
             }
         }
 
         if let ax = axCount, ax > 0 {
             os_unfair_lock_lock(&lock)
-            if var latest = watched[pid], !latest.hadWindows {
+            if var latest = watched[pid] {
                 latest.hadWindows = true
+                if let list = axList {
+                    syncRegisteredWindowsLocked(for: &latest, currentWindows: list)
+                }
                 watched[pid] = latest
             }
             recheckCounts.removeValue(forKey: pid)
@@ -916,22 +1087,29 @@ public final class AutoQuitManager {
         let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: pid)
         let wsAnotherSpace = AutoQuitManager.windowServerAnotherSpaceWindowCount(for: pid, bundleID: app.bundleIdentifier)
 
-        // 军师审定因果律公式：
+        // 军师审定因果律与全 Space 零窗确认公式：
         // 1. axCount 确切为 0；
         // 2. wsAnotherSpace 必须为 0（在其他未激活桌面 Space 上已无实体视窗）；
         // 3. 在屏视窗归零 (wsOnscreen == 0) 且无全屏视窗 (wsFullscreen == 0)；
-        // 4. 且刚刚发生过真实关窗 (recentlyHadCloseEvent)。
-        let isZeroByCausality = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent
+        // 4. 且刚刚发生过真实关窗 (recentlyHadCloseEvent) 或 WindowServer 标准窗口计数亦归零 (wsCount == 0)。
+        let isAllSpacesZero = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0)
+        let isZeroByCausality = isAllSpacesZero && (recentlyHadCloseEvent || (wsCount == 0 && !app.isHidden))
 
         os_unfair_lock_lock(&lock)
         defer { os_unfair_lock_unlock(&lock) }
         guard isRunning, watched[pid] != nil else { return }
 
         // Y-01 & 军师第三层因果律防线：
-        // 1. 标准双零确认 (axCount == 0 && wsCount == 0)；
-        // 2. 真实关窗因果律确认：axCount == 0 且在屏窗口 wsOnscreen == 0 且其他 Space 窗口归零 (wsAnotherSpace == 0) 且刚刚发生真实关窗 (recentlyHadCloseEvent)。
-        //    说明当前所有桌面 Space 上已没有任何可见实体窗口，残存的 wsCount 均为脱离 Space 的 orderOut: 离屏残余底板，放行调度！
-        if isZeroByCausality || AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) {
+        // 1. 标准双零确认 (axCount == 0 && wsCount == 0) 且跨 Space / 全屏无窗；
+        // 2. 真实关窗因果律确认：axCount == 0 且在屏窗口 wsOnscreen == 0 且其他 Space 窗口归零 (wsAnotherSpace == 0) 且刚刚发生真实关窗。
+        if isZeroByCausality || (isAllSpacesZero && AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount)) {
+            if var latest = watched[pid] {
+                latest.registeredWindowRefs.removeAll()
+                if Date().timeIntervalSince(latest.lastCloseEventDate) >= 3.0 {
+                    latest.lastCloseEventDate = Date()
+                }
+                watched[pid] = latest
+            }
             recheckCounts.removeValue(forKey: pid)
             cancelPendingRecheckLocked(pid)
             scheduleQuitLocked(pid, app: app)
@@ -995,6 +1173,7 @@ public final class AutoQuitManager {
             return
         }
         var unhaddedToProbe: [(pid: pid_t, axApp: AXUIElement, bundleId: String?)] = []
+        var inactiveHadWindowsToProbe: [(pid: pid_t, axApp: AXUIElement, bundleId: String?)] = []
         var activeToEvaluate: [pid_t] = []
 
         for (pid, entry) in watched {
@@ -1009,10 +1188,12 @@ public final class AutoQuitManager {
                 let isDegraded = entry.isAXObserverDegraded
                 if isActive || recentlyHadCloseEvent || isDegraded {
                     activeToEvaluate.append(pid)
+                } else if !entry.app.isHidden {
+                    inactiveHadWindowsToProbe.append((pid: pid, axApp: entry.axApp, bundleId: entry.app.bundleIdentifier))
                 }
             }
         }
-        if !unhaddedToProbe.isEmpty {
+        if !unhaddedToProbe.isEmpty || !inactiveHadWindowsToProbe.isEmpty {
             isFallbackProbeInFlight = true
         }
         os_unfair_lock_unlock(&lock)
@@ -1021,7 +1202,7 @@ public final class AutoQuitManager {
             evaluateAppWindows(pid: pid)
         }
 
-        guard !unhaddedToProbe.isEmpty else { return }
+        guard !unhaddedToProbe.isEmpty || !inactiveHadWindowsToProbe.isEmpty else { return }
 
         probeQueue.async { [weak self] in
             guard let self = self else { return }
@@ -1034,6 +1215,23 @@ public final class AutoQuitManager {
                     discoveredWindows.append((pid: item.pid, windows: list ?? []))
                 }
             }
+
+            var zeroedInactivePids: [pid_t] = []
+            for item in inactiveHadWindowsToProbe {
+                // 先通过轻量 WindowServer 在屏判断快速跳过仍有在屏窗口的后台应用
+                let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: item.pid, bundleID: item.bundleId) ?? 1
+                guard wsOnscreen == 0 else { continue }
+                let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: item.pid, bundleID: item.bundleId) ?? 1
+                guard wsCount == 0 else { continue }
+                let wsAnotherSpace = AutoQuitManager.windowServerAnotherSpaceWindowCount(for: item.pid, bundleID: item.bundleId)
+                guard wsAnotherSpace == 0 else { continue }
+                let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: item.pid)
+                guard wsFullscreen == 0 else { continue }
+                if let list = self.axWindows(of: item.axApp), list.isEmpty {
+                    zeroedInactivePids.append(item.pid)
+                }
+            }
+
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 os_unfair_lock_lock(&self.lock)
@@ -1045,17 +1243,15 @@ public final class AutoQuitManager {
                 for found in discoveredWindows {
                     if var entry = self.watched[found.pid] {
                         entry.hadWindows = true
-                        for window in found.windows {
-                            if !entry.registeredWindowRefs.contains(where: { CFEqual($0, window) }) {
-                                if AXObserverAddNotification(entry.observer, window, kAXUIElementDestroyedNotification as CFString, nil) == .success {
-                                    entry.registeredWindowRefs.append(window)
-                                }
-                            }
-                        }
+                        self.syncRegisteredWindowsLocked(for: &entry, currentWindows: found.windows)
                         self.watched[found.pid] = entry
                     }
                 }
                 os_unfair_lock_unlock(&self.lock)
+
+                for zeroPid in zeroedInactivePids {
+                    self.evaluateAppWindows(pid: zeroPid)
+                }
             }
         }
     }
@@ -1125,24 +1321,48 @@ public final class AutoQuitManager {
         } else {
             if ConfigManager.shared.config.enableAutoQuitUndoHUD {
                 // Y-04: 显式传入已解析的真实 pid，防止 app.processIdentifier == -1 导致取消失效
-                AutoQuitUndoHUDController.shared.showCountdown(for: app, resolvedPid: pid, seconds: delaySeconds) { [weak self] cancelledPid in
-                    guard let self = self else { return }
-                    let targetPid = (cancelledPid > 0) ? cancelledPid : pid
-                    os_unfair_lock_lock(&self.lock)
-                    self.cancelPendingQuitLocked(targetPid)
-                    self.suppressedPids.insert(targetPid)
-                    os_unfair_lock_unlock(&self.lock)
-                    AutoQuitDecisionTrace.shared.record(
-                        pid: targetPid,
-                        bundleID: app.bundleIdentifier ?? "",
-                        appName: app.localizedName ?? "pid \(targetPid)",
-                        axWindowCount: 0,
-                        wsWindowCount: 0,
-                        decision: .aborted,
-                        reasonCode: "UserCancelledViaUndoHUD",
-                        detail: "用户在 HUD 上点击了取消"
-                    )
-                }
+                AutoQuitUndoHUDController.shared.showCountdown(
+                    for: app,
+                    resolvedPid: pid,
+                    seconds: delaySeconds,
+                    onCancel: { [weak self] cancelledPid in
+                        guard let self = self else { return }
+                        let targetPid = (cancelledPid > 0) ? cancelledPid : pid
+                        os_unfair_lock_lock(&self.lock)
+                        self.cancelPendingQuitLocked(targetPid)
+                        self.suppressedPids.insert(targetPid)
+                        os_unfair_lock_unlock(&self.lock)
+                        AutoQuitDecisionTrace.shared.record(
+                            pid: targetPid,
+                            bundleID: app.bundleIdentifier ?? "",
+                            appName: app.localizedName ?? "pid \(targetPid)",
+                            axWindowCount: 0,
+                            wsWindowCount: 0,
+                            decision: .aborted,
+                            reasonCode: "UserCancelledViaUndoHUD",
+                            detail: "用户在 HUD 上点击了取消"
+                        )
+                    },
+                    onNeverQuit: { [weak self] excludedPid, excludedBid in
+                        guard let self = self else { return }
+                        let targetPid = (excludedPid > 0) ? excludedPid : pid
+                        os_unfair_lock_lock(&self.lock)
+                        self.cancelPendingQuitLocked(targetPid)
+                        self.suppressedPids.insert(targetPid)
+                        os_unfair_lock_unlock(&self.lock)
+                        self.detach(pid: targetPid)
+                        AutoQuitDecisionTrace.shared.record(
+                            pid: targetPid,
+                            bundleID: excludedBid ?? app.bundleIdentifier ?? "",
+                            appName: app.localizedName ?? "pid \(targetPid)",
+                            axWindowCount: 0,
+                            wsWindowCount: 0,
+                            decision: .aborted,
+                            reasonCode: "UserExcludedViaUndoHUD",
+                            detail: "用户在 HUD 上点击了快捷排除，已加入排除名单"
+                        )
+                    }
+                )
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + delaySeconds, execute: work)
             runtimeLog("[AutoQuit] Last window closed for \(app.localizedName ?? "pid \(pid)"); quitting in \(delaySeconds)s.")
@@ -1169,11 +1389,8 @@ public final class AutoQuitManager {
             os_unfair_lock_unlock(&lock)
             return
         }
-        let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < 5.0
-        if !app.isActive && Date().timeIntervalSince(entrySnapshot.lastActiveDate) < 2.0 && !recentlyHadCloseEvent && !entrySnapshot.isAXObserverDegraded {
-            os_unfair_lock_unlock(&lock)
-            return
-        }
+        let configuredDelay = Double(max(0, min(10, ConfigManager.shared.config.autoQuitDelaySeconds)))
+        let recentlyHadCloseEvent = Date().timeIntervalSince(entrySnapshot.lastCloseEventDate) < max(5.0, configuredDelay + 3.0)
         os_unfair_lock_unlock(&lock)
 
         let cfg = ConfigManager.shared.config
@@ -1208,11 +1425,11 @@ public final class AutoQuitManager {
         let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid, bundleID: app.bundleIdentifier)
         let wsFullscreen = AutoQuitManager.windowServerFullscreenWindowCount(for: pid)
         let wsAnotherSpace = AutoQuitManager.windowServerAnotherSpaceWindowCount(for: pid, bundleID: app.bundleIdentifier)
-        let isZeroByCausality = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0) && recentlyHadCloseEvent
+        let isAllSpacesZero = (axCount == 0) && (wsAnotherSpace == 0) && ((wsOnscreen ?? 0) == 0) && (wsFullscreen == 0)
+        let isZeroByCausality = isAllSpacesZero && (recentlyHadCloseEvent || (wsCount == 0 && !app.isHidden))
 
         if app.isHidden {
-            let hadCloseEvent = entrySnapshot.lastCloseEventDate != .distantPast
-            if !hadCloseEvent || (axCount ?? 1) > 0 {
+            if !recentlyHadCloseEvent || (axCount ?? 1) > 0 {
                 return
             }
         }
@@ -1231,7 +1448,7 @@ public final class AutoQuitManager {
             return
         }
 
-        guard isZeroByCausality || AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount) else {
+        guard isZeroByCausality || (isAllSpacesZero && AutoQuitManager.isConfirmedZeroWindowCount(axCount: axCount, windowServerCount: wsCount)) else {
             runtimeLog("[AutoQuit] Aborted quit for \(app.localizedName ?? "pid \(pid)"): windows still present or unknown (AX=\(axCount.map(String.init) ?? "nil"), WS=\(wsCount.map(String.init) ?? "nil")).")
             AutoQuitDecisionTrace.shared.record(
                 pid: pid,
@@ -1285,10 +1502,11 @@ public final class AutoQuitManager {
         }
     }
 
-    /// 伴生 Helper 联动退出（含军师加固点 3：APFS Unicode NFC 规范化前缀校验、内核进程表深潜扫描及直接衍生子进程清理）
+    /// 伴生 Helper 联动退出（含军师加固点 3：APFS Unicode NFC 规范化前缀校验、内核进程表深潜扫描、直接衍生子进程清理及沙盒打开/保存面板 XPC 回收）
     private func terminateCompanionHelpers(for mainApp: NSRunningApplication) {
         let mainBid = mainApp.bundleIdentifier ?? ""
         let mainOwner = mainApp.localizedName ?? ""
+        let mainBundleName = mainApp.bundleURL?.deletingPathExtension().lastPathComponent ?? mainApp.executableURL?.lastPathComponent
         let companions = Set(AutoQuitQuirks.shared.companionBundleIDs(for: mainBid, ownerName: mainOwner))
         let terminateInBundle = AutoQuitQuirks.shared.shouldTerminateHelpersInBundle(for: mainBid, ownerName: mainOwner)
 
@@ -1333,7 +1551,21 @@ public final class AutoQuitManager {
             }
         }
 
-        // 3. 深度终止由主应用直接衍生的孤儿直接子进程（通过内核 proc_pidinfo 匹配 pbi_ppid，如 magpie-bun / 插件主机等）
+        // 3. 终止归属于当前宿主应用的跨进程沙盒 Open and Save Panel Service / QuickLookUIService 辅助进程
+        for running in NSWorkspace.shared.runningApplications {
+            guard running.processIdentifier != mainApp.processIdentifier, !running.isTerminated else { continue }
+            if AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: running.bundleIdentifier,
+                serviceLocalizedName: running.localizedName,
+                hostLocalizedName: mainOwner,
+                hostBundleName: mainBundleName
+            ) {
+                runtimeLog("[AutoQuit] Terminating companion Open/Save panel service \(running.localizedName ?? "") (pid: \(running.processIdentifier)) for \(mainOwner)")
+                running.terminate()
+            }
+        }
+
+        // 4. 深度终止由主应用直接衍生的孤儿直接子进程（通过内核 proc_pidinfo 匹配 pbi_ppid，如 magpie-bun / 插件主机等）
         let mainPid = mainApp.processIdentifier
         if mainPid > 0 {
             var pids = [pid_t](repeating: 0, count: 2048)
@@ -1390,11 +1622,23 @@ public final class AutoQuitManager {
             _ = AXObserverRemoveNotification(observer, axApp, kAXWindowCreatedNotification as CFString)
             _ = AXObserverRemoveNotification(observer, axApp, kAXWindowClosedNotification)
             _ = AXObserverRemoveNotification(observer, axApp, kAXUIElementDestroyedNotification as CFString)
+            _ = AXObserverRemoveNotification(observer, axApp, kAXMainWindowChangedNotification as CFString)
+            _ = AXObserverRemoveNotification(observer, axApp, kAXFocusedWindowChangedNotification as CFString)
         }
         for win in windowRefs {
             _ = AXObserverRemoveNotification(observer, win, kAXUIElementDestroyedNotification as CFString)
         }
         CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+    }
+
+    /// 判断 AXWindow 是否处于最小化至程序坞状态（kAXMinimizedAttribute == true）
+    public static func isAXWindowMinimized(_ w: AXUIElement) -> Bool {
+        var minVal: CFTypeRef?
+        if AXUIElementCopyAttributeValue(w, kAXMinimizedAttribute as CFString, &minVal) == .success,
+           let isMin = minVal as? Bool {
+            return isMin
+        }
+        return false
     }
 
     /// 返回 nil 表示 AX 查询失败（状态未知），调用方必须跳过本轮判定；
@@ -1405,10 +1649,11 @@ public final class AutoQuitManager {
         let err = AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value)
         var result: [AXUIElement] = (err == .success ? (value as? [AXUIElement] ?? []) : [])
 
-        if result.isEmpty {
-            var pid: pid_t = 0
-            AXUIElementGetPid(element, &pid)
-            let wsCount = (pid > 0) ? AutoQuitManager.windowServerStandardWindowCount(for: pid) : nil
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+
+        if result.isEmpty && pid > 0 {
+            let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid)
             if (wsCount ?? 0) > 0 {
                 for attr in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
                     var winVal: CFTypeRef?
@@ -1438,7 +1683,22 @@ public final class AutoQuitManager {
         if err != .success && result.isEmpty {
             return nil
         }
-        return result.filter { Self.isStandardBusinessWindow($0) }
+
+        var validWindows = result.filter { Self.isStandardBusinessWindow($0) }
+
+        // 若 AX 树中仍残留窗口引用（例如沙盒应用 NSOpenPanel 关闭后残留的远程包装窗口 NSLocalWindowWrappingRemoteWindow，
+        // 或通过 orderOut: 隐藏到离屏的缓存窗口），但 WindowServer 已确认该应用在当前屏幕、跨 Space 及全屏层均无任何有效窗口，
+        // 则仅保留真正处于「最小化至程序坞 (kAXMinimizedAttribute == true)」的窗口，剔除不可见的离屏幽灵 AX 引用。
+        if !validWindows.isEmpty && pid > 0 {
+            if let wsCount = AutoQuitManager.windowServerStandardWindowCount(for: pid), wsCount == 0,
+               let wsOnscreen = AutoQuitManager.windowServerOnScreenWindowCount(for: pid), wsOnscreen == 0,
+               AutoQuitManager.windowServerAnotherSpaceWindowCount(for: pid) == 0,
+               AutoQuitManager.windowServerFullscreenWindowCount(for: pid) == 0 {
+                validWindows = validWindows.filter { Self.isAXWindowMinimized($0) }
+            }
+        }
+
+        return validWindows
     }
 
     /// Y-01 & Y-03：判断是否为有效业务窗口或对话框

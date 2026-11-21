@@ -3,6 +3,15 @@ import AppKit
 import CoreServices
 
 #if DEBUG || DIAGNOSTIC_MODE
+if CommandLine.arguments.contains("--test-autoquit") {
+    do {
+        try DiagnosticSuite.runAutoQuitOnboardingDiagnostics(standalone: true)
+        exit(0)
+    } catch {
+        print("[DiagnosticSuite] Unhandled error: \(error)")
+        exit(1)
+    }
+}
 if CommandLine.arguments.contains("--test") {
     do {
         try DiagnosticSuite.run()

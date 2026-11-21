@@ -2270,6 +2270,44 @@ public enum DiagnosticSuite {
         TestAssertions.expect(quirks.matchRule(bundleID: "com.apple.Music", ownerName: "音乐")?.cleanAllOffscreenWindows == true, "Music rule must have cleanAllOffscreenWindows enabled")
         TestAssertions.expect(AutoQuitManager.windowServerFullscreenWindowCount(for: ProcessInfo.processInfo.processIdentifier) >= 0, "Fullscreen window count must return valid non-negative integer")
 
+        // 验证 文本编辑（TextEdit）跨进程沙盒 NSOpenPanel / QuickLookUIService 伴生面板识别与隔离断言
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.appkit.xpc.openAndSavePanelService",
+                serviceLocalizedName: "Open and Save Panel Service (文本编辑)",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == true,
+            "Open and Save Panel Service (文本编辑) must match host app 文本编辑"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.quicklook.QuickLookUIService",
+                serviceLocalizedName: "QuickLookUIService (Open and Save Panel Service (文本编辑))",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == true,
+            "QuickLookUIService for 文本编辑 Open Panel must match host app 文本编辑"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.appkit.xpc.openAndSavePanelService",
+                serviceLocalizedName: "Open and Save Panel Service (TextEdit)",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == true,
+            "Open and Save Panel Service (TextEdit) must match via hostBundleName fallback"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.appkit.xpc.openAndSavePanelService",
+                serviceLocalizedName: "Open and Save Panel Service (预览)",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == false,
+            "Open and Save Panel Service of another app (预览) must never match 文本编辑"
+        )
+
         // 验证 AutoQuitDecisionTrace 环形缓冲区纯值安全性与容量
         let trace = AutoQuitDecisionTrace.shared
         trace.clear()
@@ -3053,6 +3091,9 @@ public enum DiagnosticSuite {
         TestAssertions.expect(false, "Deep Architectural Hardening test threw: \(error)")
     }
 
+    // 20. 测试关窗退出新装应用智能询问、VPN 特征预判、HUD 一键永久排除与名单置顶高亮闭环
+    try runAutoQuitOnboardingDiagnostics()
+
     if TestAssertions.failures > 0 {
         print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")
         try? FileManager.default.removeItem(at: testFixtureURL)
@@ -3068,6 +3109,260 @@ public enum DiagnosticSuite {
     try? FileManager.default.removeItem(at: testFixtureURL)
     try? FileManager.default.removeItem(at: tempTestDir)
     exit(0)
+    }
+
+    public static func runAutoQuitOnboardingDiagnostics(standalone: Bool = false) throws {
+        var standaloneTempDir: URL?
+        if standalone {
+            standaloneTempDir = ConfigManager.setupIsolatedTestEnvironment()
+        }
+        defer {
+            if let dir = standaloneTempDir {
+                try? FileManager.default.removeItem(at: dir)
+            }
+        }
+
+        print("[20] Testing AutoQuit New App Onboarding Prompt, VPN Detection, HUD Never-Quit & Rules Highlighting...")
+
+        // (1) promptAutoQuitOnNewApp 配置往返与旧版默认兼容断言
+        TestAssertions.expect(ConfigManager.shared.config.promptAutoQuitOnNewApp == true, "promptAutoQuitOnNewApp 初始默认必须为 true")
+        ConfigManager.shared.updatePromptAutoQuitOnNewApp(false)
+        TestAssertions.expect(ConfigManager.shared.config.promptAutoQuitOnNewApp == false, "updatePromptAutoQuitOnNewApp(false) 必须生效")
+        let encodedPromptCfg = try JSONEncoder().encode(ConfigManager.shared.config)
+        let decodedPromptCfg = try JSONDecoder().decode(AtoolsConfig.self, from: encodedPromptCfg)
+        TestAssertions.expect(decodedPromptCfg.promptAutoQuitOnNewApp == false, "promptAutoQuitOnNewApp 必须支持 JSON 持久化往返")
+        ConfigManager.shared.updatePromptAutoQuitOnNewApp(true)
+
+        let legacyNoPromptJSON = "{\"version\":5,\"categories\":[]}".data(using: .utf8)!
+        let legacyNoPromptDecoded = try JSONDecoder().decode(AtoolsConfig.self, from: legacyNoPromptJSON)
+        TestAssertions.expect(legacyNoPromptDecoded.promptAutoQuitOnNewApp == true, "旧版配置缺省 promptAutoQuitOnNewApp 时必须平滑默认为 true")
+
+        // (2) AutoQuitQuirks VPN / 代理 / 安全工具智能预判断言
+        let quirks = AutoQuitQuirks.shared
+        TestAssertions.expect(
+            quirks.isLikelyNetworkOrBackgroundTool(bundleID: "io.github.clash-verge-rev.clash-verge-rev", name: "Clash Verge"),
+            "Clash Verge 必须被识别为网络/代理常驻工具"
+        )
+        TestAssertions.expect(
+            quirks.isLikelyNetworkOrBackgroundTool(bundleID: "com.sangfor.EasyConnect", name: "EasyConnect"),
+            "深信服 EasyConnect 必须被识别为 VPN/内网工具"
+        )
+        TestAssertions.expect(
+            quirks.isLikelyNetworkOrBackgroundTool(bundleID: "com.wireguard.macos", name: "WireGuard"),
+            "WireGuard 必须被识别为 VPN 工具"
+        )
+        TestAssertions.expect(
+            quirks.isLikelyNetworkOrBackgroundTool(bundleID: "com.yaklang.yakit", name: "Yakit"),
+            "Yakit 必须被识别为安全常驻工具"
+        )
+        TestAssertions.expect(
+            !quirks.isLikelyNetworkOrBackgroundTool(bundleID: "com.apple.TextEdit", name: "文本编辑"),
+            "普通文本编辑器不得被误判为 VPN/网络工具"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.appkit.xpc.openAndSavePanelService",
+                serviceLocalizedName: "Open and Save Panel Service (文本编辑)",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == true,
+            "Open and Save Panel Service (文本编辑) 必须匹配宿主文本编辑"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.quicklook.QuickLookUIService",
+                serviceLocalizedName: "QuickLookUIService (Open and Save Panel Service (文本编辑))",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == true,
+            "文本编辑打开面板关联的 QuickLookUIService 必须匹配宿主文本编辑"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.isCompanionOpenAndSavePanelService(
+                serviceBundleID: "com.apple.appkit.xpc.openAndSavePanelService",
+                serviceLocalizedName: "Open and Save Panel Service (预览)",
+                hostLocalizedName: "文本编辑",
+                hostBundleName: "TextEdit"
+            ) == false,
+            "其他应用（预览）的 Open and Save Panel Service 严禁误匹配文本编辑"
+        )
+
+        // (3) 单应用快捷增删规则与一键「永不自动退出」接口断言
+        let savedAutoQuit = ConfigManager.shared.config.enableAutoQuit
+        let savedMode = ConfigManager.shared.config.autoQuitMode
+        let savedExcludes = ConfigManager.shared.config.autoQuitExcludeAppRules
+        let savedOnlyListed = ConfigManager.shared.config.autoQuitOnlyListedAppRules
+        defer {
+            ConfigManager.shared.updateAutoQuitRules(savedExcludes, for: .allApps)
+            ConfigManager.shared.updateAutoQuitRules(savedOnlyListed, for: .onlyListed)
+            ConfigManager.shared.updateAutoQuitMode(savedMode)
+            ConfigManager.shared.updateEnableAutoQuit(savedAutoQuit)
+            AutoQuitNewAppPromptController.shared.dismiss(clearPending: true)
+        }
+
+        ConfigManager.shared.updateEnableAutoQuit(true)
+        ConfigManager.shared.updateAutoQuitMode(.allApps)
+        ConfigManager.shared.updateAutoQuitRules([], for: .allApps)
+        ConfigManager.shared.updateAutoQuitRules([], for: .onlyListed)
+
+        let addedExclude = ConfigManager.shared.addAutoQuitRule("com.test.vpnclient", for: .allApps)
+        TestAssertions.expect(addedExclude == true, "addAutoQuitRule 首次添加必须返回 true")
+        TestAssertions.expect(ConfigManager.shared.config.autoQuitExcludeAppRules.contains("com.test.vpnclient"), "排除名单必须包含新增的 VPN 应用")
+        let duplicateAdd = ConfigManager.shared.addAutoQuitRule("COM.TEST.VPNCLIENT", for: .allApps)
+        TestAssertions.expect(duplicateAdd == false, "大小写不敏感重复添加必须被去重拒绝")
+
+        let removedExclude = ConfigManager.shared.removeAutoQuitRule("com.test.vpnclient", for: .allApps)
+        TestAssertions.expect(removedExclude == true && ConfigManager.shared.config.autoQuitExcludeAppRules.isEmpty, "removeAutoQuitRule 必须成功移除规则")
+
+        // 验证 excludeAppFromAutoQuit 双模式跨名单保护
+        ConfigManager.shared.updateAutoQuitMode(.onlyListed)
+        _ = ConfigManager.shared.addAutoQuitRule("com.test.ListedApp", for: .onlyListed)
+        ConfigManager.shared.excludeAppFromAutoQuit("com.test.ListedApp")
+        TestAssertions.expect(!ConfigManager.shared.config.autoQuitOnlyListedAppRules.contains("com.test.ListedApp"), "excludeAppFromAutoQuit 在 onlyListed 下必须从退出名单中移除")
+        TestAssertions.expect(ConfigManager.shared.config.autoQuitExcludeAppRules.contains("com.test.ListedApp"), "excludeAppFromAutoQuit 必须同步写入排除名单")
+
+        // (4) AutoQuitNewAppPromptController 单应用 VPN 询问、一键勾选生效与多应用聚合断言
+        ConfigManager.shared.updateAutoQuitMode(.allApps)
+        ConfigManager.shared.updateAutoQuitRules([], for: .allApps)
+
+        let promptCtrl = AutoQuitNewAppPromptController.shared
+        promptCtrl.dismiss(clearPending: true)
+
+        let mockVPNApp = IndexedApp(
+            name: "Clash Verge",
+            localizedName: "Clash Verge",
+            path: "/Applications/Clash Verge.app",
+            bundleId: "io.github.clash-verge",
+            isRegularApp: true
+        )
+        promptCtrl.enqueueDiscoveredApps([mockVPNApp], debounceSeconds: 0)
+        TestAssertions.expect(promptCtrl.pendingApps.count == 1, "单应用入队后 pendingApps 数量必须为 1")
+        TestAssertions.expect(promptCtrl.titleLabel?.stringValue.contains("Clash Verge") == true, "询问浮层标题必须显示新应用名称")
+        TestAssertions.expect(promptCtrl.subtitleLabel?.stringValue.contains("VPN/网络工具") == true, "VPN 应用在 allApps 模式下必须触发智能高亮建议")
+        TestAssertions.expect(promptCtrl.confirmButton?.title == "勾选排除", "allApps 模式下主按钮标题必须为 '勾选排除'")
+
+        // 模拟用户点击「勾选排除」按钮
+        promptCtrl.handleConfirmClicked()
+        TestAssertions.expect(
+            ConfigManager.shared.config.autoQuitExcludeAppRules.contains("io.github.clash-verge"),
+            "点击勾选排除后，新安装的 VPN 必须立即进入排除名单并生效"
+        )
+        TestAssertions.expect(
+            AutoQuitManager.shouldWatch(
+                bundleID: "io.github.clash-verge",
+                activationPolicy: .regular,
+                isFinishedLaunching: true,
+                isSelf: false,
+                mode: .allApps,
+                rules: ConfigManager.shared.config.autoQuitAppRules
+            ) == false,
+            "进入排除名单后 AutoQuitManager.shouldWatch 必须立即返回 false（免杀生效）"
+        )
+
+        // 验证 onlyListed 模式下的单应用询问与勾选生效
+        ConfigManager.shared.updateAutoQuitMode(.onlyListed)
+        ConfigManager.shared.updateAutoQuitRules([], for: .onlyListed)
+        promptCtrl.dismiss(clearPending: true)
+
+        let mockReaderApp = IndexedApp(
+            name: "SkimReader",
+            localizedName: "Skim 阅读器",
+            path: "/Applications/Skim.app",
+            bundleId: "net.sourceforge.skim-app.skim",
+            isRegularApp: true
+        )
+        promptCtrl.enqueueDiscoveredApps([mockReaderApp], debounceSeconds: 0)
+        TestAssertions.expect(promptCtrl.confirmButton?.title == "勾选退出", "onlyListed 模式下主按钮标题必须为 '勾选退出'")
+        promptCtrl.handleConfirmClicked()
+        TestAssertions.expect(
+            ConfigManager.shared.config.autoQuitOnlyListedAppRules.contains("net.sourceforge.skim-app.skim"),
+            "onlyListed 模式下点击勾选退出后，应用必须立即进入退出白名单并生效"
+        )
+
+        // 验证批量安装（>=2 个新应用）自动聚合卡片
+        promptCtrl.dismiss(clearPending: true)
+        let batchApp1 = IndexedApp(name: "NewAppA", localizedName: "新应用A", path: "/Applications/NewAppA.app", bundleId: "com.test.newappa", isRegularApp: true)
+        let batchApp2 = IndexedApp(name: "NewAppB", localizedName: "新应用B", path: "/Applications/NewAppB.app", bundleId: "com.test.newappb", isRegularApp: true)
+        promptCtrl.enqueueDiscoveredApps([batchApp1, batchApp2], debounceSeconds: 0)
+        TestAssertions.expect(promptCtrl.pendingApps.count == 2, "批量入队后 pendingApps 数量应为 2")
+        TestAssertions.expect(promptCtrl.titleLabel?.stringValue == "发现 2 个新安装应用", "多应用同时安装必须聚合展示标题")
+        TestAssertions.expect(promptCtrl.confirmButton?.title == "勾选名单...", "多应用聚合卡片主按钮应为 '勾选名单...'")
+        promptCtrl.handleIgnoreClicked()
+        TestAssertions.expect(promptCtrl.pendingApps.isEmpty, "点击忽略后待处理队列必须清空")
+
+        // (5) 验证解耦后的 handleAppIndexUpdated：即使关闭应用抽屉自动入库，开启关窗退出询问时仍能捕获新装应用并广播
+        promptCtrl.startListening()
+        ConfigManager.shared.updateEnableAutoAddInstalledApps(false)
+        ConfigManager.shared.updateEnableAutoQuit(true)
+        ConfigManager.shared.updatePromptAutoQuitOnNewApp(true)
+        ConfigManager.shared.updateAutoQuitMode(.allApps)
+        ConfigManager.shared.updateAutoQuitRules([], for: .allApps)
+        ConfigManager.shared.updateKnownAppBundleIds(["com.apple.Safari"])
+
+        let calcApp = IndexedApp(
+            name: "Calculator",
+            localizedName: "计算器",
+            path: "/System/Applications/Calculator.app",
+            bundleId: "com.apple.calculator",
+            isRegularApp: true
+        )
+        ConfigManager.shared.handleAppIndexUpdated(apps: [calcApp])
+        TestAssertions.expect(
+            promptCtrl.pendingApps.contains(where: { $0.bundleId == "com.apple.calculator" }),
+            "关闭抽屉自动入库后，handleAppIndexUpdated 仍须为关窗退出独立捕获新装应用并触发询问队列"
+        )
+        promptCtrl.dismiss(clearPending: true)
+        ConfigManager.shared.updateEnableAutoAddInstalledApps(true)
+
+        // (6) 验证 AutoQuitRulesEditorView 新安装应用置顶排序与高亮支持
+        let sema = DispatchSemaphore(value: 0)
+        AppHotspotIndex.shared.refreshIndex { sema.signal() }
+        _ = sema.wait(timeout: .now() + 2.0)
+        let allSelectables = AppHotspotIndex.shared.allSelectableApps
+        if let lastSelectable = allSelectables.last, let highlightBid = lastSelectable.bundleId {
+            let editorView = AutoQuitRulesEditorView(
+                frame: NSRect(x: 0, y: 0, width: 470, height: 430),
+                mode: .allApps,
+                highlightedBundleIDs: [highlightBid]
+            )
+            editorView.loadDataIfNeeded()
+            TestAssertions.expect(editorView.filtered.first?.bundleId == highlightBid, "传入 highlightedBundleIDs 的新安装应用必须在名单编辑器中置顶排在第一位")
+        }
+
+        // (7) 验证 AutoQuitUndoHUDController 一键加入排除名单闭环
+        ConfigManager.shared.updateAutoQuitMode(.allApps)
+        ConfigManager.shared.updateAutoQuitRules([], for: .allApps)
+        if let currentRunningApp = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier != nil && !($0.bundleIdentifier?.isEmpty ?? true) }) {
+            var didTriggerNeverQuitCallback = false
+            AutoQuitUndoHUDController.shared.showCountdown(
+                for: currentRunningApp,
+                resolvedPid: 99999,
+                seconds: 3.0,
+                onCancel: { _ in },
+                onNeverQuit: { pid, _ in
+                    if pid == 99999 {
+                        didTriggerNeverQuitCallback = true
+                    }
+                }
+            )
+            TestAssertions.expect(AutoQuitUndoHUDController.shared.neverQuitButton != nil, "倒计时 HUD 必须包含排除按钮")
+            AutoQuitUndoHUDController.shared.handleNeverQuitClicked()
+            TestAssertions.expect(didTriggerNeverQuitCallback == true, "点击排除按钮必须触发 onNeverQuit 回调")
+            if let bid = currentRunningApp.bundleIdentifier, !bid.isEmpty {
+                TestAssertions.expect(ConfigManager.shared.config.autoQuitExcludeAppRules.contains(bid), "点击排除按钮必须将目标应用 Bundle ID 写入排除名单")
+            }
+        }
+
+        print("      ✓ AutoQuit New App Onboarding Prompt, VPN Detection, HUD Never-Quit & Rules Highlighting verified.")
+        if standalone {
+            if TestAssertions.failures > 0 {
+                print(" [ATools] \(TestAssertions.failures) diagnostic expectation(s) failed.")
+                exit(1)
+            }
+            print("==================================================")
+            print(" [ATools] AutoQuit Onboarding Diagnostics PASSED!")
+            print("==================================================")
+        }
     }
 }
 

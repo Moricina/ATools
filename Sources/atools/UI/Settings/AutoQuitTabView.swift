@@ -6,6 +6,7 @@ public final class AutoQuitTabView: NSView {
     private var autoQuitModePopUp: SettingsLiquidPopUpButton!
     private var autoQuitDelayPopUp: SettingsLiquidPopUpButton!
     private var autoQuitUndoHUDSwitch: NSSwitch!
+    private var promptOnNewAppSwitch: NSSwitch!
     private var autoQuitRulesButton: SettingsPillButton!
     private var autoQuitPermissionLabel: NSTextField!
     private var autoQuitInspectorButton: SettingsPillButton!
@@ -114,7 +115,7 @@ public final class AutoQuitTabView: NSView {
         let rowHUD = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "bell.badge"),
             title: "退出前显示倒计时浮层",
-            subtitle: "显示退出倒计时，期间可点击取消退出",
+            subtitle: "显示退出倒计时，期间可点击取消或快捷加入排除名单",
             accessory: autoQuitUndoHUDSwitch
         )
         card1.addRow(rowHUD, isLast: true)
@@ -127,7 +128,7 @@ public final class AutoQuitTabView: NSView {
         card2.translatesAutoresizingMaskIntoConstraints = false
         scrollContent.addSubview(card2)
 
-        autoQuitRulesButton = SettingsPillButton(title: "编辑名单...", target: self, action: #selector(openAutoQuitRulesEditor))
+        autoQuitRulesButton = SettingsPillButton(title: "编辑名单...", target: self, action: #selector(handleOpenRulesEditorButton))
         autoQuitRulesButton.widthAnchor.constraint(equalToConstant: 148).isActive = true
         let rowRules = SettingsRowView(
             icon: ThumbnailPipeline.shared.symbolIcon(name: "list.bullet.rectangle"),
@@ -136,6 +137,17 @@ public final class AutoQuitTabView: NSView {
             accessory: autoQuitRulesButton
         )
         card2.addRow(rowRules)
+
+        promptOnNewAppSwitch = NSSwitch()
+        promptOnNewAppSwitch.target = self
+        promptOnNewAppSwitch.action = #selector(togglePromptOnNewApp(_:))
+        let rowPromptNewApp = SettingsRowView(
+            icon: ThumbnailPipeline.shared.symbolIcon(name: "sparkles"),
+            title: "新装应用名单询问",
+            subtitle: "下载安装新软件后，弹窗询问是否在当前模式名单中勾选并生效",
+            accessory: promptOnNewAppSwitch
+        )
+        card2.addRow(rowPromptNewApp)
 
         let permContainer = NSView()
         permContainer.translatesAutoresizingMaskIntoConstraints = false
@@ -218,6 +230,8 @@ public final class AutoQuitTabView: NSView {
         autoQuitDelayPopUp.isEnabled = cfg.enableAutoQuit
         autoQuitUndoHUDSwitch.state = cfg.enableAutoQuitUndoHUD ? .on : .off
         autoQuitUndoHUDSwitch.isEnabled = cfg.enableAutoQuit
+        promptOnNewAppSwitch.state = cfg.promptAutoQuitOnNewApp ? .on : .off
+        promptOnNewAppSwitch.isEnabled = cfg.enableAutoQuit
         autoQuitRulesButton.isEnabled = true
         autoQuitInspectorButton.isEnabled = true
 
@@ -283,10 +297,14 @@ public final class AutoQuitTabView: NSView {
         HotkeyManager.openAccessibilitySettings()
     }
 
-    @objc private func openAutoQuitRulesEditor() {
+    @objc private func handleOpenRulesEditorButton() {
+        openAutoQuitRulesEditor(highlightedBundleIDs: [])
+    }
+
+    public func openAutoQuitRulesEditor(highlightedBundleIDs: Set<String> = []) {
         guard let hostWindow = window else { return }
-        guard hostWindow.attachedSheet == nil else {
-            return
+        if let existingSheet = hostWindow.attachedSheet {
+            hostWindow.endSheet(existingSheet)
         }
         let mode = ConfigManager.shared.config.autoQuitMode
         let sheet = NSWindow(
@@ -300,7 +318,11 @@ public final class AutoQuitTabView: NSView {
         sheet.contentMinSize = NSSize(width: 470, height: 430)
         sheet.contentMaxSize = NSSize(width: 470, height: 430)
         sheet.setContentSize(NSSize(width: 470, height: 430))
-        sheet.contentView = AutoQuitRulesEditorView(frame: NSRect(x: 0, y: 0, width: 470, height: 430), mode: mode)
+        sheet.contentView = AutoQuitRulesEditorView(
+            frame: NSRect(x: 0, y: 0, width: 470, height: 430),
+            mode: mode,
+            highlightedBundleIDs: highlightedBundleIDs
+        )
         hostWindow.beginSheet(sheet) { _ in
             _ = sheet
         }
@@ -308,6 +330,10 @@ public final class AutoQuitTabView: NSView {
 
     @objc private func toggleAutoQuitUndoHUD(_ sender: NSSwitch) {
         ConfigManager.shared.updateEnableAutoQuitUndoHUD(sender.state == .on)
+    }
+
+    @objc private func togglePromptOnNewApp(_ sender: NSSwitch) {
+        ConfigManager.shared.updatePromptAutoQuitOnNewApp(sender.state == .on)
     }
 
     @objc private func openAutoQuitInspector() {

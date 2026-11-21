@@ -17,6 +17,7 @@ public extension Notification.Name {
     static let atoolsShelfPresentationModeDidChange = Notification.Name("atoolsShelfPresentationModeDidChange")
     static let atoolsShelfDockEdgeDidChange = Notification.Name("atoolsShelfDockEdgeDidChange")
     static let atoolsAppIndexDidUpdate = Notification.Name("atoolsAppIndexDidUpdate")
+    static let atoolsNewAppsDiscoveredForAutoQuit = Notification.Name("atoolsNewAppsDiscoveredForAutoQuit")
 }
 
 private final class ModalSessionState: @unchecked Sendable {
@@ -312,6 +313,14 @@ public final class SettingsWindowController: NSWindowController, NSWindowDelegat
 
     public func selectTab(_ item: SettingsSidebarItem) {
         sidebarView.selectItem(item)
+    }
+
+    public func showAutoQuitRulesEditor(highlightedBundleIDs: Set<String> = []) {
+        showSettingsWindow()
+        selectTab(.autoQuit)
+        DispatchQueue.main.async { [weak self] in
+            self?.autoQuitView?.openAutoQuitRulesEditor(highlightedBundleIDs: highlightedBundleIDs)
+        }
     }
 
     public func closeSettingsWindow() {

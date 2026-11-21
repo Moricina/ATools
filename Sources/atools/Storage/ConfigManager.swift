@@ -765,6 +765,67 @@ public final class ConfigManager {
         NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
     }
 
+    public func updatePromptAutoQuitOnNewApp(_ enabled: Bool) {
+        self.config.promptAutoQuitOnNewApp = enabled
+        if enabled && self.config.knownAppBundleIds.isEmpty {
+            let regularApps = AppHotspotIndex.shared.allRegularApps
+            let bids = regularApps.compactMap { $0.bundleId }.filter { !$0.isEmpty }
+            self.config.knownAppBundleIds = Array(Set(bids)).sorted()
+            self.config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
+        }
+        save()
+        NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+    }
+
+    /// 将指定 Bundle ID 勾选加入当前（或指定）模式的规则名单并立即生效
+    @discardableResult
+    public func addAutoQuitRule(_ bundleID: String, for mode: AutoQuitMode? = nil) -> Bool {
+        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let targetMode = mode ?? self.config.autoQuitMode
+        var current = self.config.rules(for: targetMode)
+        guard !current.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) else { return false }
+        current.append(trimmed)
+        current.sort()
+        updateAutoQuitRules(current, for: targetMode)
+        return true
+    }
+
+    /// 将指定 Bundle ID 从当前（或指定）模式的规则名单中移除并立即生效
+    @discardableResult
+    public func removeAutoQuitRule(_ bundleID: String, for mode: AutoQuitMode? = nil) -> Bool {
+        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let targetMode = mode ?? self.config.autoQuitMode
+        var current = self.config.rules(for: targetMode)
+        let beforeCount = current.count
+        current.removeAll { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+        guard current.count != beforeCount else { return false }
+        updateAutoQuitRules(current, for: targetMode)
+        return true
+    }
+
+    /// 一键将应用设为「永不自动退出」（allApps 模式下加入排除名单；onlyListed 模式下从退出名单移除并同步写入排除名单）
+    public func excludeAppFromAutoQuit(_ bundleID: String) {
+        let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var changed = false
+        if !self.config.autoQuitExcludeAppRules.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
+            self.config.autoQuitExcludeAppRules.append(trimmed)
+            self.config.autoQuitExcludeAppRules.sort()
+            changed = true
+        }
+        let beforeOnly = self.config.autoQuitOnlyListedAppRules.count
+        self.config.autoQuitOnlyListedAppRules.removeAll { $0.caseInsensitiveCompare(trimmed) == .orderedSame }
+        if self.config.autoQuitOnlyListedAppRules.count != beforeOnly {
+            changed = true
+        }
+        if changed {
+            save()
+            NotificationCenter.default.post(name: .atoolsAutoQuitDidChange, object: nil)
+        }
+    }
+
     @discardableResult
     public func addItem(_ item: LauncherItem, to categoryId: UUID) -> Bool {
         addItems([item], to: categoryId).count == 1
@@ -1221,7 +1282,9 @@ public final class ConfigManager {
     // MARK: - 新安装应用自动入库 (Auto App Discovery & Onboarding)
 
     public func handleAppIndexUpdated(apps: [IndexedApp]) {
-        guard config.enableAutoAddInstalledApps else { return }
+        let shouldAutoAddToShelf = config.enableAutoAddInstalledApps
+        let shouldPromptAutoQuit = config.enableAutoQuit && config.promptAutoQuitOnNewApp
+        guard shouldAutoAddToShelf || shouldPromptAutoQuit else { return }
 
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in
@@ -1245,7 +1308,7 @@ public final class ConfigManager {
             }
         }
 
-        // 🌟 核心防线：首次初始化时（knownSet 为空），全量沉淀现有应用为已知基线，本次绝对不执行任何入库入抽屉动作！
+        // 🌟 核心防线：首次初始化时（knownSet 为空），全量沉淀现有应用为已知基线，本次绝对不执行任何入库或弹窗询问动作！
         if isFirstBaselineSetup {
             config.knownAppBundleIds = Array(scannedValidBids).sorted()
             config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
@@ -1257,7 +1320,7 @@ public final class ConfigManager {
         // 动态基线同步与修剪（Pruning）：
         // 只有当前真正存活在物理磁盘上的应用 Bundle ID，才被保留在已知集合中。
         // 若某个应用已从物理磁盘彻底删除（卸载），将其从 knownSet 中修剪，
-        // 这样一旦用户未来重新从 App Store / DMG 下载安装该应用，就能被精准识别为全新安装并自动入库！
+        // 这样一旦用户未来重新从 App Store / DMG 下载安装该应用，就能被精准识别为全新安装并自动入库/询问！
         let countBeforePrune = knownSet.count
         knownSet = knownSet.filter { bid in
             scannedValidBids.contains(bid)
@@ -1265,30 +1328,29 @@ public final class ConfigManager {
         let didPruneKnownBids = (knownSet.count != countBeforePrune)
 
         var targetCatIdx: Int?
-
-        if config.autoAddPolicyMode == .existingCategory,
-           let targetId = config.autoAddTargetCategoryId,
-           let idx = config.categories.firstIndex(where: { $0.id == targetId }) {
-            targetCatIdx = idx
-        } else {
-            // 专属收件箱分类模式 (或目标分类被删除时的安全自愈)
-            let inboxName = config.autoAddInboxCategoryName.isEmpty ? "新应用" : config.autoAddInboxCategoryName
-            if let idx = config.categories.firstIndex(where: { $0.name == inboxName }) {
+        if shouldAutoAddToShelf {
+            if config.autoAddPolicyMode == .existingCategory,
+               let targetId = config.autoAddTargetCategoryId,
+               let idx = config.categories.firstIndex(where: { $0.id == targetId }) {
                 targetCatIdx = idx
             } else {
-                // 自动创建名为“新应用”的独立专属分类并带 sparkles 图标
-                let newCat = Category(name: inboxName, iconSymbol: "sparkles", items: [])
-                if let favIdx = config.categories.firstIndex(where: { $0.isFavorites }) {
-                    config.categories.insert(newCat, at: favIdx + 1)
-                    targetCatIdx = favIdx + 1
+                // 专属收件箱分类模式 (或目标分类被删除时的安全自愈)
+                let inboxName = config.autoAddInboxCategoryName.isEmpty ? "新应用" : config.autoAddInboxCategoryName
+                if let idx = config.categories.firstIndex(where: { $0.name == inboxName }) {
+                    targetCatIdx = idx
                 } else {
-                    config.categories.insert(newCat, at: 0)
-                    targetCatIdx = 0
+                    // 自动创建名为“新应用”的独立专属分类并带 sparkles 图标
+                    let newCat = Category(name: inboxName, iconSymbol: "sparkles", items: [])
+                    if let favIdx = config.categories.firstIndex(where: { $0.isFavorites }) {
+                        config.categories.insert(newCat, at: favIdx + 1)
+                        targetCatIdx = favIdx + 1
+                    } else {
+                        config.categories.insert(newCat, at: 0)
+                        targetCatIdx = 0
+                    }
                 }
             }
         }
-
-        guard let targetIndex = targetCatIdx else { return }
 
         var existingTargets = Set<String>()
         for cat in config.categories {
@@ -1299,6 +1361,7 @@ public final class ConfigManager {
 
         let ignoredSet = Set(config.ignoredAutoAddBundleIds)
         var newlyAddedCount = 0
+        var newlyDiscoveredAutoQuitApps: [IndexedApp] = []
 
         for app in apps {
             guard app.isShelfEligible else { continue }
@@ -1308,11 +1371,6 @@ public final class ConfigManager {
 
             guard let bid = app.bundleId, !bid.isEmpty else { continue }
             if knownSet.contains(bid) { continue }
-            if ignoredSet.contains(bid) { continue }
-            if existingTargets.contains(path) {
-                knownSet.insert(bid)
-                continue
-            }
 
             // 完整性核验：主可执行二进制必须已落地
             if let executablePath = Bundle(path: path)?.executablePath,
@@ -1320,16 +1378,40 @@ public final class ConfigManager {
                 continue
             }
 
-            let newItem = LauncherItem(
+            // 1. 关窗退出新装应用名单询问收集（常规 GUI 应用，或含 LSUIElement 的 VPN/网络代理/常驻安全客户端）
+            let isNetworkOrVPNTool = AutoQuitQuirks.shared.isLikelyNetworkOrBackgroundTool(
+                bundleID: bid,
                 name: app.localizedName.isEmpty ? app.name : app.localizedName,
-                itemType: .application,
-                target: path
+                path: path
             )
+            if shouldPromptAutoQuit && (app.isRegularApp || isNetworkOrVPNTool) {
+                let isAlreadyInRules = config.currentAutoQuitAppRules.contains { $0.caseInsensitiveCompare(bid) == .orderedSame }
+                if !isAlreadyInRules && !AutoQuitManager.systemExcludedBundleIDs.contains(bid) && !AutoQuitManager.isProtectedApp(bundleID: bid) {
+                    newlyDiscoveredAutoQuitApps.append(app)
+                }
+            }
 
-            config.categories[targetIndex].items.append(newItem)
-            existingTargets.insert(path)
-            knownSet.insert(bid)
-            newlyAddedCount += 1
+            // 2. 应用抽屉自动入库
+            if shouldAutoAddToShelf, let targetIndex = targetCatIdx {
+                if ignoredSet.contains(bid) {
+                    continue
+                }
+                if existingTargets.contains(path) {
+                    knownSet.insert(bid)
+                    continue
+                }
+                let newItem = LauncherItem(
+                    name: app.localizedName.isEmpty ? app.name : app.localizedName,
+                    itemType: .application,
+                    target: path
+                )
+                config.categories[targetIndex].items.append(newItem)
+                existingTargets.insert(path)
+                knownSet.insert(bid)
+                newlyAddedCount += 1
+            } else {
+                knownSet.insert(bid)
+            }
         }
 
         let updatedKnownList = Array(knownSet).sorted()
@@ -1337,7 +1419,7 @@ public final class ConfigManager {
         config.knownAppBundleIds = updatedKnownList
         config.lastAutoAppScanTimestamp = Date().timeIntervalSince1970
 
-        if newlyAddedCount > 0 {
+        if newlyAddedCount > 0, let targetIndex = targetCatIdx {
             if config.shelfSortPolicy != .manual {
                 sortItems(in: config.categories[targetIndex].id, by: config.shelfSortPolicy, shouldSaveAndNotify: false)
             }
@@ -1346,6 +1428,10 @@ public final class ConfigManager {
             runtimeLog("[AutoDiscovery] Successfully auto-added \(newlyAddedCount) new app(s) to category: \(config.categories[targetIndex].name)")
         } else if knownChanged {
             save()
+        }
+
+        if !newlyDiscoveredAutoQuitApps.isEmpty {
+            NotificationCenter.default.post(name: .atoolsNewAppsDiscoveredForAutoQuit, object: newlyDiscoveredAutoQuitApps)
         }
     }
 

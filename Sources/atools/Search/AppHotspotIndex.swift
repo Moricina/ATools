@@ -518,9 +518,18 @@ public final class AppHotspotIndex {
                         let isRegular = !isPrefPane && !metadata.isUIElement && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
                         let isShelfEligible = !isPrefPane && !metadata.isBackgroundOnly && !isCoreServicesDaemon && !isExcluded && metadata.bundleIdentifier != nil && !(metadata.bundleIdentifier?.isEmpty ?? true)
 
-                        // 军师加固点 2：若发现未就绪的 .app 包（如 Info.plist 或二进制仍在拷贝），加入轮询追踪池
-                        if (!isShelfEligible || metadata.bundleIdentifier == nil) && item.hasSuffix(".app") && !isCoreServicesDaemon && !isExcluded {
+                        let hasExecutable: Bool = {
+                            guard item.hasSuffix(".app") else { return true }
+                            if let execPath = Bundle(path: fullPath)?.executablePath {
+                                return FileManager.default.fileExists(atPath: execPath)
+                            }
+                            return false
+                        }()
+
+                        // 军师加固点 2：若发现未就绪的 .app 包（如 Info.plist 或可执行二进制仍在拷贝），加入轮询追踪池且暂不录入半包
+                        if (!isShelfEligible || metadata.bundleIdentifier == nil || !hasExecutable) && item.hasSuffix(".app") && !isCoreServicesDaemon && !isExcluded {
                             self.trackInFlightCandidate(path: fullPath)
+                            return
                         }
 
                         let indexed = IndexedApp(

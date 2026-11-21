@@ -623,6 +623,48 @@ public final class AutoQuitQuirks: @unchecked Sendable {
         return isProtectedVirtualizationApp(bundleID: bundleID, ownerName: ownerName)
     }
 
+    /// 常见 VPN、网络代理、内网零信任客户端及安全抓包常驻工具特征词库（小写）
+    public static let networkOrVPNKeywords: [String] = [
+        "vpn", "clash", "verge", "mihomo", "surge", "quantumult", "shadowrocket",
+        "v2ray", "xray", "sing-box", "singbox", "hiddify", "nekoray", "nekobox",
+        "wireguard", "tailscale", "zerotier", "anyconnect", "secureclient", "cisco",
+        "openvpn", "tunnelblick", "viscosity", "globalprotect", "forticlient", "ivanti",
+        "sangfor", "easyconnect", "atrust", "深信服", "tgent", "sdptgent", "安恒", "qianxin", "奇安信",
+        "proxifier", "charles", "mitmproxy", "reqable", "burpsuite", "yakit", "wireshark",
+        "astrill", "expressvpn", "nordvpn", "surfshark", "mullvad", "protonvpn", "cloudflare", "warp"
+    ]
+
+    /// 智能识别应用是否属于 VPN / 代理 / 内网零信任安全客户端或包含 NetworkExtension 隧道组件
+    public func isLikelyNetworkOrBackgroundTool(bundleID: String?, name: String?, path: String? = nil) -> Bool {
+        let lowerBid = (bundleID ?? "").lowercased()
+        let lowerName = (name ?? "").lowercased()
+        let lowerPath = ((path ?? "") as NSString).lastPathComponent.lowercased()
+
+        for kw in Self.networkOrVPNKeywords {
+            if lowerBid.contains(kw) || lowerName.contains(kw) || lowerPath.contains(kw) {
+                return true
+            }
+        }
+
+        if let appPath = path, !appPath.isEmpty {
+            let fm = FileManager.default
+            let sysExtDir = (appPath as NSString).appendingPathComponent("Contents/Library/SystemExtensions")
+            if let items = try? fm.contentsOfDirectory(atPath: sysExtDir), !items.isEmpty {
+                return true
+            }
+            let plugInsDir = (appPath as NSString).appendingPathComponent("Contents/PlugIns")
+            if let plugins = try? fm.contentsOfDirectory(atPath: plugInsDir) {
+                for p in plugins {
+                    let lp = p.lowercased()
+                    if lp.contains("tunnel") || lp.contains("vpn") || lp.contains("proxy") || lp.contains("networkextension") || lp.contains("packet") {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     /// 匹配针对该 App 的特定规则
     public func matchRule(bundleID: String?, ownerName: String?) -> AppQuirkRule? {
         for rule in builtinRules {

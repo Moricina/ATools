@@ -13,8 +13,9 @@ import AppKit
 /// 表现为设置窗"卡死"），见 CHANGELOG 十-修复记录。
 public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTableViewDelegate {
     private var apps: [IndexedApp] = []
-    private var filtered: [IndexedApp] = []
+    public private(set) var filtered: [IndexedApp] = []
     private var selectedBundleIDs: Set<String>
+    public let highlightedBundleIDs: Set<String>
     private let mode: AutoQuitMode
     private var isDataLoaded = false
     private let searchField = NSSearchField()
@@ -26,9 +27,14 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         return NSSize(width: 470, height: 430)
     }
 
-    public init(frame frameRect: NSRect, mode: AutoQuitMode = ConfigManager.shared.config.autoQuitMode) {
+    public init(
+        frame frameRect: NSRect,
+        mode: AutoQuitMode = ConfigManager.shared.config.autoQuitMode,
+        highlightedBundleIDs: Set<String> = []
+    ) {
         self.mode = mode
         self.selectedBundleIDs = Set(ConfigManager.shared.config.rules(for: mode))
+        self.highlightedBundleIDs = Set(highlightedBundleIDs.map { $0.lowercased() })
         super.init(frame: frameRect)
 
         switch mode {
@@ -153,7 +159,7 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         runtimeLog("[AutoQuit] rules reloaded from atoolsAppIndexDidUpdate: \(filtered.count) selectable apps")
     }
 
-    private func loadDataIfNeeded() {
+    public func loadDataIfNeeded() {
         guard !isDataLoaded else { return }
         isDataLoaded = true
         AppHotspotIndex.shared.refreshIfStale()
@@ -185,8 +191,14 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
                     || (app.bundleId ?? "").lowercased().contains(query)
             }
         }
-        filtered = list.sorted {
-            $0.localizedName.localizedCaseInsensitiveCompare($1.localizedName) == .orderedAscending
+        let highlighted = self.highlightedBundleIDs
+        filtered = list.sorted { a, b in
+            let aHigh = (a.bundleId != nil) && highlighted.contains(a.bundleId!.lowercased())
+            let bHigh = (b.bundleId != nil) && highlighted.contains(b.bundleId!.lowercased())
+            if aHigh != bHigh {
+                return aHigh
+            }
+            return a.localizedName.localizedCaseInsensitiveCompare(b.localizedName) == .orderedAscending
         }
     }
 
@@ -240,6 +252,7 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
         guard filtered.indices.contains(row) else { return nil }
         let app = filtered[row]
         let isSelected = app.bundleId != nil && selectedBundleIDs.contains(app.bundleId!)
+        let isHighlighted = app.bundleId != nil && highlightedBundleIDs.contains(app.bundleId!.lowercased())
 
         let cell: AutoQuitAppTableCellView
         if let reused = tableView.makeView(withIdentifier: AutoQuitAppTableCellView.reuseIdentifier, owner: self) as? AutoQuitAppTableCellView {
@@ -248,7 +261,7 @@ public final class AutoQuitRulesEditorView: NSView, NSTableViewDataSource, NSTab
             cell = AutoQuitAppTableCellView(frame: NSRect(x: 0, y: 0, width: tableView.bounds.width, height: 34))
             cell.identifier = AutoQuitAppTableCellView.reuseIdentifier
         }
-        cell.configure(with: app, isSelected: isSelected, target: self, action: #selector(toggleRow(_:)))
+        cell.configure(with: app, isSelected: isSelected, isHighlighted: isHighlighted, target: self, action: #selector(toggleRow(_:)))
         return cell
     }
 }
@@ -261,6 +274,7 @@ public final class AutoQuitAppTableCellView: NSTableCellView {
     private let checkbox = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let iconImageView = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
+    private let newBadgeLabel = NSTextField(labelWithString: "新安装")
     private let bidLabel = NSTextField(labelWithString: "")
 
     public override init(frame frameRect: NSRect) {
@@ -277,10 +291,18 @@ public final class AutoQuitAppTableCellView: NSTableCellView {
         checkbox.translatesAutoresizingMaskIntoConstraints = false
         iconImageView.translatesAutoresizingMaskIntoConstraints = false
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        newBadgeLabel.translatesAutoresizingMaskIntoConstraints = false
         bidLabel.translatesAutoresizingMaskIntoConstraints = false
 
         nameLabel.font = NSFont.systemFont(ofSize: 12)
         nameLabel.lineBreakMode = .byTruncatingTail
+
+        newBadgeLabel.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        newBadgeLabel.textColor = .controlAccentColor
+        newBadgeLabel.wantsLayer = true
+        newBadgeLabel.layer?.cornerRadius = 4
+        newBadgeLabel.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.14).cgColor
+        newBadgeLabel.isHidden = true
 
         bidLabel.font = NSFont.systemFont(ofSize: 10)
         bidLabel.textColor = .secondaryLabelColor
@@ -288,7 +310,7 @@ public final class AutoQuitAppTableCellView: NSTableCellView {
         bidLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         bidLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        let stack = NSStackView(views: [iconImageView, nameLabel, bidLabel])
+        let stack = NSStackView(views: [iconImageView, nameLabel, newBadgeLabel, bidLabel])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.orientation = .horizontal
         stack.spacing = 8
@@ -311,7 +333,7 @@ public final class AutoQuitAppTableCellView: NSTableCellView {
         ])
     }
 
-    public func configure(with app: IndexedApp, isSelected: Bool, target: AnyObject?, action: Selector) {
+    public func configure(with app: IndexedApp, isSelected: Bool, isHighlighted: Bool = false, target: AnyObject?, action: Selector) {
         checkbox.target = target
         checkbox.action = action
         checkbox.state = (app.bundleId != nil && isSelected) ? .on : .off
@@ -321,6 +343,7 @@ public final class AutoQuitAppTableCellView: NSTableCellView {
 
         iconImageView.image = NSWorkspace.shared.icon(forFile: app.path)
         nameLabel.stringValue = app.localizedName
+        newBadgeLabel.isHidden = !isHighlighted
         bidLabel.stringValue = app.bundleId ?? "(无 bundleID)"
     }
 }

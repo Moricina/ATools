@@ -1,7 +1,7 @@
 import Foundation
 import AppKit
 
-/// 关窗退出撤销浮层控制器（轻量级原生胶囊 HUD，无常驻显存，按需实例化）
+/// 关窗退出撤销浮层控制器（轻量级原生胶囊 HUD，无常驻显存，按需实例化，支持取消本次与一键永久加入排除名单）
 public final class AutoQuitUndoHUDController {
     public static let shared = AutoQuitUndoHUDController()
 
@@ -11,11 +11,15 @@ public final class AutoQuitUndoHUDController {
     private var remainingSeconds: Double = 0
     private var targetDeadline: Date = .distantPast
     private var currentPid: pid_t = 0
+    private var currentBundleId: String?
+    private var currentAppName: String = "应用"
     private var onCancelHandler: ((pid_t) -> Void)?
+    private var onNeverQuitHandler: ((pid_t, String?) -> Void)?
 
-    private var iconImageView: NSImageView?
-    private var messageLabel: NSTextField?
-    private var cancelButton: NSButton?
+    public private(set) var iconImageView: NSImageView?
+    public private(set) var messageLabel: NSTextField?
+    public private(set) var cancelButton: NSButton?
+    public private(set) var neverQuitButton: NSButton?
 
     private init() {}
 
@@ -23,23 +27,31 @@ public final class AutoQuitUndoHUDController {
     /// - 军师加固点 1：倒计时 Timer 显式挂载到 RunLoop `.common` (`.commonModes`)，
     ///   且基于绝对 Deadline 时间戳差值驱动 UI，确保用户拖动滑块或展开菜单期间倒计时不暂停、与 GCD 退出 Deadline 绝对同步。
     /// - Y-04：支持传入已解析的真实 PID，防止 `app.processIdentifier == -1` 时取消回调丢失目标。
+    /// - 三层闭环兜底：新增 `onNeverQuit` 回调与「加入排除」胶囊按钮，支持用户在倒计时期间一键将应用加入排除名单。
     public func showCountdown(
         for app: NSRunningApplication,
         resolvedPid: pid_t? = nil,
         seconds: Double,
-        onCancel: @escaping (pid_t) -> Void
+        onCancel: @escaping (pid_t) -> Void,
+        onNeverQuit: ((pid_t, String?) -> Void)? = nil
     ) {
         assert(Thread.isMainThread)
         let effectivePid = resolvedPid ?? AutoQuitManager.resolveProcessIdentifier(for: app) ?? app.processIdentifier
         currentPid = effectivePid
+        currentBundleId = app.bundleIdentifier
+        currentAppName = app.localizedName ?? "应用"
         remainingSeconds = seconds
         targetDeadline = Date().addingTimeInterval(seconds)
         onCancelHandler = onCancel
+        onNeverQuitHandler = onNeverQuit
 
         buildHUDWindowIfNeeded()
 
-        let appName = app.localizedName ?? "应用"
+        let appName = currentAppName
         iconImageView?.image = app.icon ?? NSWorkspace.shared.icon(for: .application)
+        cancelButton?.isHidden = false
+        let hasValidBid = (currentBundleId != nil && !(currentBundleId?.isEmpty ?? true))
+        neverQuitButton?.isHidden = !hasValidBid
         updateMessageLabel(appName: appName, seconds: Int(ceil(remainingSeconds)))
 
         positionHUDOnScreen()
@@ -74,7 +86,9 @@ public final class AutoQuitUndoHUDController {
             return
         }
         currentPid = 0
+        currentBundleId = nil
         onCancelHandler = nil
+        onNeverQuitHandler = nil
         countdownTimer?.invalidate()
         countdownTimer = nil
         dismissTimer?.invalidate()
@@ -90,6 +104,7 @@ public final class AutoQuitUndoHUDController {
             self?.iconImageView = nil
             self?.messageLabel = nil
             self?.cancelButton = nil
+            self?.neverQuitButton = nil
         })
     }
 
@@ -106,7 +121,7 @@ public final class AutoQuitUndoHUDController {
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visibleFrame = screen?.visibleFrame else { return }
 
-        let width: CGFloat = 290
+        let width: CGFloat = 368
         let height: CGFloat = 46
         let x = visibleFrame.origin.x + (visibleFrame.width - width) / 2.0
         let y = visibleFrame.origin.y + 72 // 位于屏幕底部 Dock 上方舒适视线区
@@ -117,8 +132,10 @@ public final class AutoQuitUndoHUDController {
     private func buildHUDWindowIfNeeded() {
         if hudWindow != nil { return }
 
+        let width: CGFloat = 368
+        let height: CGFloat = 46
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 290, height: 46),
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -134,7 +151,7 @@ public final class AutoQuitUndoHUDController {
         panel.isReleasedWhenClosed = false
 
         // 原生毛玻璃背景
-        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 290, height: 46))
+        let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         visualEffect.material = .hudWindow
         visualEffect.blendingMode = .behindWindow
         visualEffect.state = .active
@@ -148,7 +165,7 @@ public final class AutoQuitUndoHUDController {
         container.autoresizingMask = [.width, .height]
         container.orientation = .horizontal
         container.alignment = .centerY
-        container.spacing = 10
+        container.spacing = 8
         container.edgeInsets = NSEdgeInsets(top: 0, left: 14, bottom: 0, right: 12)
 
         let iconView = NSImageView()
@@ -171,20 +188,48 @@ public final class AutoQuitUndoHUDController {
         cancelBtn.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         cancelBtn.wantsLayer = true
         cancelBtn.layer?.cornerRadius = 11
-        cancelBtn.widthAnchor.constraint(equalToConstant: 48).isActive = true
+        cancelBtn.widthAnchor.constraint(equalToConstant: 46).isActive = true
         cancelBtn.heightAnchor.constraint(equalToConstant: 22).isActive = true
         self.cancelButton = cancelBtn
         container.addArrangedSubview(cancelBtn)
+
+        let neverBtn = NSButton(title: "加入排除", target: self, action: #selector(handleNeverQuitClicked))
+        neverBtn.bezelStyle = .inline
+        neverBtn.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        neverBtn.wantsLayer = true
+        neverBtn.layer?.cornerRadius = 11
+        neverBtn.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.18).cgColor
+        neverBtn.widthAnchor.constraint(equalToConstant: 64).isActive = true
+        neverBtn.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        self.neverQuitButton = neverBtn
+        container.addArrangedSubview(neverBtn)
 
         visualEffect.addSubview(container)
         panel.contentView = visualEffect
         self.hudWindow = panel
     }
 
-    @objc private func handleCancelClicked() {
+    @objc public func handleCancelClicked() {
         let pid = currentPid
         let handler = onCancelHandler
         dismiss()
         handler?(pid)
+    }
+
+    @objc public func handleNeverQuitClicked() {
+        let pid = currentPid
+        let bid = currentBundleId
+        let cancelHandler = onCancelHandler
+        let neverHandler = onNeverQuitHandler
+
+        if let bundleID = bid, !bundleID.isEmpty {
+            ConfigManager.shared.excludeAppFromAutoQuit(bundleID)
+        }
+        dismiss()
+        if let neverHandler = neverHandler {
+            neverHandler(pid, bid)
+        } else {
+            cancelHandler?(pid)
+        }
     }
 }

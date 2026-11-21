@@ -12,6 +12,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         setupHotkeys()
         TrackpadGestureManager.shared.startListeningIfEnabled()
         AutoQuitManager.shared.startIfEnabled()
+        AutoQuitNewAppPromptController.shared.startListening()
         PasteboardRecencyTracker.shared.startMonitoringIfNeeded()
 
         // Warm up in-memory app index (its initializer performs the first scan)
@@ -88,10 +89,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("cc.atools.previewNewAppPrompt"),
+            object: nil,
+            queue: .main
+        ) { _ in
+            runtimeLog("[AppDelegate] Received cc.atools.previewNewAppPrompt distributed notification")
+            AutoQuitNewAppPromptController.shared.presentPreviewVPNPrompt()
+        }
+
         if CommandLine.arguments.contains("--show-ui") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 SettingsWindowController.shared.showSettingsWindow()
                 PanelCoordinator.shared.showShelfPanel()
+            }
+        }
+
+        if CommandLine.arguments.contains("--preview-new-app-prompt") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                AutoQuitNewAppPromptController.shared.presentPreviewVPNPrompt()
             }
         }
 

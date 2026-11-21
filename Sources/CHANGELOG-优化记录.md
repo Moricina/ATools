@@ -5399,3 +5399,53 @@
 ### 3. 诊断与构建验证
 - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 19 大项测试全部通过（100% PASSED，0 错误，0 失败，0 警告）**；
 - 传屏助手投屏期间无论主窗口隐藏还是展示浮动工具条，均处于物理受保护状态，彻底根治“开始投屏即触发退出”的严重缺陷。
+
+---
+
+## 2026-11-21（v1.3.60 Build 87：关窗退出新装应用智能引导、沙盒跨进程伴生面板纳管与 HUD 快捷排除）
+
+### 1. 需求与优化背景
+- **新装应用名单引导缺失**：用户在安装新应用后，由于关窗退出默认为全部模式或自定义白名单模式，用户常常不确定新应用是否会受影响，或需进入设置中手动搜索勾选；
+- **沙盒文件选择面板误退问题**：macOS 原生沙盒应用（如「文本编辑」TextEdit、Pages 等）在弹出打开/保存文件面板（`NSOpenPanel` / `NSSavePanel`）时，WindowServer 底层窗口归属于独立的 XPC 辅助进程 `com.apple.appkit.xpc.openAndSavePanelService` 及 `QuickLookUIService`。此前关窗退出引擎仅按宿主 PID 统计窗口数，导致用户在挑选文件期间被误判为“0 窗口”并意外触发退出；
+- **VPN / 代理等网络常驻工具易被误关**：Clash Verge、Surge、Sing-box、Tailscale 等工具部分带有轻量常驻后台或网络扩展，若被误退出会导致系统断网或网络连接异常；
+- **撤销流程缺少快捷排除**：当应用被关窗倒计时捕获时，用户此前只能点击“取消本次退出”，之后仍会再次触发，缺少在 HUD 上一键直接加入排除名单的快捷路径。
+
+### 2. 涉及文件与修改逻辑
+1. [`Sources/atools/System/AutoQuitNewAppPromptController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitNewAppPromptController.swift)（新创建）：
+   - 实现新装应用关窗退出名单询问浮层控制器，采用非抢焦的原生毛玻璃胶囊卡片，在屏幕右上角舒适区域展示；
+   - 包含应用图标、标题与说明，支持 8 秒倒计时自动淡出、鼠标悬停驻留与关闭；
+   - 支持多应用并发安装防抖聚合（如一次拖入多个应用时聚合展示“发现 N 个新安装应用”，主按钮自动切换为“勾选名单...”）；
+   - 提供 `--preview-new-app-prompt` 命令行参数与分布式通知 `cc.atools.previewNewAppPrompt`，支持快速预览与自动化断言。
+2. [`Sources/atools/System/AutoQuitManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitManager.swift)：
+   - 新增 `isCompanionOpenAndSavePanelService(...)` 与 `companionOpenPanelServicePIDs(for:)` 跨进程关联算法，解析归属于目标宿主应用的打开/保存面板服务；
+   - 在 `windowServerStandardWindowCount` 中纳管伴生面板进程的在屏真实窗口，与宿主主窗口联合计数，消除文本编辑等沙盒应用在文件选择期间被误杀的问题；
+   - 将 `AutoQuitUndoHUDController` 的 `onNeverQuit` 回调接入，点击后直接将应用 Bundle ID 追加至排除规则并保存配置。
+3. [`Sources/atools/System/AutoQuitQuirks.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitQuirks.swift)：
+   - 构建 `networkOrVPNKeywords` 知识库（涵盖 clash, verge, mihomo, surge, singbox, tailscale, wireguard, easyconnect, atrust, 奇安信等 40+ 款工具）；
+   - 新增 `isLikelyNetworkOrBackgroundTool(...)`，结合 Bundle ID、名称、路径及内部 `Contents/Library/SystemExtensions`、`Contents/PlugIns` 中的网络隧道插件进行特征识别。
+4. [`Sources/atools/System/AutoQuitUndoHUDController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitUndoHUDController.swift)：
+   - HUD 宽度由 290pt 规范调整至 368pt，新增「加入排除」原生按钮；
+   - 用户在关窗退出倒计时期间，可一键将目标应用直接加入当前排除名单，免去打开偏好设置手动操作。
+5. [`Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitRulesEditorView.swift)：
+   - 新增 `highlightedBundleIDs` 集合入参；
+   - 规则列表对传入的新应用自动置顶排序排在首位，并渲染 `新安装` 专属主题高亮微胶囊徽标，提升多应用场景下的辨识度。
+6. [`Sources/atools/UI/Settings/AutoQuitTabView.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/Settings/AutoQuitTabView.swift) & [`Sources/atools/UI/SettingsWindowController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/UI/SettingsWindowController.swift)：
+   - 偏好设置关窗退出卡片新增「新装应用名单询问」功能开关（`promptAutoQuitOnNewApp`），与底层配置双向绑定；
+   - 支持通过 `showAutoQuitRulesEditor(highlightedBundleIDs:)` 直接自询问浮层拉起带高亮置顶的名单编辑器 Sheet。
+7. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift) & [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：
+   - `AtoolsConfig` 新增 `promptAutoQuitOnNewApp` 字段（默认 true），提供向后兼容解码与容错初始化；
+   - 解耦 `handleAppIndexUpdated`：即使关闭抽屉自动入库，依然能独立为关窗退出捕获新装应用并广播 `atoolsNewAppsDiscoveredForAutoQuit`。
+8. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift) & [`Sources/atools/main.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/main.swift)：
+   - 扩充测试套件至第 20 大项 `runAutoQuitOnboardingDiagnostics`，覆盖配置往返、跨进程伴生面板匹配、VPN 特征预判、引导浮层防抖与聚合、抽屉解耦独立发现、名单编辑器置顶高亮、HUD 快捷排除写入等全链路验证；
+   - 新增 `--test-autoquit` 支持独立运行关窗退出专项自检。
+9. 发布脚本升级：
+   - [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh) 升级至 `v1.3.60 (build 87)`，更新 Release Notes 模版。
+
+### 3. 兼容性与边界防护策略
+- **旧版配置兼容**：`promptAutoQuitOnNewApp` 缺失时自动回退为默认值 `true`，存量用户配置文件无需迁移即可无缝升级；
+- **系统核心进程与免杀应用隔离**：Finder、系统设置、屏幕保护、投屏协同及已在排除名单中的应用，不触发新装应用询问弹窗；
+- **防抢焦与纯本地运行**：询问浮层使用 `NSPanel.nonactivatingPanel` 与 `orderFrontRegardless`，不夺取用户当前正活跃的前台焦点，全程本地沙箱运算，无网络请求。
+
+### 4. 诊断与构建验证
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 20 大项 120+ 个诊断用例全部通过（100% PASSED，0 错误，0 失败，0 警告）**；
+- 文本编辑文件选择面板与各类常驻网络客户端均能契合预期行为。
