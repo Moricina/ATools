@@ -10,13 +10,17 @@ public final class AutoQuitNewAppPromptController: NSObject {
     private var remainingSeconds: Double = 0
     private var isHovered: Bool = false
     private var isPreviewSession: Bool = false
+    private var presentationGeneration: Int = 0
 
     /// 当前待询问的新应用队列（按 bundleId 去重保序）
     public private(set) var pendingApps: [IndexedApp] = []
+    /// 会话级已忽略 Bundle ID（与 ConfigManager 持久化名单双重防重，彻底阻断并发通知导致的二次弹出）
+    private var sessionDismissedBundleIDs: Set<String> = []
     private var debounceWorkItem: DispatchWorkItem?
     private var discoveryObserver: NSObjectProtocol?
 
     // UI 控件引用（便于单测断言与状态刷新）
+    public private(set) var visualEffectView: NSVisualEffectView?
     public private(set) var iconImageView: NSImageView?
     public private(set) var titleLabel: NSTextField?
     public private(set) var subtitleLabel: NSTextField?
@@ -53,11 +57,14 @@ public final class AutoQuitNewAppPromptController: NSObject {
         }
 
         let currentRules = Set(cfg.currentAutoQuitAppRules.map { $0.lowercased() })
+        let dismissedBids = Set(cfg.dismissedAutoQuitPromptBundleIds.map { $0.lowercased() }).union(sessionDismissedBundleIDs)
         var existingBids = Set(pendingApps.compactMap { $0.bundleId?.lowercased() })
 
         for app in apps {
             guard let bid = app.bundleId, !bid.isEmpty else { continue }
+            guard !AppHotspotIndex.isNestedInsideAppBundle(app.path) else { continue }
             let lowerBid = bid.lowercased()
+            guard !dismissedBids.contains(lowerBid) else { continue }
             guard !AutoQuitManager.systemExcludedBundleIDs.contains(bid) else { continue }
             guard !AutoQuitManager.isProtectedApp(bundleID: bid) else { continue }
             guard !currentRules.contains(lowerBid) else { continue }
@@ -90,12 +97,14 @@ public final class AutoQuitNewAppPromptController: NSObject {
             return
         }
 
+        presentationGeneration &+= 1
         buildPanelIfNeeded()
         configureContent(for: pendingApps, mode: cfg.autoQuitMode)
         positionPanelOnScreen()
 
         panel?.alphaValue = 0
         panel?.orderFrontRegardless()
+        panel?.invalidateShadow()
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
@@ -121,12 +130,14 @@ public final class AutoQuitNewAppPromptController: NSObject {
         ]
 
         let mode = ConfigManager.shared.config.autoQuitMode
+        presentationGeneration &+= 1
         buildPanelIfNeeded()
         configureContent(for: pendingApps, mode: mode)
         positionPanelOnScreen()
 
         panel?.alphaValue = 0
         panel?.orderFrontRegardless()
+        panel?.invalidateShadow()
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
@@ -149,17 +160,23 @@ public final class AutoQuitNewAppPromptController: NSObject {
         }
 
         guard let win = panel else { return }
+        presentationGeneration &+= 1
+        let dismissGen = presentationGeneration
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.15
             win.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
+            guard let self = self, self.presentationGeneration == dismissGen else { return }
             win.orderOut(nil)
-            self?.panel = nil
-            self?.iconImageView = nil
-            self?.titleLabel = nil
-            self?.subtitleLabel = nil
-            self?.confirmButton = nil
-            self?.ignoreButton = nil
+            if self.panel === win {
+                self.panel = nil
+                self.visualEffectView = nil
+                self.iconImageView = nil
+                self.titleLabel = nil
+                self.subtitleLabel = nil
+                self.confirmButton = nil
+                self.ignoreButton = nil
+            }
         })
     }
 
@@ -268,11 +285,21 @@ public final class AutoQuitNewAppPromptController: NSObject {
     }
 
     @objc public func handleIgnoreClicked() {
+        if !isPreviewSession {
+            let ignoredBids = pendingApps.compactMap { $0.bundleId?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            if !ignoredBids.isEmpty {
+                for bid in ignoredBids {
+                    sessionDismissedBundleIDs.insert(bid.lowercased())
+                }
+                ConfigManager.shared.markAutoQuitPromptDismissed(ignoredBids)
+            }
+        }
         dismiss(clearPending: true)
     }
 
     private let panelWidth: CGFloat = 490
     private let panelHeight: CGFloat = 64
+    private let panelCornerRadius: CGFloat = 16
 
     private func positionPanelOnScreen() {
         guard let win = panel else { return }
@@ -285,6 +312,12 @@ public final class AutoQuitNewAppPromptController: NSObject {
         let y = visibleFrame.maxY - height - 18
 
         win.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
+        if let effectView = visualEffectView as? HoverTrackingVisualEffectView {
+            effectView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+            effectView.updateRoundedMask()
+        }
+        win.contentView?.layoutSubtreeIfNeeded()
+        win.invalidateShadow()
     }
 
     private func buildPanelIfNeeded() {
@@ -317,14 +350,18 @@ public final class AutoQuitNewAppPromptController: NSObject {
         visualEffect.material = .hudWindow
         visualEffect.blendingMode = .behindWindow
         visualEffect.state = .active
+        visualEffect.cornerRadius = panelCornerRadius
         visualEffect.wantsLayer = true
-        visualEffect.layer?.cornerRadius = 16
+        visualEffect.layer?.backgroundColor = NSColor.clear.cgColor
+        visualEffect.layer?.cornerRadius = panelCornerRadius
         visualEffect.layer?.masksToBounds = true
         visualEffect.layer?.borderWidth = 0.5
         visualEffect.layer?.borderColor = NSColor.separatorColor.cgColor
+        visualEffect.updateRoundedMask()
         visualEffect.onHoverChanged = { [weak self] hovering in
             self?.isHovered = hovering
         }
+        self.visualEffectView = visualEffect
 
         let container = NSStackView()
         container.translatesAutoresizingMaskIntoConstraints = false
@@ -401,7 +438,48 @@ public final class AutoQuitNewAppPromptController: NSObject {
 
 private final class HoverTrackingVisualEffectView: NSVisualEffectView {
     var onHoverChanged: ((Bool) -> Void)?
+    var cornerRadius: CGFloat = 16 {
+        didSet {
+            if oldValue != cornerRadius {
+                updateRoundedMask()
+            }
+        }
+    }
     private var trackingArea: NSTrackingArea?
+    private var lastMaskSize: CGSize = .zero
+    private var lastMaskRadius: CGFloat = -1
+
+    /// 使用显式圆角 `maskImage` 裁剪 `.behindWindow` 毛玻璃渲染表面，
+    /// 彻底消除 macOS 上仅靠 `layer.cornerRadius` 导致窗口四个角溢出的白底/方角瑕疵。
+    func updateRoundedMask() {
+        guard bounds.width > 1, bounds.height > 1 else {
+            maskImage = nil
+            lastMaskSize = .zero
+            lastMaskRadius = -1
+            return
+        }
+        guard bounds.size != lastMaskSize || cornerRadius != lastMaskRadius else { return }
+        lastMaskSize = bounds.size
+        lastMaskRadius = cornerRadius
+        let size = bounds.size
+        let radius = cornerRadius
+        let img = NSImage(size: size, flipped: false) {
+            let path = NSBezierPath(roundedRect: $0, xRadius: radius, yRadius: radius)
+            NSColor.black.setFill()
+            path.fill()
+            return true
+        }
+        img.isTemplate = false
+        maskImage = img
+        layer?.cornerRadius = radius
+        layer?.masksToBounds = true
+        window?.invalidateShadow()
+    }
+
+    override func layout() {
+        super.layout()
+        updateRoundedMask()
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

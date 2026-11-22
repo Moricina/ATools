@@ -4,8 +4,8 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$DIR"
 
-VERSION="${ATOOLS_VERSION:-1.3.60}"
-BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-87}"
+VERSION="${ATOOLS_VERSION:-1.3.61}"
+BUILD_NUMBER="${ATOOLS_BUILD_NUMBER:-88}"
 
 # 若 .build/release/ATools 已由增量编译生成且指定跳过重复编译，则直接复用已有二进制以实现 3 秒急速打包
 if [ "${ATOOLS_SKIP_BUILD:-0}" = "1" ] && [ -x "$DIR/.build/release/ATools" ]; then
@@ -114,30 +114,24 @@ if [ ! -x "$GH_BIN" ]; then
     GH_BIN="$(command -v gh || echo /opt/homebrew/bin/gh)"
 fi
 
-NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 关窗退出新装应用智能引导、沙盒跨进程伴生面板纳管与 HUD 快捷排除
+NOTES="## ATools v${VERSION} (Build ${BUILD_NUMBER}) 修复新装应用识别弹窗四角白底与忽略防重复优化
 
-### 🚀 核心优化与功能亮点
-1. **新装应用关窗退出名单智能询问与引导浮层（AutoQuitNewAppPromptController）**：
-   - 设计非抢焦轻量级原生毛玻璃胶囊卡片，在屏幕右上角舒适区域浮现，支持 8 秒倒计时自动淡出与悬停驻留；
-   - 支持智能多应用并发安装防抖聚合（「发现 N 个新安装应用」），点击一键展开规则设置列表；
-   - 关窗退出规则编辑器支持传入新安装应用高亮集合（\`highlightedBundleIDs\`），渲染专属高亮徽标并自动置顶排列；
-   - 解耦应用抽屉自动入库与关窗退出名单询问，即使用户关闭抽屉入库，仍能独立捕获新安装应用并触发关窗退出引导。
-2. **文本编辑等沙盒应用跨进程打开/保存伴生面板（NSOpenPanel）精准纳管**：
-   - 深入 macOS 沙盒 XPC 架构，解析 \`com.apple.appkit.xpc.openAndSavePanelService\` 及 \`QuickLookUIService\` 伴生服务；
-   - 建立进程级关联与窗口计数联动，修复用户在文本编辑（TextEdit）等应用打开/保存文件期间被误判为 0 窗口触发退出的问题。
-3. **VPN、网络代理及内网零信任客户端特征智能识别与免杀/引导优化**：
-   - 构建涵盖 40+ 款主流网络工具特征库（Clash、Verge、Surge、Sing-box、Tailscale、WireGuard、EasyConnect、aTrust、奇安信等）；
-   - 扫描 App 内部 SystemExtensions 与 PlugIns 扩展，即使无常规 Dock 图标的后台网络守护工具也能精准捕捉并弹窗引导，避免网络连接被意外截断。
-4. **关窗退出撤销 HUD 支持一键加入排除名单**：
-   - 在退出倒计时原生胶囊 HUD 中新增快捷加入排除名单操作；
-   - 遇到不希望退出的应用，倒计时内点击一次即可直接加入排除名单，无需手动进入偏好设置逐层查找。
+### 🚀 核心优化与缺陷修复
+1. **新应用识别弹窗与倒计时 HUD 四角白底消除**：
+   - 为 HoverTrackingVisualEffectView 实现动态圆角 maskImage 遮罩裁剪，窗口尺寸与自适应布局变动时即时重绘刷新；
+   - 同步加固关窗退出倒计时 HUD 的毛玻璃背景圆角，修复在部分系统版本上因单纯依靠 layer.cornerRadius 导致的窗口四个角溢出白色背景瑕疵。
+2. **新应用点击忽略后防重复弹出治理**：
+   - 新增 dismissedAutoQuitPromptBundleIds 配置持久化字段，用户在提示弹窗中点击「忽略」后持久化记录已忽略名单；
+   - 引入会话级内存防重缓存，双重过滤并发通知或重新扫盘时的二次触发；
+   - 新增嵌套子应用识别机制（isNestedInsideAppBundle），严格过滤内嵌在 .app 内部的子模块包（如内嵌会议客户端等），避免因非顶层目录应用被扫描器反复误报；
+   - 完善抽屉忽略池（Tombstone）的应用记录，避免扫盘时重复进入新装应用判定链路。
 
 ---
 
 ### 🛡️ 架构质量与系统性加固
 1. **全套自动化测试回归与诊断套件扩容**：
    - 综合诊断套件（\`DiagnosticSuite\`）扩容至 **全套 20 大项 120+ 个测试用例，100% 全部 PASSED 通过**；
-   - 新增 \`--test-autoquit\` 命令行参数，支持关窗退出专项自检；
+   - 包含 maskImage 存在性验证、忽略名单持久化往返拦截断言及嵌套应用过滤测试；
 2. **Ed25519 签名与安全更新保障**：
    - 发布资产经由专属 Ed25519 私钥签名，支持客户端安全自检与防篡改热更新。"
 

@@ -369,6 +369,7 @@ public struct AtoolsConfig: Codable {
     public var autoQuitDelaySeconds: Int
     public var enableAutoQuitUndoHUD: Bool
     public var promptAutoQuitOnNewApp: Bool           // 新装应用时弹窗询问是否纳入当前模式名单
+    public var dismissedAutoQuitPromptBundleIds: [String] // 用户已点击「忽略」的新装应用询问名单（防重复弹窗）
 
     // 新装应用自动入库 (Auto Discovery)
     public var enableAutoAddInstalledApps: Bool
@@ -460,6 +461,7 @@ public struct AtoolsConfig: Codable {
         autoQuitDelaySeconds: Int = 2,
         enableAutoQuitUndoHUD: Bool = true,
         promptAutoQuitOnNewApp: Bool = true,
+        dismissedAutoQuitPromptBundleIds: [String] = [],
         enableAutoAddInstalledApps: Bool = true,
         autoAddPolicyMode: AutoAddPolicyMode = .dedicatedInbox,
         autoAddTargetCategoryId: UUID? = nil,
@@ -535,6 +537,7 @@ public struct AtoolsConfig: Codable {
         self.autoQuitDelaySeconds = autoQuitDelaySeconds
         self.enableAutoQuitUndoHUD = enableAutoQuitUndoHUD
         self.promptAutoQuitOnNewApp = promptAutoQuitOnNewApp
+        self.dismissedAutoQuitPromptBundleIds = dismissedAutoQuitPromptBundleIds
         self.enableAutoAddInstalledApps = enableAutoAddInstalledApps
         self.autoAddPolicyMode = autoAddPolicyMode
         self.autoAddTargetCategoryId = autoAddTargetCategoryId
@@ -560,7 +563,7 @@ public struct AtoolsConfig: Codable {
         case extraHotFolders, searchFilterOrder
         case searchExcludeCaches, searchExcludeLogs, searchExcludeDeveloper, searchExcludeHidden, searchExcludeTrash, searchExcludeUserLibrary, customExcludedPaths
         case autoPasteOnSummonAfterCopy
-        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds, enableAutoQuitUndoHUD, promptAutoQuitOnNewApp
+        case enableAutoQuit, autoQuitMode, autoQuitAppRules, autoQuitExcludeAppRules, autoQuitOnlyListedAppRules, autoQuitDelaySeconds, enableAutoQuitUndoHUD, promptAutoQuitOnNewApp, dismissedAutoQuitPromptBundleIds
         case enableAutoAddInstalledApps, autoAddPolicyMode, autoAddTargetCategoryId, autoAddInboxCategoryName, ignoredAutoAddBundleIds, knownAppBundleIds, lastAutoAppScanTimestamp
         case enableQuickSlots, smartFavoritesMode, trackLaunchFrequency, shelfSortPolicy
         // v1 legacy keys
@@ -667,6 +670,7 @@ public struct AtoolsConfig: Codable {
         self.autoQuitDelaySeconds = max(0, min(10, rawAutoQuitDelay))
         self.enableAutoQuitUndoHUD = (try? container.decode(Bool.self, forKey: .enableAutoQuitUndoHUD)) ?? true
         self.promptAutoQuitOnNewApp = (try? container.decode(Bool.self, forKey: .promptAutoQuitOnNewApp)) ?? true
+        self.dismissedAutoQuitPromptBundleIds = (try? container.decode([String].self, forKey: .dismissedAutoQuitPromptBundleIds)) ?? []
 
         self.enableAutoAddInstalledApps = (try? container.decode(Bool.self, forKey: .enableAutoAddInstalledApps)) ?? true
         self.autoAddPolicyMode = (try? container.decode(AutoAddPolicyMode.self, forKey: .autoAddPolicyMode)) ?? .dedicatedInbox
@@ -751,6 +755,7 @@ public struct AtoolsConfig: Codable {
         try container.encode(autoQuitDelaySeconds, forKey: .autoQuitDelaySeconds)
         try container.encode(enableAutoQuitUndoHUD, forKey: .enableAutoQuitUndoHUD)
         try container.encode(promptAutoQuitOnNewApp, forKey: .promptAutoQuitOnNewApp)
+        try container.encode(dismissedAutoQuitPromptBundleIds, forKey: .dismissedAutoQuitPromptBundleIds)
         try container.encode(enableAutoAddInstalledApps, forKey: .enableAutoAddInstalledApps)
         try container.encode(autoAddPolicyMode, forKey: .autoAddPolicyMode)
         try container.encodeIfPresent(autoAddTargetCategoryId, forKey: .autoAddTargetCategoryId)

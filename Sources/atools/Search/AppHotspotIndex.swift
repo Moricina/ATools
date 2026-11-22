@@ -205,12 +205,21 @@ public final class AppHotspotIndex {
         }
     }
 
+    /// 判断路径是否嵌套在另一个 `.app` 包内部（如 `/Applications/DingTalk.app/Contents/Frameworks/DingMeeting.app`）。
+    /// 此类内嵌子应用不会被目录扫描器纳入，若由运行时启动监听强行注入，会在下次全量扫盘时被基线修剪掉，从而造成反复误报「新安装应用」。
+    public static func isNestedInsideAppBundle(_ path: String) -> Bool {
+        let parent = (path as NSString).deletingLastPathComponent.lowercased()
+        return parent.contains(".app/") || parent.hasSuffix(".app")
+    }
+
     /// 军师加固点 4：当常规应用启动时，若不在现有索引中，进行 O(1) 局部极速注入并同步
     public func registerRunningAppIfNeeded(_ app: NSRunningApplication) {
         // 严格限定为普通 GUI 窗口应用，杜绝后台守护或 Helper 进程误入抽屉和退出名单
         guard app.activationPolicy == .regular else { return }
         guard let bundleURL = app.bundleURL else { return }
         let path = bundleURL.path.precomposedStringWithCanonicalMapping
+        // 严禁把嵌套在其他 .app 包内的子模块/会议插件（如 DingMeeting.app）当成独立新安装应用注入
+        guard !Self.isNestedInsideAppBundle(path) else { return }
         let home = NSHomeDirectory()
         let isStandardAppDir = path.hasPrefix("/Applications") ||
                                path.hasPrefix("\(home)/Applications") ||

@@ -3287,8 +3287,35 @@ public enum DiagnosticSuite {
         TestAssertions.expect(promptCtrl.pendingApps.count == 2, "批量入队后 pendingApps 数量应为 2")
         TestAssertions.expect(promptCtrl.titleLabel?.stringValue == "发现 2 个新安装应用", "多应用同时安装必须聚合展示标题")
         TestAssertions.expect(promptCtrl.confirmButton?.title == "勾选名单...", "多应用聚合卡片主按钮应为 '勾选名单...'")
+        TestAssertions.expect(promptCtrl.visualEffectView?.maskImage != nil, "新应用询问弹窗必须挂载圆角 maskImage 以消除四角白底")
         promptCtrl.handleIgnoreClicked()
         TestAssertions.expect(promptCtrl.pendingApps.isEmpty, "点击忽略后待处理队列必须清空")
+        TestAssertions.expect(
+            ConfigManager.shared.isAutoQuitPromptDismissed("com.test.newappa") && ConfigManager.shared.isAutoQuitPromptDismissed("com.test.newappb"),
+            "点击忽略后必须将对应的 Bundle ID 持久化至已忽略名单"
+        )
+        // 再次入队已被忽略的应用，必须被拦截不得再次弹出
+        promptCtrl.enqueueDiscoveredApps([batchApp1, batchApp2], debounceSeconds: 0)
+        TestAssertions.expect(promptCtrl.pendingApps.isEmpty, "已被点击忽略的应用再次触发入队时必须被拦截，不得重复弹窗")
+
+        // 验证嵌套在其他 .app 包内的子应用（如 DingTalk Meeting & Webinar）被严格过滤，不得进入询问队列
+        TestAssertions.expect(
+            AppHotspotIndex.isNestedInsideAppBundle("/Applications/DingTalk.app/Contents/Frameworks/DingMeeting.app") == true,
+            "嵌套在 .app 包内的子应用必须被识别为 nested bundle"
+        )
+        TestAssertions.expect(
+            AppHotspotIndex.isNestedInsideAppBundle("/Applications/DingTalk.app") == false,
+            "顶层标准应用不得被误判为嵌套子应用"
+        )
+        let nestedMeetingApp = IndexedApp(
+            name: "DingMeeting",
+            localizedName: "DingTalk Meeting & Webinar",
+            path: "/Applications/DingTalk.app/Contents/Frameworks/DingMeeting.app",
+            bundleId: "com.dingtalk.meeting.embedded",
+            isRegularApp: true
+        )
+        promptCtrl.enqueueDiscoveredApps([nestedMeetingApp], debounceSeconds: 0)
+        TestAssertions.expect(promptCtrl.pendingApps.isEmpty, "嵌套在 .app 包内的子应用严禁进入新应用询问队列")
 
         // (5) 验证解耦后的 handleAppIndexUpdated：即使关闭应用抽屉自动入库，开启关窗退出询问时仍能捕获新装应用并广播
         promptCtrl.startListening()

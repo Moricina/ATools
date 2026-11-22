@@ -150,16 +150,25 @@ public final class AutoQuitUndoHUDController {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
 
-        // 原生毛玻璃背景
+        // 原生毛玻璃背景（附带圆角 maskImage 避免四角溢出白底）
         let visualEffect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: width, height: height))
         visualEffect.material = .hudWindow
         visualEffect.blendingMode = .behindWindow
         visualEffect.state = .active
         visualEffect.wantsLayer = true
+        visualEffect.layer?.backgroundColor = NSColor.clear.cgColor
         visualEffect.layer?.cornerRadius = 23
         visualEffect.layer?.masksToBounds = true
         visualEffect.layer?.borderWidth = 0.5
         visualEffect.layer?.borderColor = NSColor.separatorColor.cgColor
+        let maskImg = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
+            let path = NSBezierPath(roundedRect: rect, xRadius: 23, yRadius: 23)
+            NSColor.black.setFill()
+            path.fill()
+            return true
+        }
+        maskImg.isTemplate = false
+        visualEffect.maskImage = maskImg
 
         let container = NSStackView(frame: visualEffect.bounds)
         container.autoresizingMask = [.width, .height]

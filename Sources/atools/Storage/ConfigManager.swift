@@ -826,6 +826,31 @@ public final class ConfigManager {
         }
     }
 
+    /// 将用户已点击「忽略」的新装应用 Bundle ID 持久化，防止后续扫描或重触发时反复弹窗
+    public func markAutoQuitPromptDismissed(_ bundleIDs: [String]) {
+        var changed = false
+        var existingLower = Set(self.config.dismissedAutoQuitPromptBundleIds.map { $0.lowercased() })
+        for raw in bundleIDs {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            if existingLower.insert(trimmed.lowercased()).inserted {
+                self.config.dismissedAutoQuitPromptBundleIds.append(trimmed)
+                changed = true
+            }
+        }
+        if changed {
+            self.config.dismissedAutoQuitPromptBundleIds.sort()
+            save()
+        }
+    }
+
+    /// 判断指定 Bundle ID 是否已被用户在新应用询问弹窗中忽略
+    public func isAutoQuitPromptDismissed(_ bundleID: String) -> Bool {
+        let lower = bundleID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return false }
+        return self.config.dismissedAutoQuitPromptBundleIds.contains { $0.lowercased() == lower }
+    }
+
     @discardableResult
     public func addItem(_ item: LauncherItem, to categoryId: UUID) -> Bool {
         addItems([item], to: categoryId).count == 1
@@ -1360,6 +1385,7 @@ public final class ConfigManager {
         }
 
         let ignoredSet = Set(config.ignoredAutoAddBundleIds)
+        let dismissedPromptSet = Set(config.dismissedAutoQuitPromptBundleIds.map { $0.lowercased() })
         var newlyAddedCount = 0
         var newlyDiscoveredAutoQuitApps: [IndexedApp] = []
 
@@ -1368,6 +1394,7 @@ public final class ConfigManager {
             let path = app.path
             guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { continue }
             if path.hasPrefix("/Volumes/") { continue }
+            if AppHotspotIndex.isNestedInsideAppBundle(path) { continue }
 
             guard let bid = app.bundleId, !bid.isEmpty else { continue }
             if knownSet.contains(bid) { continue }
@@ -1386,7 +1413,8 @@ public final class ConfigManager {
             )
             if shouldPromptAutoQuit && (app.isRegularApp || isNetworkOrVPNTool) {
                 let isAlreadyInRules = config.currentAutoQuitAppRules.contains { $0.caseInsensitiveCompare(bid) == .orderedSame }
-                if !isAlreadyInRules && !AutoQuitManager.systemExcludedBundleIDs.contains(bid) && !AutoQuitManager.isProtectedApp(bundleID: bid) {
+                let isDismissedPrompt = dismissedPromptSet.contains(bid.lowercased())
+                if !isAlreadyInRules && !isDismissedPrompt && !AutoQuitManager.systemExcludedBundleIDs.contains(bid) && !AutoQuitManager.isProtectedApp(bundleID: bid) {
                     newlyDiscoveredAutoQuitApps.append(app)
                 }
             }
@@ -1394,6 +1422,8 @@ public final class ConfigManager {
             // 2. 应用抽屉自动入库
             if shouldAutoAddToShelf, let targetIndex = targetCatIdx {
                 if ignoredSet.contains(bid) {
+                    // 即使处于抽屉 Tombstone 忽略池，仍必须记入 knownSet，防止后续每次扫盘被反复误判为新装应用
+                    knownSet.insert(bid)
                     continue
                 }
                 if existingTargets.contains(path) {

@@ -5449,3 +5449,42 @@
 ### 4. 诊断与构建验证
 - 执行 `./Scripts/build.sh --test` 综合诊断：**全套 20 大项 120+ 个诊断用例全部通过（100% PASSED，0 错误，0 失败，0 警告）**；
 - 文本编辑文件选择面板与各类常驻网络客户端均能契合预期行为。
+
+
+---
+
+## 2026-11-22（v1.3.61 Build 88：修复新装应用识别弹窗四角白底与点击忽略防重弹出）
+
+### 1. 需求与优化背景
+- **毛玻璃窗口四角白底与方角瑕疵**：在 macOS 上，`NSPanel` 的 `.behindWindow` 材质在仅靠 `layer.cornerRadius` 裁剪时，因 WindowServer 底层阴影与多层表面渲染特性，容易在弹窗四个圆角外侧溢出白色背景或锯齿硬角；
+- **新应用点击忽略后反复弹出**：用户安装新应用弹出询问后，点击「忽略」仅清空了当前待处理队列，未将用户的忽略意图持久化，导致后续全盘扫描或运行时启动监听时反复重复弹窗；
+- **内嵌子应用误报**：部分大型应用（如钉钉等）内部包含嵌套的辅助 `.app` 包（如 `DingMeeting.app` 等），若被启动监听注入索引，因其不在顶层扫描基线中，在后续扫盘时会被反复误判为“新安装应用”导致死循环提示。
+
+### 2. 涉及文件与修改逻辑
+1. [`Sources/atools/System/AutoQuitNewAppPromptController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitNewAppPromptController.swift)：
+   - 在 `HoverTrackingVisualEffectView` 中实现 `updateRoundedMask()`，使用精确抗锯齿圆角路径生成 `maskImage` 遮罩，并在视图布局刷新与尺寸变动时自适应重绘，配合 `invalidateShadow()`，消除窗口四角白色溢出；
+   - 增加 `presentationGeneration` 序号守卫与 `sessionDismissedBundleIDs` 会话级防重集合，阻断异步淡出与并发通知引起的竞争重弹；
+   - 用户点击「忽略」时，调用 `ConfigManager.shared.markAutoQuitPromptDismissed(...)` 同步完成持久化记录。
+2. [`Sources/atools/System/AutoQuitUndoHUDController.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/System/AutoQuitUndoHUDController.swift)：
+   - 为倒计时胶囊 HUD 的 `NSVisualEffectView` 同步增加圆角 `maskImage` 遮罩与 `NSColor.clear` 底色保护，消除四角外露瑕疵。
+3. [`Sources/atools/Models/AppConfig.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Models/AppConfig.swift)：
+   - `AtoolsConfig` 新增 `dismissedAutoQuitPromptBundleIds: [String]` 字段（默认 `[]`），提供向后兼容编解码与容错初始化。
+4. [`Sources/atools/Storage/ConfigManager.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Storage/ConfigManager.swift)：
+   - 新增 `markAutoQuitPromptDismissed(_ bundleIDs:)` 与 `isAutoQuitPromptDismissed(_ bundleID:)` 方法；
+   - 在 `handleAppIndexUpdated` 中增加针对已忽略弹窗名单（`dismissedPromptSet`）的过滤；
+   - 抽屉忽略池（`ignoredSet`）中的项在跳过时同步写入 `knownSet`，避免被反复视作未知新应用。
+5. [`Sources/atools/Search/AppHotspotIndex.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Search/AppHotspotIndex.swift)：
+   - 新增 `isNestedInsideAppBundle(_ path:)` 静态判定，严禁将嵌套在 `.app` 内部的子模块包注入常规应用索引与新应用询问链路。
+6. [`Sources/atools/Diagnostics/DiagnosticSuite.swift`](file:///Users/aurora/Downloads/atools/Sources/atools/Diagnostics/DiagnosticSuite.swift)：
+   - 在第 20 大项中扩充断言：验证 `maskImage` 挂载有效性、忽略后 Bundle ID 持久化与再次入队拦截、嵌套应用路径过滤识别。
+7. 发布脚本升级：
+   - [`Scripts/package_app.sh`](file:///Users/aurora/Downloads/atools/Scripts/package_app.sh) 与 [`Scripts/release_github.sh`](file:///Users/aurora/Downloads/atools/Scripts/release_github.sh) 升级至 `v1.3.61 (build 88)`。
+
+### 3. 兼容性与边界防护策略
+- **旧版配置平滑过渡**：存量配置无 `dismissedAutoQuitPromptBundleIds` 字段时自动初始化为空数组，无需迁移升级；
+- **多层防重防护**：构建「内存会话防重 + 磁盘配置防重 + 嵌套结构过滤 + 抽屉 Tombstone 纳管」四道防线，避免任何形式的重复打扰；
+- **视觉性能保障**：圆角 `maskImage` 仅在尺寸或圆角改变时触发重绘，避免布局期间重复分配图形上下文。
+
+### 4. 诊断与构建验证
+- 执行 `./Scripts/build.sh --test` 综合诊断：**全套 20 大项 120+ 个诊断用例全部通过（100% PASSED，0 错误，0 失败，0 警告）**；
+- 实测新装应用提示卡片与 HUD 边缘柔和纯净，点击忽略后不再重复弹出。
